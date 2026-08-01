@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Toki Recur — Sign in</title>
+<link rel="stylesheet" href="/static/style.css?v=8">
+<style>
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--bg-primary); color: var(--text-primary); }
+  .login-card { width: 340px; max-width: 92vw; padding: 28px; border: 1px solid var(--border); border-radius: var(--radius-md, 10px); background: var(--bg-secondary); }
+  .login-card h1 { font-size: 18px; margin: 0 0 4px; }
+  .login-card p { font-size: 13px; color: var(--text-tertiary); margin: 0 0 18px; }
+  .login-card input[type="password"] { width: 100%; box-sizing: border-box; margin-bottom: 12px; }
+  .login-error { display: none; color: var(--raw); font-size: 12px; margin: 0 0 10px; }
+  .login-btn { width: 100%; }
+</style>
+</head>
+<body>
+  <form class="login-card" id="login-form">
+    <h1>Toki Recur</h1>
+    <p>Enter the daemon token (TOKI_AUTH_TOKEN) to continue.</p>
+    <div class="login-error" id="login-error"></div>
+    <input id="token-input" type="password" placeholder="token" autocomplete="current-password" autofocus>
+    <button class="primary-btn login-btn" id="login-btn" type="submit">Sign in</button>
+  </form>
+<script>
+document.getElementById("login-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const btn = document.getElementById("login-btn");
+  const err = document.getElementById("login-error");
+  btn.disabled = true;
+  btn.textContent = "signing in…";
+  err.style.display = "none";
+  try {
+    const r = await fetch("/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: document.getElementById("token-input").value }),
+    });
+    const body = await r.json();
+    if (r.ok && body.ok) {
+      window.location.href = "/";
+      return;
+    }
+    err.textContent = "Invalid token. Check TOKI_AUTH_TOKEN on the web server.";
+    err.style.display = "block";
+  } catch {
+    err.textContent = "Could not reach the server.";
+    err.style.display = "block";
+  }
+  btn.disabled = false;
+  btn.textContent = "Sign in";
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Toki Recur Dashboard</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="header">
+  <h1>Toki Recur — Benchmark Dashboard</h1>
+  <p class="subtitle">Compare runs across models, workloads, and dates</p>
+</header>
+
+<main class="main">
+  <section class="summary" id="summary">
+    <div class="stat-card"><h3>Reports</h3><p id="stat-count">—</p></div>
+    <div class="stat-card"><h3>Best composite</h3><p id="stat-best">—</p></div>
+    <div class="stat-card"><h3>Mean TTFT Δ</h3><p id="stat-ttft">—</p></div>
+    <div class="stat-card"><h3>Mean hit rate</h3><p id="stat-hit">—</p></div>
+  </section>
+
+  <section class="reports">
+    <h2>All Reports</h2>
+    <table id="reports-table">
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Model</th>
+          <th>Workload</th>
+          <th>Prompts</th>
+          <th>Composite</th>
+          <th>TTFT Δ</th>
+          <th>Hit rate</th>
+          <th>Throughput</th>
+          <th>Speedup</th>
+          <th>Duration</th>
+        </tr>
+      </thead>
+      <tbody id="reports-body"></tbody>
+    </table>
+    <p class="empty" id="empty-msg">No reports yet. Run <code>toki bench --output-json ~/Downloads/toki-reports/run.json</code></p>
+  </section>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

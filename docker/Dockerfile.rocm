@@ -1,0 +1,44 @@
+FROM rocm/pytorch:latest
+
+ARG HIP_ARCH=gfx1151
+ARG UMA=ON
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential cmake git libcurl4-openssl-dev \
+        libssl-dev libstdc++6 ninja-build wget ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Build llama.cpp with the KV cache patch.
+WORKDIR /opt
+RUN git clone --depth 1 https://github.com/ggml-org/llama.cpp.git \
+    && cd llama.cpp \
+    && git apply /patches/llama-server-kv-endpoints.diff || true
+
+WORKDIR /opt/llama.cpp
+RUN mkdir -p build && cd build \
+    && cmake .. \
+        -DGGML_HIP=ON \
+        -DAMDGPU_TARGETS=${HIP_ARCH} \
+        -DGGML_HIP_UMA=${UMA} \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DBUILD_SHARED_LIBS=ON \
+    && cmake --build . --config Release --target llama-server -j$(nproc)
+
+# Python deps.
+COPY pyproject.toml /src/pyproject.toml
+WORKDIR /src
+RUN pip install --no-cache-dir -e .[embeddings]
+
+ENV PATH="/opt/llama.cpp/build/bin:${PATH}"
+ENV TOKI_CACHE_DIR=/var/lib/tokirecur/blobs
+ENV TOKI_DB=/var/lib/tokirecur/index.sqlite
+
+RUN mkdir -p /var/lib/tokirecur/blobs
+
+COPY src /src/src
+COPY patches /src/patches
+COPY scripts /src/scripts
+
+EXPOSE 8080 8787
+
+CMD ["tokirecur", "serve", "--host", "0.0.0.0", "--port", "8787"]

@@ -1,0 +1,60 @@
+/* Toki Recur TUI — dark, monospace, semantic colors */
+
+Screen {
+    background: #0a0c10;
+    color: #e6e8ee;
+}
+
+#main-area {
+    height: 1fr;
+}
+
+#chat-container {
+    height: 1fr;
+    padding: 1 2;
+    background: #0a0c10;
+}
+
+#chat {
+    height: 1fr;
+    background: #0a0c10;
+    border: round #2a2d3a;
+    padding: 0 1;
+    scrollbar-color: #3a3e4f #0a0c10;
+    scrollbar-size-vertical: 1;
+}
+
+#chat:focus-within {
+    border: round #2a2d3a;
+}
+
+#input {
+    dock: bottom;
+    margin: 0 1;
+    background: #13161d;
+    border: round #3a3e4f;
+    height: 3;
+}
+
+#input:focus {
+    border: round #7c9eff;
+}
+
+#sidebar {
+    background: #13161d;
+    border-right: round #3a3e4f;
+    width: 22;
+}
+
+#info {
+    background: #13161d;
+    border-left: round #3a3e4f;
+}
+
+#status-bar {
+    dock: bottom;
+    background: #1c1f29;
+    color: #a0a4b5;
+    height: 1;
+    padding: 0 1;
+}

@@ -1,0 +1,11 @@
+{
+  "name": "demo_workload",
+  "description": "Sample workload for testing the JSON loader",
+  "prompts": [
+    "What is the capital of France?",
+    "What is the capital of Germany?",
+    "What is the capital of Italy?",
+    "What is the capital of Spain?"
+  ],
+  "categories": ["geo", "geo", "geo", "geo"]
+}

@@ -1,0 +1,254 @@
+"""Process lifecycle for the local llama-server managed by `toki up`.
+
+We keep it simple: a state directory under /tmp/toki with one PID file
+per managed process, and start/stop/status helpers. No systemd, no
+docker, no daemons-of-daemons — just os.fork + signal handling.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import signal
+import subprocess
+import sys
+import time
+from pathlib import Path
+from typing import Optional
+
+import httpx
+
+logger = logging.getLogger(__name__)
+
+STATE_DIR = Path(os.environ.get("TOKI_STATE_DIR", "/tmp/toki"))
+LLAMA_PID = STATE_DIR / "llama-server.pid"
+DAEMON_PID = STATE_DIR / "tokid.pid"
+LLAMA_LOG = STATE_DIR / "llama-server.log"
+DAEMON_LOG = STATE_DIR / "tokid.log"
+
+
+def _state_dir() -> Path:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    return STATE_DIR
+
+
+def _read_pid(path: Path) -> Optional[int]:
+    if not path.exists():
+        return None
+    try:
+        return int(path.read_text().strip())
+    except (ValueError, OSError):
+        return None
+
+
+def _is_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except (ProcessLookupError, PermissionError):
+        return False
+    except OSError:
+        return False
+
+
+def _wait_for(url: str, timeout: float = 180.0) -> bool:
+    """Poll `url` until it returns 2xx or timeout elapses."""
+    started = time.time()
+    while time.time() - started < timeout:
+        try:
+            r = httpx.get(url, timeout=2.0)
+            if r.status_code < 500:
+                return True
+        except Exception:
+            pass
+        time.sleep(0.5)
+    return False
+
+
+def find_llama_server() -> Optional[str]:
+    """Locate the llama-server binary."""
+    from shutil import which
+    return which("llama-server") or which("/usr/local/bin/llama-server")
+
+
+def llama_default_args(model: str, port: int, ctx_size: int, n_gpu_layers: int) -> list[str]:
+    # Ensure required dirs exist before llama-server validates them.
+    slot_save_dir = STATE_DIR / "slot-save"
+    slot_save_dir.mkdir(parents=True, exist_ok=True)
+    return [
+        "llama-server",
+        "-m", model,
+        "--host", "127.0.0.1",
+        "--port", str(port),
+        "-c", str(ctx_size),
+        "-ngl", str(n_gpu_layers),
+        "--parallel", "4",
+        "--slot-save-path", str(slot_save_dir),
+        "--embedding",
+    ]
+
+
+def llama_reachable(port: int = 8088) -> bool:
+    try:
+        r = httpx.get(f"http://127.0.0.1:{port}/health", timeout=2.0)
+        return r.status_code == 200
+    except Exception:
+        return False
+
+
+def start_llama_server(
+    *,
+    model: str,
+    port: int = 8088,
+    ctx_size: int = 8192,
+    n_gpu_layers: int = 99,
+    extra_args: Optional[list[str]] = None,
+    wait: bool = True,
+) -> int:
+    """Start llama-server. Returns the PID. If already running, returns
+    the existing PID without restarting."""
+    _state_dir()
+
+    if llama_reachable(port):
+        # Already running. Find the matching PID (best-effort).
+        existing = _read_pid(LLAMA_PID)
+        if existing and _is_alive(existing):
+            logger.info("llama-server already running on :%d (pid=%d)", port, existing)
+            return existing
+
+    args = llama_default_args(model, port, ctx_size, n_gpu_layers)
+    if extra_args:
+        args.extend(extra_args)
+    logger.info("starting: %s", " ".join(args))
+
+    _state_dir()
+    log = open(LLAMA_LOG, "ab")
+    proc = subprocess.Popen(
+        args,
+        stdout=log,
+        stderr=subprocess.STDOUT,
+        stdin=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    LLAMA_PID.write_text(str(proc.pid))
+    logger.info("llama-server pid=%d log=%s", proc.pid, LLAMA_LOG)
+
+    if wait:
+        if not _wait_for(f"http://127.0.0.1:{port}/health", timeout=180.0):
+            raise RuntimeError(
+                f"llama-server failed to start within 180s; see {LLAMA_LOG}"
+            )
+    return proc.pid
+
+
+def start_daemon(
+    *,
+    host: str = "127.0.0.1",
+    port: int = 8787,
+    backend_url: str = "http://127.0.0.1:8088",
+    similarity_threshold: float = 0.85,
+    memory_budget_mb: int = 8192,
+    wait: bool = True,
+) -> int:
+    """Start the Toki Recur daemon (uvicorn). Returns the PID."""
+    _state_dir()
+
+    existing = _read_pid(DAEMON_PID)
+    if existing and _is_alive(existing):
+        logger.info("toki daemon already running (pid=%d)", existing)
+        return existing
+
+    args = [
+        sys.executable, "-m", "uvicorn",
+        "tokirecur.api.app:create_app_from_env",
+        "--factory",
+        "--host", host,
+        "--port", str(port),
+        "--log-level", "info",
+    ]
+    logger.info("starting: %s", " ".join(args))
+    log = open(DAEMON_LOG, "ab")
+    proc = subprocess.Popen(
+        args,
+        stdout=log,
+        stderr=subprocess.STDOUT,
+        stdin=subprocess.DEVNULL,
+        env={**os.environ, "TOKI_BACKEND_URL": backend_url,
+             "TOKI_SIMILARITY_THRESHOLD": str(similarity_threshold),
+             "TOKI_MEMORY_BUDGET_MB": str(memory_budget_mb)},
+        start_new_session=True,
+    )
+    DAEMON_PID.write_text(str(proc.pid))
+    logger.info("toki daemon pid=%d log=%s", proc.pid, DAEMON_LOG)
+
+    if wait:
+        if not _wait_for(f"http://127.0.0.1:{port}/healthz", timeout=60.0):
+            raise RuntimeError(
+                f"toki daemon failed to start; see {DAEMON_LOG}"
+            )
+    return proc.pid
+
+
+def stop_pid(pid_file: Path, name: str, grace: float = 5.0) -> bool:
+    pid = _read_pid(pid_file)
+    if pid is None:
+        logger.info("%s: no pid file, nothing to stop", name)
+        return False
+    if not _is_alive(pid):
+        logger.info("%s: pid=%d not alive, cleaning up", name, pid)
+        pid_file.unlink(missing_ok=True)
+        return False
+    try:
+        os.killpg(os.getpgid(pid), signal.SIGTERM)
+    except (ProcessLookupError, PermissionError, OSError) as e:
+        logger.warning("%s: killpg failed: %s", name, e)
+    # Wait for graceful shutdown
+    started = time.time()
+    while time.time() - started < grace:
+        if not _is_alive(pid):
+            pid_file.unlink(missing_ok=True)
+            logger.info("%s: stopped (pid=%d)", name, pid)
+            return True
+        time.sleep(0.2)
+    try:
+        os.killpg(os.getpgid(pid), signal.SIGKILL)
+        logger.warning("%s: force-killed (pid=%d)", name, pid)
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
+    pid_file.unlink(missing_ok=True)
+    return True
+
+
+def stop_all() -> None:
+    stop_pid(DAEMON_PID, "toki daemon")
+    stop_pid(LLAMA_PID, "llama-server")
+
+
+def status() -> dict:
+    """Return a dict describing the state of both processes."""
+    llama_pid = _read_pid(LLAMA_PID)
+    daemon_pid = _read_pid(DAEMON_PID)
+    return {
+        "llama_server": {
+            "pid": llama_pid,
+            "alive": _is_alive(llama_pid) if llama_pid else False,
+            "reachable": llama_reachable(8088),
+            "log": str(LLAMA_LOG),
+        },
+        "toki_daemon": {
+            "pid": daemon_pid,
+            "alive": _is_alive(daemon_pid) if daemon_pid else False,
+            "reachable": _health_daemon(8787),
+            "log": str(DAEMON_LOG),
+        },
+    }
+
+
+def _health_daemon(port: int) -> bool:
+    try:
+        r = httpx.get(f"http://127.0.0.1:{port}/healthz", timeout=2.0)
+        return r.status_code == 200
+    except Exception:
+        return False

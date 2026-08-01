@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Toki Recur — Chat</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231b1f2b'/%3E%3Ctext x='16' y='22' font-size='14' text-anchor='middle' fill='%237c9eff' font-family='monospace'%3E%E2%AC%B4%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/style.css?v=8">
+</head>
+<body>
+<div class="app" id="app">
+    <aside class="sidebar">
+    <header class="brand">
+      <h1>Toki Recur</h1>
+      <p class="subtitle">KV cache reuse for LLM inference</p>
+    </header>
+
+    <section class="config">
+      <h2>Inference path</h2>
+      <div class="mode-toggle" role="tablist" aria-label="Inference mode">
+        <button class="mode-btn" data-mode="raw" aria-selected="true">
+          <span class="mode-label">Raw</span>
+          <span class="mode-desc">direct to llama-server, no cache</span>
+        </button>
+        <button class="mode-btn" data-mode="cached" aria-selected="false">
+          <span class="mode-label">Cached</span>
+          <span class="mode-desc">through Toki Recur daemon</span>
+        </button>
+        <button class="mode-btn" data-mode="compare" aria-selected="false">
+          <span class="mode-label">Compare</span>
+          <span class="mode-desc">run both, side-by-side</span>
+        </button>
+      </div>
+
+      <h2>System prompt</h2>
+      <textarea id="system-prompt" placeholder="(optional — sets the model's role and behaviour for every turn)" rows="4"></textarea>
+
+      <div class="row">
+        <label>
+          <span>max tokens</span>
+          <input id="max-tokens" type="number" value="2048" min="64" max="8192">
+          <span class="token-presets" id="token-presets">
+            <button class="token-preset-btn" type="button" data-tokens="512">512</button>
+            <button class="token-preset-btn" type="button" data-tokens="1024">1k</button>
+            <button class="token-preset-btn" type="button" data-tokens="2048">2k</button>
+            <button class="token-preset-btn" type="button" data-tokens="4096">4k</button>
+          </span>
+        </label>
+        <label>
+          <span>temperature</span>
+          <input id="temperature" type="number" value="0" min="0" max="2" step="0.1">
+        </label>
+      </div>
+
+      <h2>Backend</h2>
+      <div class="backend-status-row">
+        <span class="backend-status-label">llama-server</span>
+        <span id="llama-status" class="status-badge status-unknown">checking…</span>
+      </div>
+      <label class="backend-row">
+        <input id="raw-url" type="text" value="">
+      </label>
+      <div class="backend-status-row">
+        <span class="backend-status-label">toki daemon</span>
+        <span id="daemon-status" class="status-badge status-unknown">checking…</span>
+      </div>
+      <label class="backend-row">
+        <input id="daemon-url" type="text" value="">
+      </label>
+
+      <details class="auth-section">
+        <summary>Auth (optional)</summary>
+        <label class="backend-row">
+          <span>daemon token</span>
+          <input id="auth-token" type="password" placeholder="TOKI_AUTH_TOKEN" autocomplete="off">
+        </label>
+        <button id="test-conn-btn" class="ghost-btn-sm" type="button">Test connection</button>
+        <p class="auth-hint">Only needed when the web UI itself runs without a token (legacy setups). The sign-in flow above is the supported path.</p>
+      </details>
+
+      <h2>Session</h2>
+      <div class="session-row">
+        <span class="session-label">Session ID</span>
+        <code id="session-id" class="session-id-display" title="Click to copy">—</code>
+        <button id="copy-session-btn" class="ghost-btn-sm" type="button">copy</button>
+      </div>
+      <label class="backend-row">
+        <span>override</span>
+        <input id="session-override" type="text" placeholder="(auto-generated on first message)" autocomplete="off">
+      </label>
+      <button id="reset-session-btn" class="ghost-btn-sm" type="button">Reset session</button>
+
+      <h2>Session stats</h2>
+      <div class="session-stats">
+        <div class="stat-row"><span class="stat-label">messages</span><span id="stat-messages">0</span></div>
+        <div class="stat-row"><span class="stat-label">generated</span><span id="stat-generated">0 tok</span></div>
+        <div class="stat-row"><span class="stat-label">reused</span><span id="stat-reused">0 tok</span></div>
+        <div class="stat-row"><span class="stat-label">hit rate</span><span id="stat-hitrate">—</span></div>
+      </div>
+
+      <button id="logout-btn" class="ghost-btn-sm" type="button" title="Sign out of the web UI">sign out</button>
+      <button id="clear-btn" class="ghost-btn">Clear conversation</button>
+    </section>
+  </aside>
+
+  <button class="edge-handle edge-handle-left" id="edge-left" type="button" aria-label="Toggle settings panel" aria-expanded="true" title="Show/hide settings">‹</button>
+
+  <main class="main">
+    <header class="main-header">
+      <div id="status-pill" class="status-pill status-raw">raw</div>
+      <div id="ctx-pill" class="ctx-pill" title="current session context usage">ctx —</div>
+      <div id="build-chip" class="build-chip" title="UI build — reload if this doesn't match the running server">v10</div>
+      <div id="connection-status" class="connection-status">connecting…</div>
+    </header>
+
+    <div id="messages" class="messages">
+      <div class="welcome">
+        <h2>Welcome to Toki Recur</h2>
+        <p>Pick an inference path on the left, type a prompt below, and watch the model respond.</p>
+        <p class="hint">Try <code>compare</code> mode to see raw vs cached side-by-side with latency and divergence stats.</p>
+      </div>
+    </div>
+
+    <button class="edge-handle edge-handle-right" id="edge-right" type="button" aria-label="Toggle stats panel" aria-expanded="true" title="Show/hide stats">»</button>
+
+    <footer class="input-area">
+      <div class="input-row">
+        <textarea id="user-input" placeholder="Type a message…  (try /help)" rows="2"></textarea>
+        <button id="stop-btn" class="ghost-btn" type="button" hidden>Stop</button>
+        <button id="send-btn" class="primary-btn">Send</button>
+      </div>
+    </footer>
+  </main>
+
+  <aside class="slots-panel" id="slots-panel">
+    <details class="panel" open>
+      <summary class="slots-header">
+        <h3>Slot state</h3>
+        <button id="reset-cache-btn" class="ghost-btn-sm" type="button" title="Clear all slot state" onclick="event.stopPropagation()">reset</button>
+      </summary>
+      <div id="slots-list" class="slots-list">
+        <div class="slots-empty">awaiting first request…</div>
+      </div>
+      <footer class="slots-footer">
+        <span id="slots-stats">0 slots · 0 spills</span>
+      </footer>
+    </details>
+
+    <details class="panel" open>
+      <summary class="slots-header">
+        <h3>Live metrics</h3>
+        <button id="refresh-metrics-btn" class="ghost-btn-sm" type="button" onclick="event.stopPropagation()">refresh</button>
+      </summary>
+      <div id="metrics-list" class="metrics-list">
+        <div class="metric-row">
+          <span class="metric-label">requests</span>
+          <span class="metric-value" id="metric-requests">0</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">cache hits</span>
+          <span class="metric-value metric-good" id="metric-hits">0</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">cache misses</span>
+          <span class="metric-value" id="metric-misses">0</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">tokens skipped</span>
+          <span class="metric-value metric-good" id="metric-skipped">0</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">active slots</span>
+          <span class="metric-value" id="metric-slots">0</span>
+        </div>
+      </div>
+      <div class="ttft-sparkline-container">
+        <div class="sparkline-header">TTFT (last 20)</div>
+        <svg id="ttft-sparkline" class="ttft-sparkline" viewBox="0 0 200 40" preserveAspectRatio="none"></svg>
+      </div>
+    </details>
+
+    <details class="panel" open>
+      <summary class="slots-header">
+        <h3>Precision</h3>
+        <button id="precision-btn" class="ghost-btn-sm" type="button" onclick="event.stopPropagation()">run</button>
+      </summary>
+      <div id="precision-list" class="precision-list">
+        <div class="precision-row">
+          <span class="precision-label">baseline deterministic</span>
+          <span class="precision-value" id="prec-base">—</span>
+        </div>
+        <div class="precision-row">
+          <span class="precision-label">recycled deterministic</span>
+          <span class="precision-value" id="prec-rec">—</span>
+        </div>
+        <div class="precision-row">
+          <span class="precision-label">recycled = baseline</span>
+          <span class="precision-value" id="prec-cross">—</span>
+        </div>
+        <p class="precision-hint" id="prec-hint">Click run to check byte-identity. Results are only meaningful on a dedicated server with no prior slot history.</p>
+      </div>
+    </details>
+  </aside>
+</div>
+<script src="/static/app.js?v=10"></script>
+</body>
+</html>

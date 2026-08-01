@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tokirecur"
+version = "0.1.0"
+description = "Toki Recur — KV cache reuse for LLM inference. Drop-in prefix caching across CUDA, ROCm, and Vulkan."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Toki Recur" }]
+keywords = ["llm", "inference", "kv-cache", "prefix-cache", "rocm", "llama.cpp", "toki-recur"]
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "httpx>=0.27",
+    "pydantic>=2.6",
+    "numpy>=1.26",
+    "rich>=13.7",
+    "click>=8.1",
+    "prometheus-client>=0.19",
+    "textual>=0.85",
+]
+
+[project.optional-dependencies]
+embeddings = ["sentence-transformers>=2.6", "torch>=2.2"]
+index = ["hnswlib>=0.7"]
+dev = ["pytest>=8.0", "pytest-asyncio>=1.0", "ruff>=0.4"]
+
+[project.scripts]
+toki = "tokirecur.cli:main"
+tokirecur = "tokirecur.cli:main"
+tokirecur-bench = "tokirecur.bench.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"tokirecur" = ["py.typed", "bench/corpus/*.json"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "B", "UP"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

@@ -1,0 +1,18 @@
+# Logrotate configuration for Toki Recur
+#
+# Install to /etc/logrotate.d/toki-recur
+
+/var/log/toki-recur/*.log {
+    daily
+    missingok
+    rotate 14
+    compress
+    delaycompress
+    notifempty
+    create 0640 toki toki
+    sharedscripts
+    postrotate
+        # If running under systemd, signal the daemon to reopen logs.
+        systemctl reload toki-recur.service > /dev/null 2>&1 || true
+    endscript
+}

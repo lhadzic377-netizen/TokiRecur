@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+build/
+dist/
+
+# Test artifacts
+.pytest_cache/
+test-reports/*.json
+test-reports/*.html
+
+# Local state / secrets
+*.log
+auth
+.env
+toki.env
+
+# Editor/OS
+.DS_Store
+.idea/
+.vscode/

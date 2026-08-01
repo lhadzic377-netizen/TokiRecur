@@ -1,0 +1,131 @@
+--- a/examples/server/server.cpp
++++ b/examples/server/server.cpp
+@@ -1,5 +1,6 @@
+ #include "server.h"
+ #include "llama.h"
++#include <fstream>
+ 
+ // ... existing impl ...
+ 
+@@ -2787,6 +2788,90 @@ static void sv_scores_info(const httplib::Request & req, httplib::Response & res) {
+     res.set_content(ss.str(), "application/json");
+ }
+ 
++// ---- Toki Recur: KV cache save/load endpoints ----
++// These three endpoints expose llama_state_seq_save_file /
++// llama_state_seq_load_file over HTTP so that external processes
++// (e.g. tokirecurd) can persist and reload KV cache state
++// without holding the model in their own process.
++//
++// Routes:
++//   POST /slots/{slot_id}/kv/save   body: {"cache_id": "..."}
++//   POST /slots/{slot_id}/kv/load   body: {"cache_id": "..."}
++//   GET  /slots/{slot_id}/kv/info
++
++static std::string kv_cache_dir(const std::string & cache_id) {
++    const char * env = std::getenv("LLAMA_KV_CACHE_DIR");
++    std::string dir = env ? env : "/tmp/llama-kv-cache";
++    return dir + "/" + cache_id + ".kv";
++}
++
++static void sv_kv_save(const httplib::Request & req, httplib::Response & res) {
++    int slot_id = -1;
++    if (!parse_int_param(req.path_params, "slot_id", slot_id) || slot_id < 0) {
++        res.status = 400;
++        res.set_content("{\"error\":\"invalid slot_id\"}", "application/json");
++        return;
++    }
++    std::string cache_id;
++    try {
++        auto body = json::parse(req.body);
++        cache_id = body.at("cache_id").get<std::string>();
++    } catch (...) {
++        res.status = 400;
++        res.set_content("{\"error\":\"missing cache_id\"}", "application/json");
++        return;
++    }
++    if (slot_id >= (int)llama_state_slots.size()) {
++        res.status = 404;
++        res.set_content("{\"error\":\"slot not found\"}", "application/json");
++        return;
++    }
++    auto & slot = llama_state_slots[slot_id];
++    std::string path = kv_cache_dir(cache_id);
++    llama_state_seq_save_file(*ctx, path, slot.id, slot.n_past);
++    std::ifstream in(path, std::ios::binary | std::ios::ate);
++    size_t bytes = in.tellg();
++    json out = {
++        {"cache_id", cache_id},
++        {"n_past", slot.n_past},
++        {"bytes", bytes},
++        {"path", path},
++    };
++    res.set_content(out.dump(), "application/json");
++}
++
++static void sv_kv_load(const httplib::Request & req, httplib::Response & res) {
++    int slot_id = -1;
++    if (!parse_int_param(req.path_params, "slot_id", slot_id) || slot_id < 0) {
++        res.status = 400;
++        res.set_content("{\"error\":\"invalid slot_id\"}", "application/json");
++        return;
++    }
++    std::string cache_id;
++    try {
++        auto body = json::parse(req.body);
++        cache_id = body.at("cache_id").get<std::string>();
++    } catch (...) {
++        res.status = 400;
++        res.set_content("{\"error\":\"missing cache_id\"}", "application/json");
++        return;
++    }
++    if (slot_id >= (int)llama_state_slots.size()) {
++        res.status = 404;
++        res.set_content("{\"error\":\"slot not found\"}", "application/json");
++        return;
++    }
++    auto & slot = llama_state_slots[slot_id];
++    std::string path = kv_cache_dir(cache_id);
++    // Clear the slot to a fresh state before loading.
++    llama_state_seq_rm(*ctx, slot.id, -1, -1);
++    llama_state_seq_load_file(*ctx, path, slot.id, slot.n_past);
++    json out = {
++        {"cache_id", cache_id},
++        {"n_past", slot.n_past},
++    };
++    res.set_content(out.dump(), "application/json");
++}
++
++static void sv_kv_info(const httplib::Request & req, httplib::Response & res) {
++    int slot_id = -1;
++    if (!parse_int_param(req.path_params, "slot_id", slot_id) || slot_id < 0) {
++        res.status = 400;
++        res.set_content("{\"error\":\"invalid slot_id\"}", "application/json");
++        return;
++    }
++    if (slot_id >= (int)llama_state_slots.size()) {
++        res.status = 404;
++        res.set_content("{\"error\":\"slot not found\"}", "application/json");
++        return;
++    }
++    auto & slot = llama_state_slots[slot_id];
++    json out = {
++        {"n_past", slot.n_past},
++        {"model_id", slot.model_name},
++        {"vocab_size", llama_n_vocab(*ctx)},
++    };
++    res.set_content(out.dump(), "application/json");
++}
++
+ // ---- register_routes ----
+@@ -2920,6 +3005,12 @@ void register_routes(httplib::Server & svr) {
+     svr.Post("/slots/:slot_id", sv_slots_action);
+     svr.Get("/slots", sv_slots);
+ 
++    // Toki Recur KV endpoints
++    svr.Post("/slots/:slot_id/kv/save", sv_kv_save);
++    svr.Post("/slots/:slot_id/kv/load", sv_kv_load);
++    svr.Get("/slots/:slot_id/kv/info", sv_kv_info);
++
+     // ... existing routes ...
+ }

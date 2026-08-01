@@ -1,0 +1,27 @@
+# Build artefacts
+build/
+dist/
+*.egg-info/
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# Test artefacts
+.pytest_cache/
+.ruff_cache/
+
+# OS
+.DS_Store
+
+# Toki Recur runtime state
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal

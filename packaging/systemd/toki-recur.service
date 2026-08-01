@@ -1,0 +1,62 @@
+[Unit]
+Description=Toki Recur daemon (KV cache reuse for LLM inference)
+Documentation=https://github.com/anomalyco/tokirecur
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Run as a dedicated user.
+User=toki
+Group=toki
+
+# Working directory and runtime state.
+WorkingDirectory=/var/lib/toki-recur
+RuntimeDirectory=toki-recur
+StateDirectory=toki-recur
+LogsDirectory=toki-recur
+
+# Load secrets from a separate env file (chmod 600, owned by root).
+EnvironmentFile=/etc/toki-recur/toki.env
+
+# The daemon itself — listens on 127.0.0.1:8787 by default. Set
+# TOKI_AUTH_TOKEN in the env file to allow external clients.
+ExecStart=/usr/bin/toki serve \
+    --host 0.0.0.0 \
+    --port 8787 \
+    --backend-url http://127.0.0.1:8088
+
+# Restart on failure, with backoff.
+Restart=on-failure
+RestartSec=5s
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+# Graceful shutdown — TERM allows in-flight requests to drain.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# Hardening.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+
+# Resource limits (can be tuned).
+LimitNOFILE=65536
+LimitNPROC=4096
+
+# Allow access to llama-server on localhost.
+# (llama-server runs as a separate unit, typically as the same user.)
+
+[Install]
+WantedBy=multi-user.target
