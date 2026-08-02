@@ -197,7 +197,7 @@ class TestDaemonCompletion:
             "expected at least one completion token"
         )
         # Response should have non-empty text (not just thinking tokens).
-        text = body["choices"][0]["text"]
+        text = body["choices"][0]["message"]["content"]
         assert text, f"expected non-empty text, got {text!r}"
 
     def test_v1_chat_completions_uses_openai_endpoint(self, client):
@@ -218,7 +218,7 @@ class TestDaemonCompletion:
             "max_slots": 2,
         })
         assert r.status_code == 200
-        text = r.json()["choices"][0]["text"]
+        text = r.json()["choices"][0]["message"]["content"]
         # The model should answer with a number, not role labels.
         # "user: 4\\n\\nassistant:" is the old broken behavior.
         assert "4" in text, f"expected answer containing '4', got {text!r}"
@@ -259,7 +259,7 @@ class TestDaemonCompletion:
         })
         assert r.status_code == 200
         body = r.json()
-        text = body["choices"][0]["text"]
+        text = body["choices"][0]["message"]["content"]
         # With thinking disabled, the model should produce visible
         # content. The 0.8B test model answers "2" in a few tokens.
         assert text, (

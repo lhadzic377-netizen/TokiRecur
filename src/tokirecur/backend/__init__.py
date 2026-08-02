@@ -370,6 +370,8 @@ class LlamaServerBackend(LlamaBackend):
         temperature: float = 0.0,
         cache_prompt: bool = True,
         chat_template_kwargs: dict | None = None,
+        tools: list | None = None,
+        tool_choice: str | dict | None = None,
     ) -> dict[str, Any]:
         """Run a chat completion via llama-server's OpenAI-compatible
         endpoint (``/v1/chat/completions``).
@@ -391,8 +393,15 @@ class LlamaServerBackend(LlamaBackend):
             chat_template_kwargs: pass-through kwargs for llama-server's
                 chat template (e.g. ``{"enable_thinking": False}`` for
                 Qwen3.5). None means don't send the field at all.
+            tools: OpenAI tool definitions (function schemas). When set,
+                the model may respond with ``tool_calls`` instead of
+                text.
+            tool_choice: ``"auto"`` / ``"none"`` or a
+                ``{"type": "function", "function": {...}}`` object.
 
-        Returns the same dict shape as :meth:`complete_native`.
+        Returns the same dict shape as :meth:`complete_native`, plus
+        ``tool_calls`` (assembled OpenAI tool-call list, or None) and
+        ``finish_reason`` when the model requested tools.
         """
         payload = {
             "messages": messages,
@@ -402,6 +411,10 @@ class LlamaServerBackend(LlamaBackend):
             "slot_id": slot_id,
             "cache_prompt": cache_prompt,
         }
+        if tools:
+            payload["tools"] = tools
+            if tool_choice is not None:
+                payload["tool_choice"] = tool_choice
         if chat_template_kwargs:
             payload["chat_template_kwargs"] = chat_template_kwargs
         started = time.perf_counter()
@@ -416,10 +429,15 @@ class LlamaServerBackend(LlamaBackend):
         timings = body.get("timings", {}) or {}
         # OpenAI response shape: {"choices": [{"message": {"content": "..."}}]}
         text = ""
+        tool_calls = None
+        finish_reason = None
         choices = body.get("choices") or []
         if choices and isinstance(choices, list):
-            msg = choices[0].get("message") or {}
-            text = msg.get("content", "")
+            choice = choices[0] or {}
+            msg = choice.get("message") or {}
+            text = msg.get("content", "") or ""
+            tool_calls = msg.get("tool_calls")
+            finish_reason = choice.get("finish_reason")
         # OpenAI response shape: {"choices": [{"message": {"content": "..."}}],
         # "usage": {"completion_tokens": N, "prompt_tokens": M, "total_tokens": K},
         # "timings": {...}}. llama-server also returns the llama.cpp
@@ -427,6 +445,8 @@ class LlamaServerBackend(LlamaBackend):
         usage = body.get("usage") or {}
         return {
             "text": text,
+            "tool_calls": tool_calls,
+            "finish_reason": finish_reason,
             "tokens_generated": int(
                 usage.get("completion_tokens", 0)
                 or body.get("tokens_predicted", 0)
@@ -454,14 +474,22 @@ class LlamaServerBackend(LlamaBackend):
         temperature: float = 0.0,
         cache_prompt: bool = True,
         chat_template_kwargs: dict | None = None,
+        tools: list | None = None,
+        tool_choice: str | dict | None = None,
     ):
         """Stream a chat completion via llama-server's OpenAI-compatible
         endpoint (``/v1/chat/completions`` with ``stream: True``).
 
         Yields dicts:
           ``{"kind": "delta", "delta": str}`` — one per content chunk.
+          ``{"kind": "tool_calls", "tool_calls": [...]}`` — one per
+          incoming ``delta.tool_calls`` array, forwarded verbatim in
+          OpenAI delta format (the SDK accumulates arguments by index).
+          ``{"kind": "finish", "finish_reason": str}`` — the stream's
+          finish reason (e.g. ``"tool_calls"``), if any.
           ``{"kind": "result", "result": {...}}`` — final dict with the
-          same shape as :meth:`complete_openai`'s return value.
+          same shape as :meth:`complete_openai`'s return value (plus
+          assembled ``tool_calls`` / ``finish_reason``).
 
         Raises ``RuntimeError`` if llama-server answers with an error
         status before streaming begins.
@@ -475,6 +503,10 @@ class LlamaServerBackend(LlamaBackend):
             "slot_id": slot_id,
             "cache_prompt": cache_prompt,
         }
+        if tools:
+            payload["tools"] = tools
+            if tool_choice is not None:
+                payload["tool_choice"] = tool_choice
         if chat_template_kwargs:
             payload["chat_template_kwargs"] = chat_template_kwargs
         started = time.perf_counter()
@@ -482,6 +514,11 @@ class LlamaServerBackend(LlamaBackend):
         text_parts: list[str] = []
         timings: dict = {}
         usage: dict = {}
+        finish_reason: str | None = None
+        # Assembled tool calls, keyed by index: {"id", "type",
+        # "function": {"name", "arguments"}} with arguments accumulated
+        # across delta chunks.
+        tool_calls_by_index: dict[int, dict] = {}
         async with httpx.AsyncClient(timeout=httpx.Timeout(600.0, connect=10.0)) as client:
             async with client.stream(
                 "POST",
@@ -507,13 +544,41 @@ class LlamaServerBackend(LlamaBackend):
                         continue
                     choices = obj.get("choices") or []
                     if choices and isinstance(choices[0], dict):
-                        delta = choices[0].get("delta") or {}
+                        choice = choices[0]
+                        delta = choice.get("delta") or {}
                         content = delta.get("content")
                         if content:
                             if first_token_at is None:
                                 first_token_at = time.perf_counter()
                             text_parts.append(content)
                             yield {"kind": "delta", "delta": content}
+                        tcs = delta.get("tool_calls")
+                        if tcs:
+                            # Forward the delta verbatim (OpenAI format)
+                            # and accumulate fragments for the result.
+                            yield {"kind": "tool_calls", "tool_calls": tcs}
+                            for tc in tcs:
+                                if not isinstance(tc, dict) or "index" not in tc:
+                                    continue
+                                idx = tc["index"]
+                                acc = tool_calls_by_index.setdefault(idx, {"index": idx})
+                                if tc.get("id"):
+                                    acc["id"] = tc["id"]
+                                if tc.get("type"):
+                                    acc["type"] = tc["type"]
+                                fn = tc.get("function") or {}
+                                if fn:
+                                    f_acc = acc.setdefault("function", {})
+                                    if fn.get("name"):
+                                        f_acc["name"] = fn["name"]
+                                    if fn.get("arguments"):
+                                        f_acc["arguments"] = (
+                                            f_acc.get("arguments", "") + fn["arguments"]
+                                        )
+                        fr = choice.get("finish_reason")
+                        if fr:
+                            finish_reason = fr
+                            yield {"kind": "finish", "finish_reason": fr}
                     if obj.get("usage"):
                         usage = obj["usage"]
                     if obj.get("timings"):
@@ -524,10 +589,13 @@ class LlamaServerBackend(LlamaBackend):
             if first_token_at is not None
             else float(timings.get("prompt_ms", 0.0))
         )
+        tool_calls = [tool_calls_by_index[i] for i in sorted(tool_calls_by_index)] or None
         yield {
             "kind": "result",
             "result": {
                 "text": "".join(text_parts),
+                "tool_calls": tool_calls,
+                "finish_reason": finish_reason,
                 "tokens_generated": int(
                     usage.get("completion_tokens", len(text_parts))
                     or len(text_parts)

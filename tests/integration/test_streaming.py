@@ -19,11 +19,11 @@ class TestServeChatStream:
     async def _stream_text(self, engine, messages, **kw):
         parts = []
         result = None
-        async for delta, partial in engine.serve_chat_stream(messages, **kw):
-            if delta is not None:
-                parts.append(delta)
-            elif partial is not None:
-                result = partial
+        async for item in engine.serve_chat_stream(messages, **kw):
+            if item["kind"] == "delta":
+                parts.append(item["delta"])
+            elif item["kind"] == "result":
+                result = item["result"]
         return "".join(parts), result
 
     @pytest.mark.asyncio
@@ -65,15 +65,15 @@ class TestServeChatStream:
         blob — this is what the TUI renders live."""
         messages = [{"role": "user", "content": "List three animals."}]
         deltas = []
-        async for delta, _ in engine.serve_chat_stream(
+        async for item in engine.serve_chat_stream(
             messages,
             max_tokens=64,
             temperature=0.0,
             max_slots=2,
             chat_template_kwargs={"enable_thinking": False},
         ):
-            if delta is not None:
-                deltas.append(delta)
+            if item["kind"] == "delta":
+                deltas.append(item["delta"])
         text = "".join(deltas)
         assert text.strip(), "expected non-empty streamed text"
         assert len(deltas) >= 2, (

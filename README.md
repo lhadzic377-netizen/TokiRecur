@@ -223,6 +223,46 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now toki-recur toki-recur-web
 ```
 
+## Use Toki Recur as an opencode backend
+
+The daemon's `/v1/chat/completions` is OpenAI-compatible *and* tool-calling
+capable, so opencode can run entirely on the local KV-recycled model. Every
+agent turn reuses the prefix from the previous turn (system prompt, tools,
+earlier messages) via llama-server's KV cache — no cloud, no `num_ctx`
+fiddling, and cache hits show up in the daemon's metrics.
+
+```jsonc
+// ~/.config/opencode/opencode.json
+{
+  "provider": {
+    "tokirecur": {
+      "name": "Toki Recur (KV-cache, local)",
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "http://127.0.0.1:8787/v1",
+        "apiKey": "demo-token"
+      },
+      "models": {
+        "qwen3.5-9b": {
+          "name": "Qwen3.5 9B (Toki Recur)",
+          "contextWindow": 24000,
+          "limit": { "context": 24000, "output": 8192 }
+        }
+      }
+    }
+  },
+  "small_model": "tokirecur/qwen3.5-9b" // keep title-gen local too
+}
+```
+
+- Set `apiKey` to whatever `TOKI_AUTH_TOKEN` the daemon runs with.
+- The model id is a label; the actual weights are whatever llama-server has
+  loaded. `contextWindow` should stay under `TOKI_MAX_CONTEXT_TOKENS`.
+- Tool calls stream through verbatim (`delta.tool_calls`), finish with
+  `finish_reason: "tool_calls"`, and `role: "tool"` result messages round-trip
+  unchanged — verified against opencode's own `bash` tool loop.
+- Non-stream requests work too (`choices[0].message.tool_calls`).
+
 ## Interactive shell
 
 ```

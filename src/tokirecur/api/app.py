@@ -69,18 +69,38 @@ class CompletionResponse(BaseModel):
 
 
 class ChatMessage(BaseModel):
+    """One OpenAI chat message.
+
+    ``content`` may be a plain string, ``None`` (tool-call assistant
+    turns) or a list (multi-part content, rare). Agentic clients like
+    opencode also send ``tool_calls`` on assistant messages and
+    ``tool_call_id`` + ``name`` on ``tool`` messages — all preserved
+    and forwarded to llama-server verbatim.
+    """
+
     role: str
-    content: str
+    content: str | list | None = None
+    tool_calls: list | None = None
+    tool_call_id: str | None = None
+    name: str | None = None
 
 
 class ChatCompletionRequest(BaseModel):
     model: str = "default"
     messages: list[ChatMessage]
+    # Hard bounds instead of trusting the client: llama.cpp truncates
+    # out-of-range values silently, which made overrides look broken.
     max_tokens: int = Field(256, ge=1, le=65536)
     temperature: float = Field(0.0, ge=-2.0, le=2.0)
     max_slots: int = Field(4, ge=1, le=32)
     session_id: str | None = None
     stream: bool = False
+    # Tool calling (agentic clients): forwarded to llama-server, which
+    # applies the model's chat template. When tools are present the
+    # response may contain tool_calls instead of text, and the stream
+    # relays llama-server's OpenAI deltas verbatim.
+    tools: list | None = None
+    tool_choice: str | dict | None = None
     # Pass-through for chat-template kwargs. If unset, the daemon
     # defaults to disabling Qwen3.5's thinking mode so the response
     # contains visible content instead of internal reasoning tokens.
@@ -408,6 +428,8 @@ def create_app(
         completion_id: str,
         is_chat: bool,
         chat_template_kwargs: dict | None = None,
+        tools: list | None = None,
+        tool_choice: str | dict | None = None,
     ) -> Any:
         """Generator that yields SSE-formatted OpenAI chunks.
 
@@ -416,6 +438,11 @@ def create_app(
         ``/v1/chat/completions``) and streams tokens as they arrive.
         Otherwise falls back to ``serve_native`` with a flat prompt
         string.
+
+        In tool mode (``tools`` set) the model may emit tool calls
+        instead of text: ``delta.tool_calls`` chunks are relayed
+        verbatim and the terminal chunk carries the real finish reason
+        (``tool_calls`` / ``stop``) instead of a hardcoded "stop".
         """
         import json as _json
         object_type = "chat.completion.chunk" if is_chat else "text_completion"
@@ -442,6 +469,8 @@ def create_app(
         # First chunk: role for chat, empty for completion.
         yield chunk_with({"role": "assistant", "content": ""} if is_chat else {"content": ""})
 
+        finish_reason: str | None = None
+
         if messages is not None and is_chat:
             # Default: disable Qwen3.5's thinking mode so the response
             # contains visible content (matches the non-stream path).
@@ -449,18 +478,29 @@ def create_app(
                 chat_template_kwargs = {"enable_thinking": False}
             try:
                 result = None
-                async for delta, partial_result in engine.serve_chat_stream(
+                async for item in engine.serve_chat_stream(
                     messages,
                     max_tokens=max_tokens,
                     temperature=temperature,
                     max_slots=max_slots,
                     session_id=session_id,
                     chat_template_kwargs=chat_template_kwargs,
+                    tools=tools,
+                    tool_choice=tool_choice,
                 ):
-                    if delta is not None:
-                        yield chunk_with({"content": delta})
-                    elif partial_result is not None:
-                        result = partial_result
+                    kind = item["kind"]
+                    if kind == "delta":
+                        yield chunk_with({"content": item["delta"]})
+                    elif kind == "tool_calls":
+                        # OpenAI delta-format tool-call chunk, verbatim
+                        # from llama-server so SDK-side accumulation
+                        # (by index) works unchanged.
+                        yield chunk_with({"tool_calls": item["tool_calls"]})
+                    elif kind == "finish":
+                        if item.get("finish_reason"):
+                            finish_reason = item["finish_reason"]
+                    else:  # result
+                        result = item["result"]
             except Exception as e:
                 logger.exception("streaming chat completion failed")
                 yield chunk_with(
@@ -493,8 +533,10 @@ def create_app(
 
         # Final chunk: finish + usage + cache verdict (OpenAI-style: usage
         # arrives in a final chunk so clients can render prompt/completion
-        # token counts and the cache hit/miss verdict).
-        yield chunk_with({}, finish_reason="stop")
+        # token counts and the cache hit/miss verdict). The finish reason
+        # is the real one (e.g. "tool_calls" in tool mode), not always
+        # "stop".
+        yield chunk_with({}, finish_reason=finish_reason or "stop")
         yield chunk_with(
             {},
             usage={
@@ -609,9 +651,10 @@ def create_app(
 
     @app.post("/v1/chat/completions")
     async def chat_completions(req: ChatCompletionRequest) -> Response:
-        # Pass OpenAI-format messages through. llama-server applies
+        # Pass OpenAI-format messages through (including tool_calls /
+        # tool_call_id fields for agentic clients). llama-server applies
         # the chat template appropriate for the loaded model.
-        messages = [{"role": m.role, "content": m.content} for m in req.messages]
+        messages = [m.model_dump(exclude_none=True) for m in req.messages]
         try:
             if req.stream:
                 completion_id = f"chatcmpl-{int(time.time() * 1000)}"
@@ -627,6 +670,8 @@ def create_app(
                         completion_id,
                         is_chat=True,
                         chat_template_kwargs=req.chat_template_kwargs,
+                        tools=req.tools,
+                        tool_choice=req.tool_choice,
                     ),
                     media_type="text/event-stream",
                 )
@@ -642,6 +687,8 @@ def create_app(
                 max_slots=req.max_slots,
                 session_id=req.session_id,
                 chat_template_kwargs=ctk,
+                tools=req.tools,
+                tool_choice=req.tool_choice,
             )
             state = engine.slot_state()
             slot_ctx = next(
@@ -658,6 +705,16 @@ def create_app(
                 slot_id=result.slot_id,
                 context_tokens=slot_ctx,
             )
+            # OpenAI chat response shape. In tool mode the assistant
+            # message carries tool_calls (and null content) and the
+            # finish reason is "tool_calls".
+            assistant_message: dict[str, Any] = {
+                "role": "assistant",
+                "content": result.output_text,
+            }
+            if result.tool_calls:
+                assistant_message["content"] = None
+                assistant_message["tool_calls"] = result.tool_calls
             return CompletionResponse(
                 id=f"chatcmpl-{int(time.time() * 1000)}",
                 object="chat.completion",
@@ -665,9 +722,9 @@ def create_app(
                 created=int(time.time()),
                 choices=[
                     {
-                        "text": result.output_text,
+                        "message": assistant_message,
                         "index": 0,
-                        "finish_reason": "stop",
+                        "finish_reason": result.finish_reason or "stop",
                     }
                 ],
                 usage={

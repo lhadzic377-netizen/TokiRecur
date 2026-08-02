@@ -90,6 +90,40 @@ class CacheEntry:
     hit_count: int = 0
 
 
+def _content_text(content: Any) -> str:
+    """Normalize OpenAI message ``content`` to a plain string for
+    routing/indexing. Agentic clients (e.g. opencode) send multi-part
+    content as a list of ``{"type": "text", ...}`` parts; llama-server
+    accepts those in chat messages, but the backend's /tokenize and
+    /embed endpoints only take strings — a raw list there makes
+    llama-server answer 500 ("type must be number, but is object").
+    """
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for part in content:
+            if isinstance(part, str):
+                parts.append(part)
+            elif isinstance(part, dict) and part.get("type") == "text":
+                parts.append(str(part.get("text", "")))
+        return "".join(parts)
+    return str(content)
+
+
+def _last_routing_text(messages: list[dict]) -> str:
+    """Routing key for a message list: the last user message's text
+    (normalized), falling back to the final message's content."""
+    for m in reversed(messages):
+        if m.get("role") == "user" and m.get("content"):
+            return _content_text(m["content"])
+    if messages:
+        return _content_text(messages[-1].get("content", ""))
+    return ""
+
+
 @dataclass
 class RecyclingResult:
     """The outcome of a single recycling decision."""
@@ -110,6 +144,8 @@ class RecyclingResult:
     output_tokens: list[int] = field(default_factory=list)
     slot_id: int = 0  # which slot served the request
     spilled: bool = False  # True if this slot was cleared due to context budget
+    tool_calls: list | None = None  # OpenAI tool-call list (tool mode only)
+    finish_reason: str | None = None  # e.g. "tool_calls" / "stop" (tool mode only)
 
 
 def make_cache_id(prompt: str, model_id: str) -> str:
@@ -265,6 +301,8 @@ class RecyclingEngine:
         session_id: str | None = None,
         max_context_tokens: int | None = None,
         chat_template_kwargs: dict | None = None,
+        tools: list | None = None,
+        tool_choice: str | dict | None = None,
     ) -> RecyclingResult:
         """Run the recycling algorithm with OpenAI-format messages.
 
@@ -275,23 +313,22 @@ class RecyclingEngine:
 
         Args:
             messages: OpenAI-format list of ``{"role": ..., "content": ...}``
-                dicts. The concatenated text is what gets indexed for
-                prefix-reuse matching.
+                dicts (may include ``tool_calls`` / ``tool_call_id`` /
+                ``name`` for agentic workloads). The concatenated text
+                is what gets indexed for prefix-reuse matching.
             max_tokens, temperature, max_slots, session_id,
                 max_context_tokens: see :meth:`serve_native`.
             chat_template_kwargs: pass-through for llama-server's chat
                 template (e.g. ``{"enable_thinking": False}`` for Qwen3.5).
+            tools: OpenAI tool definitions; when set the model may reply
+                with ``tool_calls`` (see :meth:`RecyclingResult.tool_calls`).
+            tool_choice: OpenAI tool-choice selector, passed through.
         """
         # Index the joined user content for prefix matching. We use the
         # last user message's text as the routing key — it's what future
-        # turns are most likely to share with.
-        routing_text = ""
-        for m in reversed(messages):
-            if m.get("role") == "user" and m.get("content"):
-                routing_text = m["content"]
-                break
-        if not routing_text and messages:
-            routing_text = messages[-1].get("content", "")
+        # turns are most likely to share with. Content is normalized to
+        # a string (clients may send multi-part arrays).
+        routing_text = _last_routing_text(messages)
 
         return self._serve_with_backend(
             prompt=routing_text,
@@ -303,6 +340,8 @@ class RecyclingEngine:
                 temperature=temperature,
                 cache_prompt=cache_prompt,
                 chat_template_kwargs=chat_template_kwargs,
+                tools=tools,
+                tool_choice=tool_choice,
             ),
             tokenize_text=routing_text,
             max_tokens=max_tokens,
@@ -423,6 +462,8 @@ class RecyclingEngine:
             output_text=backend_result.get("text", ""),
             slot_id=slot_id,
             spilled=spilled,
+            tool_calls=backend_result.get("tool_calls"),
+            finish_reason=backend_result.get("finish_reason"),
         )
 
     def _serve_with_backend(
@@ -479,24 +520,27 @@ class RecyclingEngine:
         session_id: str | None = None,
         max_context_tokens: int | None = None,
         chat_template_kwargs: dict | None = None,
-    ) -> AsyncIterator[tuple[str | None, RecyclingResult | None]]:
+        tools: list | None = None,
+        tool_choice: str | dict | None = None,
+    ) -> AsyncIterator[dict]:
         """Streaming variant of :meth:`serve_chat`.
 
-        Yields ``(delta, None)`` per text chunk while tokens stream in,
-        then finally ``(None, result)`` with the completed
-        :class:`RecyclingResult`. Slot routing, spilling, session
-        pinning and the index behave exactly like :meth:`serve_chat`;
-        only the network call streams.
+        Yields dict items (mirrors the backend contract):
+          ``{"kind": "delta", "delta": str}`` — one per text chunk.
+          ``{"kind": "tool_calls", "tool_calls": [...]}`` — OpenAI
+          delta-format tool-call chunks, forwarded verbatim.
+          ``{"kind": "finish", "finish_reason": str}`` — the stream's
+          finish reason, if the backend reported one.
+          ``{"kind": "result", "result": RecyclingResult}`` — the final
+          result, whose :attr:`RecyclingResult.tool_calls` /
+          ``finish_reason`` carry the assembled tool call(s).
+
+        Slot routing, spilling, session pinning and the index behave
+        exactly like :meth:`serve_chat`; only the network call streams.
         """
         # Index the joined user content for prefix matching (mirrors
         # serve_chat).
-        routing_text = ""
-        for m in reversed(messages):
-            if m.get("role") == "user" and m.get("content"):
-                routing_text = m["content"]
-                break
-        if not routing_text and messages:
-            routing_text = messages[-1].get("content", "")
+        routing_text = _last_routing_text(messages)
 
         started = time.perf_counter()
         new_tokens, new_embedding, slot_id, reuse_depth, spilled, cache_prompt = (
@@ -516,15 +560,23 @@ class RecyclingEngine:
             temperature=temperature,
             cache_prompt=cache_prompt,
             chat_template_kwargs=chat_template_kwargs,
+            tools=tools,
+            tool_choice=tool_choice,
         ):
             if item.get("kind") == "delta":
-                yield item.get("delta", ""), None
+                yield {"kind": "delta", "delta": item.get("delta", "")}
+            elif item.get("kind") == "tool_calls":
+                yield {"kind": "tool_calls", "tool_calls": item.get("tool_calls", [])}
+            elif item.get("kind") == "finish":
+                yield {"kind": "finish", "finish_reason": item.get("finish_reason")}
             else:
                 backend_result = item.get("result", {})
 
         if backend_result is None:
             backend_result = {
                 "text": "",
+                "tool_calls": None,
+                "finish_reason": None,
                 "tokens_generated": 0,
                 "prefill_tokens": len(new_tokens),
                 "ttft_ms": 0.0,
@@ -532,17 +584,20 @@ class RecyclingEngine:
                 "prefill_tokens_per_sec": 0.0,
             }
 
-        yield None, self._finalize_request(
-            tokenize_text=routing_text,
-            new_tokens=new_tokens,
-            new_embedding=new_embedding,
-            slot_id=slot_id,
-            reuse_depth=reuse_depth,
-            spilled=spilled,
-            session_id=session_id,
-            backend_result=backend_result,
-            started=started,
-        )
+        yield {
+            "kind": "result",
+            "result": self._finalize_request(
+                tokenize_text=routing_text,
+                new_tokens=new_tokens,
+                new_embedding=new_embedding,
+                slot_id=slot_id,
+                reuse_depth=reuse_depth,
+                spilled=spilled,
+                session_id=session_id,
+                backend_result=backend_result,
+                started=started,
+            ),
+        }
 
     def _init_slot_state(self) -> None:
         """Initialise per-slot state maps. Idempotent; safe to call
