@@ -53,14 +53,12 @@ New-Item -ItemType Directory -Force -Path $Base | Out-Null
 
 Write-Host "[+] fetching TokiRecur source from GitHub"
 $Zip = Join-Path $Base 'src.zip'
-$wc = New-Object System.Net.WebClient
-# codeload uses git-style basic auth: username x-access-token, PAT as
-# password (URL userinfo auth is unreliable in .NET).
-$wc.Credentials = New-Object System.Net.NetworkCredential('x-access-token', $env:TOKI_INSTALL_TOKEN)
-$wc.DownloadFile(
-    "https://codeload.github.com/lhadzic377-netizen/TokiRecur/zip/refs/heads/master",
-    $Zip
-)
+# zipball API endpoint: redirects to a signed codeload URL, so no basic
+# auth on codeload is needed (WebClient challenge-response never fires
+# because GitHub answers 404 instead of 401 without auth).
+irm -Headers @{Authorization = 'Bearer ' + $env:TOKI_INSTALL_TOKEN} `
+    -OutFile $Zip `
+    'https://api.github.com/repos/lhadzic377-netizen/TokiRecur/zipball/refs/heads/master'
 if (Test-Path $Src) { Remove-Item -Recurse -Force $Src }
 Expand-Archive -Path $Zip -DestinationPath $Src
 Remove-Item -Force $Zip
