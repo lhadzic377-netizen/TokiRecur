@@ -491,7 +491,13 @@ def test_pull_model_reasoning_field_persisted(env, hf):
 
 
 def test_llama_args_appends_reasoning_off_for_off_spec(env):
-    spec = ctl.load_registry()[0]  # 9b — no extra_args, reasoning=auto default
+    # The default 9b entry points at a dev-machine path; point it at an
+    # existing temp file so _llama_args' existence check passes on CI.
+    gguf = env / "9b.gguf"
+    gguf.write_bytes(b"dummy")
+    raw = dict(ctl.load_registry()[0].raw)
+    raw["gguf"] = str(gguf)
+    spec = ctl.ModelSpec(raw=raw, **raw)
     assert "--reasoning" not in ctl._llama_args(spec)
     spec_off = spec
     spec_off.reasoning = "off"

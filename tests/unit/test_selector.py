@@ -111,7 +111,8 @@ def test_default_index():
     assert default_index(options, "missing") == 1
 
 
-def test_unit_template_contains_execstart_and_token():
+def test_unit_template_contains_execstart_and_token(monkeypatch):
+    monkeypatch.setenv("TOKI_AUTH_TOKEN", "ci-test-token")
     text = unit_text()
     assert "%h/.local/bin/toki model use %i --keep-others" in text
     assert "WantedBy=default.target" in text
