@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   llama-server:
     image: tokirecur-rocm:latest
@@ -37,7 +35,7 @@ services:
     group_add:
       - video
     environment:
-      - TR_BACKEND_URL=http://llama-server:8080
+      - TOKI_BACKEND_URL=http://llama-server:8080
     volumes:
       - tr-cache:/var/lib/tokirecur
     command: tokirecur serve --host 0.0.0.0 --port 8787

@@ -10,9 +10,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Build llama.cpp with the KV cache patch.
 WORKDIR /opt
+COPY patches/llama-server-kv-endpoints.diff /patches/llama-server-kv-endpoints.diff
 RUN git clone --depth 1 https://github.com/ggml-org/llama.cpp.git \
     && cd llama.cpp \
-    && git apply /patches/llama-server-kv-endpoints.diff || true
+    && git apply /patches/llama-server-kv-endpoints.diff
 
 WORKDIR /opt/llama.cpp
 RUN mkdir -p build && cd build \
@@ -24,8 +25,12 @@ RUN mkdir -p build && cd build \
         -DBUILD_SHARED_LIBS=ON \
     && cmake --build . --config Release --target llama-server -j$(nproc)
 
-# Python deps.
+# Python deps + app. Copy everything before installing so the editable
+# install sees the package source.
 COPY pyproject.toml /src/pyproject.toml
+COPY src /src/src
+COPY patches /src/patches
+COPY scripts /src/scripts
 WORKDIR /src
 RUN pip install --no-cache-dir -e .[embeddings]
 
@@ -34,10 +39,6 @@ ENV TOKI_CACHE_DIR=/var/lib/tokirecur/blobs
 ENV TOKI_DB=/var/lib/tokirecur/index.sqlite
 
 RUN mkdir -p /var/lib/tokirecur/blobs
-
-COPY src /src/src
-COPY patches /src/patches
-COPY scripts /src/scripts
 
 EXPOSE 8080 8787
 

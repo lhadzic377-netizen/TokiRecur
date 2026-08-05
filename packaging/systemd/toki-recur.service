@@ -1,6 +1,6 @@
 [Unit]
 Description=Toki Recur daemon (KV cache reuse for LLM inference)
-Documentation=https://github.com/anomalyco/tokirecur
+Documentation=https://github.com/lhadzic377-netizen/TokiRecur
 After=network-online.target
 Wants=network-online.target
 
