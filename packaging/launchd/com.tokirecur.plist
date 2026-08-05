@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.tokirecur</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/sh</string>
+        <string>/etc/toki-recur/toki-serve.sh</string>
+    </array>
+    <key>UserName</key>
+    <string>toki</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+    <key>WorkingDirectory</key>
+    <string>/var/lib/toki-recur</string>
+    <key>StandardOutPath</key>
+    <string>/var/log/toki-recur/stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/toki-recur/stderr.log</string>
+</dict>
+</plist>

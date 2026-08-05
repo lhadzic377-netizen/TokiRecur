@@ -53,6 +53,42 @@ jobs:
       - name: Run unit tests
         run: pytest tests/unit/ -q
 
+  installer-linux:
+    name: Installer (Linux systemd)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run install.sh
+        run: sudo ./install.sh
+      - name: Verify artifacts
+        run: |
+          set -e
+          id toki
+          test -f /etc/systemd/system/toki-recur.service
+          test -f /etc/toki-recur/toki.env
+          test -f /etc/logrotate.d/toki-recur
+          systemctl is-enabled toki-recur.service
+      - name: Disable (no toki binary on runner PATH)
+        run: sudo systemctl disable toki-recur.service
+
+  installer-macos:
+    name: Installer (macOS launchd)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run install.sh
+        run: sudo ./install.sh
+      - name: Verify artifacts
+        run: |
+          set -e
+          id toki
+          test -f /Library/LaunchDaemons/com.tokirecur.plist
+          test -f /etc/toki-recur/toki.env
+          test -f /etc/toki-recur/toki-serve.sh
+          launchctl print system/com.tokirecur | head -3
+      - name: Unload (no toki binary on runner PATH)
+        run: sudo launchctl bootout system/com.tokirecur || true
+
   wheel:
     name: Build universal wheel
     runs-on: ubuntu-latest

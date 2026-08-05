@@ -51,12 +51,22 @@ Toki Recur is pure Python over the llama-server HTTP API — it runs on **any x8
 | macOS | x86_64, aarch64 (Apple Silicon) | Metal |
 | Windows | x86_64, aarch64 | ROCm, CUDA, Vulkan, CPU |
 
+CI runs the test suite on all three OSes (x86_64 + aarch64) and executes the Linux and macOS system installers end-to-end; Windows has no shell service manager, so it uses the pip package + `toki model install-llama` + a plain `toki serve` (or NSSM/scheduled task). The GPU backends are provided by the llama-server binary itself — Toki Recur talks to it over HTTP and is backend-agnostic.
+
 One command installs the matching official build:
 
 ```bash
 toki model install-llama            # latest release for this OS/arch
 toki model install-llama --tag b6400
 toki model install-llama --name 35b # ...and point a registry model at it
+```
+
+System-wide daemon installs (dedicated user + service manager unit + log rotation):
+
+```bash
+sudo ./install.sh                   # Linux  -> systemd + logrotate
+sudo ./install.sh                   # macOS  -> launchd (LaunchDaemon)
+# Windows: pip install . && toki model install-llama && toki serve
 ```
 
 Or point `binary:` at any llama-server on PATH in the registry (`~/.config/tokirecur/models.yaml`). Override locations per-machine with `TOKI_MODEL_REGISTRY` (config) and `TOKI_STATE_DIR` (logs/pid/bin). On Windows the systemd service commands are unavailable (reported cleanly); the RAM guard uses GlobalMemoryStatusEx, and on macOS the UMA/RAM guard uses `sysctl hw.memsize`.
