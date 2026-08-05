@@ -55,6 +55,9 @@ class Index:
         """Delete an entry by cache_id. Returns True if it existed."""
         raise NotImplementedError
 
+    def close(self) -> None:
+        """Release the underlying store. Idempotent; safe to skip."""
+
     def entries(self) -> list[dict]:
         """List stored entries (metadata only), newest use first."""
         raise NotImplementedError
@@ -79,6 +82,22 @@ class BruteForceIndex(Index):
         self._embeddings: dict[str, np.ndarray] = {}
         self._token_counts: dict[str, int] = {}
         self._load_all()
+
+    def close(self) -> None:
+        """Checkpoint WAL and release the sqlite handle.
+
+        Needed on Windows, where an open handle blocks file deletion
+        (e.g. temp-dir cleanup in tests).
+        """
+        with self._lock:
+            if self._conn is None:
+                return
+            try:
+                self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            except sqlite3.OperationalError:
+                pass
+            self._conn.close()
+            self._conn = None
 
     def _init_schema(self) -> None:
         self._conn.executescript(
