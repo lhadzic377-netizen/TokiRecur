@@ -931,7 +931,11 @@ def install_llama(tag: str | None, dest: str | None, name: str | None) -> None:
                 "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=10",
                 headers=headers,
             ).json()
-            if not isinstance(releases, list) or not releases:
+            import builtins
+
+            # builtins.list: this module defines a click command named
+            # `list` that shadows the builtin inside this function.
+            if not isinstance(releases, builtins.list) or not releases:
                 raise RuntimeError("no releases found")
             release = next(
                 (r for r in releases if r.get("assets")), releases[0]
