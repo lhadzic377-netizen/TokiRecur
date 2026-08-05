@@ -908,18 +908,34 @@ def install_llama(tag: str | None, dest: str | None, name: str | None) -> None:
     exe_name = "llama-server.exe" if os_name == "windows" else "llama-server"
 
     api = httpx.Client(timeout=30.0, follow_redirects=True)
+    # Authenticate when a token is available (CI provides GITHUB_TOKEN;
+    # local users can set TOKI_GITHUB_TOKEN) to avoid the unauthenticated
+    # API rate limit when several machines fetch concurrently.
+    github_token = os.environ.get("GITHUB_TOKEN") or os.environ.get("TOKI_GITHUB_TOKEN")
+    headers = {"Authorization": f"Bearer {github_token}"} if github_token else {}
     try:
         if tag:
             release = api.get(
                 "https://api.github.com/repos/ggml-org/llama.cpp"
-                f"/releases/tags/{tag}"
+                f"/releases/tags/{tag}",
+                headers=headers,
             ).json()
+            if "assets" not in release:
+                raise RuntimeError(f"release lookup failed: {release.get('message')}")
         else:
-            release = api.get(
-                "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest"
+            # llama.cpp auto-publishes releases continuously and
+            # occasionally ships a tag with zero assets for a few
+            # minutes; walk newest -> oldest and use the first release
+            # that actually carries assets.
+            releases = api.get(
+                "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=10",
+                headers=headers,
             ).json()
-        if "assets" not in release:
-            raise RuntimeError(f"release lookup failed: {release.get('message')}")
+            if not isinstance(releases, list) or not releases:
+                raise RuntimeError("no releases found")
+            release = next(
+                (r for r in releases if r.get("assets")), releases[0]
+            )
     except RuntimeError:
         raise
     except Exception as e:

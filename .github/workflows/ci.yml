@@ -104,6 +104,8 @@ jobs:
       - name: Install package
         run: pip install -e .
       - name: Fetch llama-server binary for this OS/arch
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: toki model install-llama
       - name: Verify binary runs
         shell: bash
