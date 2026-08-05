@@ -66,9 +66,9 @@ jobs:
           INSTALL_TOKEN: ${{ github.token }}
         run: |
           URL="https://x-access-token:$INSTALL_TOKEN@raw.githubusercontent.com/lhadzic377-netizen/TokiRecur/master/install.sh"
-          for i in $(seq 1 20); do
+          for i in $(seq 1 30); do
             curl -fsSL "$URL" 2>/dev/null | grep -q "bootstrap installer" && break
-            sleep 10
+            sleep 20
           done
           TOKI_INSTALL_TOKEN="$INSTALL_TOKEN" curl -fsSL "$URL" | sudo TOKI_INSTALL_TOKEN="$INSTALL_TOKEN" bash
       - name: Verify artifacts
@@ -102,9 +102,9 @@ jobs:
           INSTALL_TOKEN: ${{ github.token }}
         run: |
           URL="https://x-access-token:$INSTALL_TOKEN@raw.githubusercontent.com/lhadzic377-netizen/TokiRecur/master/install.sh"
-          for i in $(seq 1 20); do
+          for i in $(seq 1 30); do
             curl -fsSL "$URL" 2>/dev/null | grep -q "bootstrap installer" && break
-            sleep 10
+            sleep 20
           done
           TOKI_INSTALL_TOKEN="$INSTALL_TOKEN" curl -fsSL "$URL" | sudo TOKI_INSTALL_TOKEN="$INSTALL_TOKEN" bash
       - name: Verify artifacts
@@ -137,12 +137,12 @@ jobs:
         run: |
           $url = "https://x-access-token:$env:INSTALL_TOKEN@raw.githubusercontent.com/lhadzic377-netizen/TokiRecur/master/install.ps1"
           $script = $null
-          foreach ($i in 1..20) {
+          foreach ($i in 1..30) {
             try {
               $s = (New-Object System.Net.WebClient).DownloadString($url)
               if ($s -match 'bootstrap installer') { $script = $s; break }
             } catch { }
-            Start-Sleep -Seconds 10
+            Start-Sleep -Seconds 20
           }
           if (-not $script) { throw "one-liner fetch failed (raw CDN not propagated)" }
           $env:TOKI_INSTALL_TOKEN = "$env:INSTALL_TOKEN"

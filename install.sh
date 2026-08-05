@@ -152,9 +152,15 @@ TOKI_GID="$(id -g toki)"
 chown -R "toki:$TOKI_GID" /var/lib/toki-recur /var/log/toki-recur
 
 # ---- Install llama-server binary (as the daemon user) ----
+#
+# Reuse the install token as GITHUB_TOKEN so the GitHub API lookup is
+# authenticated: several machines installing concurrently can otherwise
+# trip the unauthenticated API rate limit.
 
 echo "[+] fetching llama-server for this OS/arch (toki model install-llama)"
-sudo -u toki env HOME=/var/lib/toki-recur "$TOKI" model install-llama
+sudo -u toki env HOME=/var/lib/toki-recur \
+    GITHUB_TOKEN="${TOKI_INSTALL_TOKEN:-}" \
+    "$TOKI" model install-llama
 
 # ---- Install env file (shared by both platforms) ----
 
