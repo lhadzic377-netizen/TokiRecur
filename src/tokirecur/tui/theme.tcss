@@ -1,8 +1,8 @@
-/* Toki Recur TUI — dark, monospace, semantic colors */
+/* Toki Recur TUI — black + yellow, monospace, semantic status colors */
 
 Screen {
-    background: #0a0c10;
-    color: #e6e8ee;
+    background: #000000;
+    color: #f0ece0;
 }
 
 #main-area {
@@ -12,49 +12,50 @@ Screen {
 #chat-container {
     height: 1fr;
     padding: 1 2;
-    background: #0a0c10;
+    background: #000000;
 }
 
 #chat {
     height: 1fr;
-    background: #0a0c10;
-    border: round #2a2d3a;
+    background: #000000;
+    border: round #2b2b2b;
     padding: 0 1;
-    scrollbar-color: #3a3e4f #0a0c10;
+    scrollbar-color: #3d3d3d #000000;
     scrollbar-size-vertical: 1;
 }
 
 #chat:focus-within {
-    border: round #2a2d3a;
+    border: round #2b2b2b;
 }
 
 #input {
     dock: bottom;
     margin: 0 1;
-    background: #13161d;
-    border: round #3a3e4f;
+    background: #121212;
+    border: round #3d3d3d;
     height: 3;
 }
 
 #input:focus {
-    border: round #7c9eff;
+    border: round #ffd60a;
 }
 
 #sidebar {
-    background: #13161d;
-    border-right: round #3a3e4f;
+    background: #121212;
+    border-right: round #3d3d3d;
     width: 22;
 }
 
 #info {
-    background: #13161d;
-    border-left: round #3a3e4f;
+    background: #121212;
+    border-left: round #3d3d3d;
 }
 
 #status-bar {
     dock: bottom;
-    background: #1c1f29;
-    color: #a0a4b5;
+    background: #000000;
+    color: #9a967f;
+    border-top: round #3d3d3d;
     height: 1;
     padding: 0 1;
 }

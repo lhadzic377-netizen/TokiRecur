@@ -121,10 +121,11 @@ def backend(llama_server):
 @pytest.fixture
 def engine(llama_server):
     """Provide a fresh RecyclingEngine with an in-memory index."""
-    from tokirecur.core.recycling import RecyclingEngine
-    from tokirecur.backend import LlamaServerBackend
-    from tokirecur.index import BruteForceIndex
     import tempfile
+
+    from tokirecur.backend import LlamaServerBackend
+    from tokirecur.core.recycling import RecyclingEngine
+    from tokirecur.index import BruteForceIndex
 
     backend = LlamaServerBackend(llama_server, timeout=120.0)
     tmp_db = tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False)
@@ -181,10 +182,11 @@ def precision_server():
 @pytest.fixture
 def precision_engine(precision_server):
     """Fresh RecyclingEngine against the dedicated precision server."""
-    from tokirecur.core.recycling import RecyclingEngine
-    from tokirecur.backend import LlamaServerBackend
-    from tokirecur.index import BruteForceIndex
     import tempfile
+
+    from tokirecur.backend import LlamaServerBackend
+    from tokirecur.core.recycling import RecyclingEngine
+    from tokirecur.index import BruteForceIndex
 
     backend = LlamaServerBackend(precision_server, timeout=120.0)
     tmp_db = tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False)

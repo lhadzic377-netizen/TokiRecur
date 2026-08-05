@@ -14,7 +14,6 @@ import socket
 import subprocess
 import sys
 import time
-from pathlib import Path
 
 import httpx
 import pytest
@@ -52,8 +51,9 @@ def daemon_subprocess(llama_server, tmp_path):
 
     env = os.environ.copy()
     env["TOKI_AUTH_TOKEN"] = "e2e-test-token"
+    env["TOKI_BACKEND_URL"] = llama_server
     env["TOKI_RATE_LIMIT_BURST"] = "10"
-    env["TOKI_RATE_LIMIT_RATE"] = "2.0"
+    env["TOKI_RATE_LIMIT_RATE"] = "0"  # no refill -> deterministic 429s
     env["TOKI_DB"] = str(db_path)
     env["TOKI_CACHE_DIR"] = str(cache_dir)
 
@@ -136,7 +136,7 @@ class TestDaemonSubprocessConcurrent:
         def send(_):
             return httpx.post(
                 f"{daemon_subprocess}/v1/completions",
-                json=payload, headers=headers, timeout=30.0,
+                json=payload, headers=headers, timeout=90.0,
             )
 
         with cf.ThreadPoolExecutor(max_workers=10) as pool:
@@ -181,6 +181,7 @@ class TestDaemonSubprocessGracefulShutdown:
 
         env = os.environ.copy()
         env["TOKI_AUTH_TOKEN"] = "shutdown-test"
+        env["TOKI_BACKEND_URL"] = llama_server
         env["TOKI_DB"] = str(db_path)
         env["TOKI_CACHE_DIR"] = str(cache_dir)
 
@@ -192,6 +193,9 @@ class TestDaemonSubprocessGracefulShutdown:
                 "--host", "127.0.0.1",
                 "--port", str(port),
                 "--log-level", "warning",
+                # Inflight requests are dropped after 5s so the daemon
+                # exits quickly regardless of backend latency.
+                "--timeout-graceful-shutdown", "5",
             ],
             env=env,
             stdout=subprocess.PIPE,

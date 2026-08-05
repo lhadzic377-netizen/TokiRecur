@@ -4,12 +4,9 @@ RecyclingEngine.serve_native."""
 from dataclasses import dataclass, field
 from typing import Any
 
-import pytest
-
 from tokirecur.core.recycling import (
     MIN_REUSE_FOR_HIT,
     RecyclingEngine,
-    RecyclingResult,
 )
 
 
@@ -47,7 +44,7 @@ class FakeBackend:
         toks = self.tokenize(prompt)
         prev = self.slot_kv.get(slot_id, [])
         reuse = 0
-        for a, b in zip(prev, toks):
+        for a, b in zip(prev, toks, strict=False):
             if a == b:
                 reuse += 1
             else:
@@ -70,6 +67,44 @@ class FakeBackend:
         self.slot_kv.pop(slot_id, None)
         self.clear_count[slot_id] = self.clear_count.get(slot_id, 0) + 1
         return {"cleared": True}
+
+    async def complete_openai_stream(
+        self,
+        messages,
+        *,
+        slot_id: int,
+        max_tokens: int = 256,
+        temperature: float = 0.0,
+        cache_prompt: bool = True,
+        chat_template_kwargs=None,
+        tools=None,
+        tool_choice=None,
+    ):
+        toks = self.tokenize(messages[-1]["content"])
+        prev = self.slot_kv.get(slot_id, [])
+        reuse = 0
+        for a, b in zip(prev, toks, strict=False):
+            if a == b:
+                reuse += 1
+            else:
+                break
+        new_prefill = max(1, len(toks) - reuse)
+        self.slot_kv[slot_id] = toks
+        yield {"kind": "delta", "delta": "hi"}
+        yield {"kind": "finish", "finish_reason": "stop"}
+        yield {
+            "kind": "result",
+            "result": {
+                "text": "hi",
+                "tool_calls": None,
+                "finish_reason": "stop",
+                "tokens_generated": 2,
+                "prefill_tokens": new_prefill,
+                "ttft_ms": 1.0,
+                "total_ms": 2.0,
+                "prefill_tokens_per_sec": 100.0,
+            },
+        }
 
 
 class FakeIndex:
@@ -121,6 +156,42 @@ class TestServeNativeBasic:
         # so it should go to the next free slot (slot 2 doesn't exist
         # in max_slots=2; we expect slot 0 reused via LRU).
         assert result.slot_id in (0, 1)
+
+
+class TestHardHit:
+    """The real cache-hit path (reuse >= MIN_REUSE_FOR_HIT) must return
+    a result carrying cache_id — regression for an UnboundLocalError
+    where cache_id was only assigned on the miss path."""
+
+    def test_hard_hit_returns_cache_id(self):
+        engine = RecyclingEngine(FakeBackend(), FakeIndex())
+        prompt = " ".join(f"word{i}" for i in range(20))
+        r1 = engine.serve_native(prompt, max_slots=2)
+        assert r1.hit is False
+        assert r1.cache_id
+        r2 = engine.serve_native(prompt, max_slots=2)
+        assert r2.hit is True
+        assert r2.reuse_depth >= MIN_REUSE_FOR_HIT
+        # Same prompt -> same derived cache_id.
+        assert r2.cache_id == r1.cache_id
+        # Hit path must not re-insert the index entry.
+        assert len(engine.index.entries) == 1
+
+    async def test_hard_hit_streaming_returns_cache_id(self):
+        engine = RecyclingEngine(FakeBackend(), FakeIndex())
+        messages = [
+            {"role": "user", "content": " ".join(f"word{i}" for i in range(20))},
+        ]
+        results = []
+        for _ in range(2):
+            collected = []
+            async for item in engine.serve_chat_stream(messages, max_slots=2):
+                collected.append(item)
+            results.append(next(i["result"] for i in collected if i["kind"] == "result"))
+        assert results[0].hit is False
+        assert results[1].hit is True
+        assert results[1].reuse_depth >= MIN_REUSE_FOR_HIT
+        assert results[1].cache_id == results[0].cache_id
 
 
 class TestSessionRouting:
@@ -239,71 +310,104 @@ class TestSlotState:
         assert state["reserved_slots"] == []
 
 
-class TestReservedSlots:
-    def test_slot_gets_reserved_after_threshold(self):
-        """After `_reservation_threshold` hits on the same slot, that
-        slot should be added to `_reserved_slots`."""
+class TestPersistentPoolWiring:
+    """Hot-prefix promotion is delegated to PersistentSlotPool."""
+
+    def test_slot_gets_pooled_after_threshold(self):
+        """After ``min_reuse_for_pooling`` hits on the same cache_id,
+        the pool acquires a slot for it."""
         backend = FakeBackend()
         engine = RecyclingEngine(backend, FakeIndex())
-        engine._reservation_threshold = 3  # lower for fast test
+        # Lower the pool threshold so the test is fast.
+        engine.persistent_pool.min_reuse_for_pooling = 3
+        # Stub the pool's llama-server interactions: there's no live
+        # server in the test, so allocate + restore are no-ops that
+        # hand back slot 0 / no-op respectively.
+        engine.persistent_pool._allocate_slot = lambda: 0
+        engine.persistent_pool._restore_to_slot = (
+            lambda slot_id, cache_id, filename: {}
+        )
 
-        # Send 5 requests that all land on slot 0 (no session pinning).
-        for i in range(5):
-            engine.serve_native(f"request {i}", max_slots=2)
+        # Send the same prompt 5 times — single cache_id accumulates
+        # use_count and crosses the pool threshold.
+        for _ in range(5):
+            engine.serve_native("stable prompt", max_tokens=4)
 
-        # Slot 0 should be reserved after 3 hits.
-        assert 0 in engine._reserved_slots
+        # The pool should have promoted this cache_id.
+        assert len(engine.persistent_pool._slots) == 1
+        assert len(engine.persistent_pool._use_counts) == 1
+        assert engine.persistent_pool._use_counts[
+            next(iter(engine.persistent_pool._slots))
+        ] >= 3
 
-    def test_reservation_capped_at_max_reserved(self):
-        """Only `_max_reserved_slots` slots can be reserved at once."""
+    def test_pool_capped_at_max_slots(self):
+        """Only ``max_slots`` cache_ids can be pooled at once."""
         backend = FakeBackend()
         engine = RecyclingEngine(backend, FakeIndex())
-        engine._reservation_threshold = 2
-        engine._max_reserved_slots = 1
+        engine.persistent_pool.min_reuse_for_pooling = 2
+        engine.persistent_pool.max_slots = 1
+        engine.persistent_pool._allocate_slot = lambda: 0
+        engine.persistent_pool._restore_to_slot = (
+            lambda slot_id, cache_id, filename: {}
+        )
 
-        # Each round sends a unique prompt to different slots via sessions.
-        for round_n in range(3):
-            for s in ["alpha", "beta", "gamma"][:round_n + 1]:
-                engine.serve_native(
-                    f"{s}_content_{round_n}",
-                    max_slots=4, session_id=s,
-                )
+        # Three distinct cache_ids, each sent 3 times to cross the
+        # threshold.
+        for c in ["alpha content", "beta content", "gamma content"]:
+            for _ in range(3):
+                engine.serve_native(c, max_tokens=4)
 
-        # Only 1 slot should be reserved.
-        assert len(engine._reserved_slots) <= 1
+        # Only one slot ends up pooled — the pool evicts LRU when full.
+        assert len(engine.persistent_pool._slots) == 1
 
-    def test_reserved_slot_skipped_during_round_robin(self):
-        """Round-robin should avoid reserved slots (to keep their KV)."""
+    def test_pool_slot_skipped_during_round_robin(self):
+        """Round-robin should avoid pool-owned slots (to keep their KV)."""
         backend = FakeBackend()
         engine = RecyclingEngine(backend, FakeIndex())
-        engine._reservation_threshold = 2
-        engine._max_reserved_slots = 1
+        engine.persistent_pool.min_reuse_for_pooling = 2
+        engine.persistent_pool._allocate_slot = lambda: 0
+        engine.persistent_pool._restore_to_slot = (
+            lambda slot_id, cache_id, filename: {}
+        )
 
-        # Reserve slot 0 by hitting it 3 times.
-        for i in range(3):
-            engine.serve_native(f"alpha content {i}", max_slots=2)
-        assert 0 in engine._reserved_slots
+        # Pool a specific cache_id by sending it 3 times. After that,
+        # the pool owns a slot for that cache_id.
+        for _ in range(3):
+            engine.serve_native("hot prompt", max_tokens=4)
+        assert len(engine.persistent_pool._slots) == 1
+        pool_slot_id = next(iter(engine.persistent_pool._slots.values())).slot_id
 
-        # Now send a completely unrelated prompt. Should NOT go to slot 0.
-        result = engine.serve_native("completely_unique_unrelated_xyz",
-                                       max_slots=2)
-        assert result.slot_id != 0
+        # Now send a completely unrelated prompt — should NOT route
+        # to the pool-owned slot since its prefix doesn't match.
+        result = engine.serve_native(
+            "completely_unique_unrelated_xyz", max_tokens=4, max_slots=2,
+        )
+        assert result.slot_id != pool_slot_id
 
-    def test_reserved_slot_never_spills(self):
-        """Even with budget pressure, reserved slots are exempt from spilling."""
+    def test_pool_slot_never_spills(self):
+        """Even with budget pressure, pool-owned slots are exempt."""
         backend = FakeBackend()
         engine = RecyclingEngine(backend, FakeIndex())
-        engine._reservation_threshold = 2
+        engine.persistent_pool.min_reuse_for_pooling = 2
+        engine.persistent_pool._allocate_slot = lambda: 0
+        engine.persistent_pool._restore_to_slot = (
+            lambda slot_id, cache_id, filename: {}
+        )
         engine._max_context_tokens = 50  # tight budget
 
-        # Build up to trigger reservation + near-spill.
+        # Pool the prompt by hitting it 3 times first.
+        for _ in range(3):
+            engine.serve_native(
+                "alpha " + "x" * 30, max_tokens=4, session_id="s1",
+            )
+        assert len(engine.persistent_pool._slots) == 1
+
+        # Now build up additional context with the same prompt;
+        # pool-owned slot must survive spill pressure.
         for i in range(5):
             engine.serve_native(
-                f"alpha_{'x' * 30}_{i}",  # ~30 tokens each
-                max_slots=2, session_id="s1",
+                "alpha " + "x" * 30 + f"_{i}",
+                max_tokens=4, session_id="s1",
             )
 
-        # Slot 0 should be reserved, so spill_count should be 0
-        # even though we exceed max_context_tokens.
         assert engine._spill_count == 0
-        assert len(engine._reserved_slots) >= 1

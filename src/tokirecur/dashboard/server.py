@@ -13,13 +13,11 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any
 
+import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-import uvicorn
-
 
 STATIC_DIR = Path(__file__).parent / "static"
 TEMPLATE_DIR = Path(__file__).parent / "templates"
@@ -60,7 +58,7 @@ def create_dashboard_app(*, reports_dir: Path) -> FastAPI:
                     "duration_baseline_sec": baseline.get("duration_sec", 0),
                     "duration_recycled_sec": recycled.get("duration_sec", 0),
                 })
-            except Exception as e:
+            except Exception:
                 # Skip malformed reports.
                 continue
         return JSONResponse(reports)
@@ -68,13 +66,14 @@ def create_dashboard_app(*, reports_dir: Path) -> FastAPI:
     @app.get("/api/reports/{name}")
     async def get_report(name: str) -> JSONResponse:
         """Return the full JSON for one report."""
-        path = reports_dir / name
-        if not path.exists() or not path.is_file():
+        path = (reports_dir / name).resolve()
+        root = reports_dir.resolve()
+        if root not in path.parents or not path.is_file():
             raise HTTPException(status_code=404, detail="not found")
         try:
             return JSONResponse(json.loads(path.read_text()))
         except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail=str(e)) from e
 
     @app.get("/", response_class=HTMLResponse)
     async def root() -> str:
@@ -104,10 +103,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     args.reports.mkdir(parents=True, exist_ok=True)
-    print(f"Toki Recur Dashboard")
+    print("Toki Recur Dashboard")
     print(f"  Reports dir: {args.reports}")
     print(f"  URL:         http://{args.host}:{args.port}")
-    print(f"  Ctrl+C to stop")
+    print("  Ctrl+C to stop")
 
     app = create_dashboard_app(reports_dir=args.reports)
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")

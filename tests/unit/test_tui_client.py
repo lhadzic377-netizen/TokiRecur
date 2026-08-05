@@ -1,14 +1,14 @@
 """Unit tests for the TUI client (DaemonClient + SSE parser + auth)."""
 
-import os
 import pytest
 
 from tokirecur.tui.client import (
     DaemonClient,
+    _extract_reasoning,
     _extract_text,
+    _parse_sse_line,
     _resolve_auth_token,
     _split_sse,
-    _parse_sse_line,
 )
 
 
@@ -34,6 +34,24 @@ class TestExtractText:
         assert _extract_text(None) == ""
 
 
+class TestExtractReasoning:
+    def test_top_level(self):
+        assert _extract_reasoning({"reasoning_content": "thinking…"}) == "thinking…"
+
+    def test_openai_delta(self):
+        obj = {"choices": [{"delta": {"reasoning_content": "step 1"}}]}
+        assert _extract_reasoning(obj) == "step 1"
+
+    def test_empty_delta(self):
+        assert _extract_reasoning({"choices": [{"delta": {}}]}) == ""
+
+    def test_unknown(self):
+        assert _extract_reasoning({"foo": "bar"}) == ""
+
+    def test_non_dict(self):
+        assert _extract_reasoning("not a dict") == ""
+
+
 class TestParseSseLine:
     def test_valid_json(self):
         obj = _parse_sse_line('{"content": "hi"}')
@@ -48,16 +66,31 @@ class TestParseSseLine:
 
 class TestSplitSse:
     def test_single_line(self):
-        assert _split_sse("data: foo\n") == ["data: foo"]
+        lines, remainder = _split_sse("data: foo\n")
+        assert lines == ["data: foo"]
+        assert remainder == ""
 
     def test_multiple_lines(self):
-        result = _split_sse("data: a\ndata: b\ndata: c\n")
-        assert result == ["data: a", "data: b", "data: c"]
+        lines, remainder = _split_sse("data: a\ndata: b\ndata: c\n")
+        assert lines == ["data: a", "data: b", "data: c"]
+        assert remainder == ""
 
-    def test_partial_line_preserved(self):
-        # No trailing newline → the partial line is returned.
-        result = _split_sse("data: partial")
-        assert result == ["data: partial"]
+    def test_partial_line_held_back(self):
+        # No trailing newline → the partial line must NOT be returned
+        # as a complete line (parsing it as JSON would fail and the
+        # token would be silently dropped). It is held back so the
+        # caller can prepend the next chunk.
+        lines, remainder = _split_sse("data: partial")
+        assert lines == []
+        assert remainder == "data: partial"
+
+    def test_partial_completed_by_next_chunk(self):
+        lines, remainder = _split_sse("data: part")
+        assert lines == []
+        assert remainder == "data: part"
+        lines, remainder = _split_sse(remainder + 'ial"}\n')
+        assert lines == ['data: partial"}']
+        assert remainder == ""
 
 
 class TestResolveAuthToken:
@@ -357,8 +390,11 @@ class TestChatStreamRouting:
                     return self
                 async def __aexit__(self, *a):
                     return False
-                def stream(self, method, url, json):
-                    captured_payloads.append(json)
+                # ``captured_payloads`` is a loop variable in the enclosing
+                # scope (re-initialised on every ``mode``). Bind it via a
+                # default-arg to avoid the B023 late-binding warning.
+                def stream(self, method, url, json, _sink=captured_payloads):
+                    _sink.append(json)
                     return FakeResponse()
 
             import tokirecur.tui.client as client_mod
@@ -666,3 +702,252 @@ class TestChatStreamPromptTokens:
         assert done_metrics.get("prompt_tokens") == 214, (
             f"expected prompt_tokens=214 in done metrics, got {done_metrics!r}"
         )
+
+
+class TestChatStreamSseChunking:
+    """JSON events split across HTTP chunks must be reassembled, not
+    dropped. Regression for the _split_sse bug: a partial line was
+    returned as if complete, failed json.loads, and the token was
+    silently lost."""
+
+    @pytest.mark.asyncio
+    async def test_json_split_across_chunks_not_dropped(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(
+            "tokirecur.tui.client.Path.home", lambda: tmp_path,
+        )
+
+        # One JSON object split mid-stream across three chunks.
+        chunk1 = 'data: {"choices": [{"delta": {"content": "Fo'
+        chunk2 = 'ur"}}]}\n\n'
+        chunk3 = 'data: {"choices": [], "usage": {"prompt_tokens": 7, '
+        chunk4 = '"completion_tokens": 1, "total_tokens": 8}}\n\ndata: [DONE]\n\n'
+
+        class FakeResponse:
+            status_code = 200
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, *a):
+                return False
+            async def aiter_text(self):
+                yield chunk1
+                yield chunk2
+                yield chunk3
+                yield chunk4
+
+        class FakeClient:
+            def __init__(self, *a, **kw):
+                pass
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, *a):
+                return False
+            def stream(self, method, url, json):
+                return FakeResponse()
+
+        import tokirecur.tui.client as client_mod
+        monkeypatch.setattr(client_mod, "_make_client", lambda *a, **kw: FakeClient())
+
+        c = DaemonClient(raw_url="http://llama:8088", auth_token=None)
+        text = ""
+        done_metrics: dict | None = None
+        async for ev in c.chat_stream(
+            "hi", mode="raw", session_id="s", max_tokens=8,
+        ):
+            if ev["event"] == "token":
+                text += ev["content"]
+            elif ev["event"] == "done":
+                done_metrics = ev.get("metrics", {})
+
+        assert text == "Four", f"tokens lost across chunk boundary: {text!r}"
+        assert done_metrics is not None
+        assert done_metrics.get("prompt_tokens") == 7, (
+            f"usage chunk split across boundary not reassembled: {done_metrics!r}"
+        )
+
+
+class TestChatStreamCacheVerdict:
+    """The daemon's terminal chunk carries the cache verdict (hit,
+    soft_hit, cache_id, reuse_depth, skipped_tokens, ...). The TUI must
+    surface it instead of hardcoding a miss — the old behaviour made
+    every cached response render as '✗ miss'."""
+
+    @pytest.mark.asyncio
+    async def test_cached_mode_carries_daemon_verdict(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(
+            "tokirecur.tui.client.Path.home", lambda: tmp_path,
+        )
+
+        body = "\n".join([
+            'data: {"choices": [{"delta": {"role": "assistant", "content": ""}}]}',
+            'data: {"choices": [{"delta": {"content": "Four"}}]}',
+            'data: {"choices": [{"delta": {}, "finish_reason": "stop"}]}',
+            'data: {"choices": [], "usage": {"prompt_tokens": 12, '
+            '"completion_tokens": 1, "total_tokens": 13}, "cache": '
+            '{"hit": true, "soft_hit": false, "cache_id": "abc123", '
+            '"reuse_depth": 3, "skipped_tokens": 120, "ttft_ms": 4.2, '
+            '"total_ms": 9.8, "slot_id": 0, "spilled": false}}',
+            "data: [DONE]",
+            "",
+        ])
+
+        class FakeResponse:
+            status_code = 200
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, *a):
+                return False
+            async def aiter_text(self):
+                yield body
+
+        class FakeClient:
+            def __init__(self, *a, **kw):
+                pass
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, *a):
+                return False
+            def stream(self, method, url, json):
+                return FakeResponse()
+
+        import tokirecur.tui.client as client_mod
+        monkeypatch.setattr(client_mod, "_make_client", lambda *a, **kw: FakeClient())
+
+        c = DaemonClient(
+            daemon_url="http://daemon:8787",
+            raw_url="http://llama:8088",
+            auth_token=None,
+        )
+        cache: dict | None = None
+        async for ev in c.chat_stream(
+            "hi", mode="cached", session_id="s", max_tokens=8,
+        ):
+            if ev["event"] == "done":
+                cache = ev.get("cache", {})
+
+        assert cache is not None, "no done event seen"
+        assert cache.get("hit") is True, f"daemon hit verdict lost: {cache!r}"
+        assert cache.get("soft_hit") is False
+        assert cache.get("cache_id") == "abc123"
+        assert cache.get("reuse_depth") == 3
+        assert cache.get("skipped_tokens") == 120
+        assert cache.get("ttft_ms") == 4.2
+        assert cache.get("total_ms") == 9.8
+
+    @pytest.mark.asyncio
+    async def test_cached_mode_miss_without_verdict_chunk(self, monkeypatch, tmp_path):
+        """No verdict chunk arrives (e.g. upstream closed early) → the
+        done event must still carry a conservative miss marker."""
+        monkeypatch.setattr(
+            "tokirecur.tui.client.Path.home", lambda: tmp_path,
+        )
+
+        body = "\n".join([
+            'data: {"choices": [{"delta": {"role": "assistant", "content": ""}}]}',
+            'data: {"choices": [{"delta": {"content": "Four"}}]}',
+            'data: {"choices": [{"delta": {}, "finish_reason": "stop"}]}',
+            "data: [DONE]",
+            "",
+        ])
+
+        class FakeResponse:
+            status_code = 200
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, *a):
+                return False
+            async def aiter_text(self):
+                yield body
+
+        class FakeClient:
+            def __init__(self, *a, **kw):
+                pass
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, *a):
+                return False
+            def stream(self, method, url, json):
+                return FakeResponse()
+
+        import tokirecur.tui.client as client_mod
+        monkeypatch.setattr(client_mod, "_make_client", lambda *a, **kw: FakeClient())
+
+        c = DaemonClient(
+            daemon_url="http://daemon:8787",
+            raw_url="http://llama:8088",
+            auth_token=None,
+        )
+        cache: dict | None = None
+        async for ev in c.chat_stream(
+            "hi", mode="cached", session_id="s", max_tokens=8,
+        ):
+            if ev["event"] == "done":
+                cache = ev.get("cache", {})
+
+        assert cache is not None, "no done event seen"
+        assert cache.get("hit") is False
+        assert cache.get("skipped_tokens") == 0
+
+
+class TestChatStreamReasoning:
+    """Thinking-mode deltas arrive as separate ``reasoning_content``
+    SSE chunks from the daemon; the client surfaces them as
+    ``{"event": "reasoning", ...}`` so the TUI can render them dimmed.
+    """
+
+    @pytest.mark.asyncio
+    async def test_reasoning_deltas_yield_reasoning_events(
+        self, monkeypatch, tmp_path,
+    ):
+        monkeypatch.setattr(
+            "tokirecur.tui.client.Path.home", lambda: tmp_path,
+        )
+
+        body = "\n".join([
+            'data: {"choices": [{"delta": {"role": "assistant", "content": ""}}]}',
+            'data: {"choices": [{"delta": {"reasoning_content": "let me think..."}}]}',
+            'data: {"choices": [{"delta": {"reasoning_content": " step 2"}}]}',
+            'data: {"choices": [{"delta": {"content": "Four"}}]}',
+            'data: {"choices": [{"delta": {}, "finish_reason": "stop"}]}',
+            "data: [DONE]",
+            "",
+        ])
+
+        class FakeResponse:
+            status_code = 200
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, *a):
+                return False
+            async def aiter_text(self):
+                yield body
+
+        class FakeClient:
+            def __init__(self, *a, **kw):
+                pass
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, *a):
+                return False
+            def stream(self, method, url, json):
+                return FakeResponse()
+
+        import tokirecur.tui.client as client_mod
+        monkeypatch.setattr(client_mod, "_make_client", lambda *a, **kw: FakeClient())
+
+        c = DaemonClient(raw_url="http://llama:8088", auth_token=None)
+        reasoning: list[str] = []
+        text: list[str] = []
+        done_reasoning = ""
+        async for ev in c.chat_stream(
+            "what is 2+2?", mode="raw", session_id="s", max_tokens=8,
+        ):
+            if ev["event"] == "reasoning":
+                reasoning.append(ev["content"])
+            elif ev["event"] == "token":
+                text.append(ev["content"])
+            elif ev["event"] == "done":
+                done_reasoning = ev.get("reasoning", "")
+
+        assert "".join(reasoning) == "let me think... step 2"
+        assert "".join(text) == "Four"
+        assert done_reasoning == "let me think... step 2"

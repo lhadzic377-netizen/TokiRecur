@@ -1,6 +1,5 @@
 """Integration tests for the hardened daemon (auth, metrics, SSE, rate limit)."""
 
-import os
 
 import pytest
 
@@ -11,13 +10,14 @@ def auth_daemon_app(llama_server):
     import os as _os
     import tempfile
     from pathlib import Path
+
     from tokirecur.api.app import create_app
     from tokirecur.backend import LlamaServerBackend
     from tokirecur.index import BruteForceIndex
 
     _os.environ["TOKI_AUTH_TOKEN"] = "secret-token-123"
     _os.environ["TOKI_RATE_LIMIT_BURST"] = "5"
-    _os.environ["TOKI_RATE_LIMIT_RATE"] = "0.5"  # very slow refill
+    _os.environ["TOKI_RATE_LIMIT_RATE"] = "0"  # no refill -> deterministic 429s
 
     backend = LlamaServerBackend(llama_server, timeout=120.0)
     tmp_db = tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False)
@@ -35,6 +35,7 @@ def auth_daemon_app(llama_server):
 @pytest.fixture
 def hardened_client(auth_daemon_app):
     import os as _os
+
     from fastapi.testclient import TestClient
     with TestClient(auth_daemon_app) as c:
         yield c

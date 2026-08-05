@@ -8,6 +8,7 @@ def daemon_app(llama_server):
     """Build a daemon app pointed at the test llama-server."""
     import tempfile
     from pathlib import Path
+
     from tokirecur.api.app import create_app
     from tokirecur.backend import LlamaServerBackend
     from tokirecur.index import BruteForceIndex
@@ -31,6 +32,7 @@ def auth_daemon_app(llama_server):
     import os
     import tempfile
     from pathlib import Path
+
     from tokirecur.api.app import create_app
     from tokirecur.backend import LlamaServerBackend
     from tokirecur.index import BruteForceIndex
@@ -59,6 +61,7 @@ def client(daemon_app):
 @pytest.fixture
 def auth_client(auth_daemon_app):
     import os
+
     from fastapi.testclient import TestClient
     with TestClient(auth_daemon_app) as c:
         yield c
@@ -303,3 +306,33 @@ class TestDaemonLookup:
         assert r.status_code == 200
         # First lookup — no entries yet, should return no match.
         assert r.json()["match"] is None
+
+
+class TestDaemonCacheAdmin:
+    def test_cache_list_and_delete(self, client):
+        # Populate the cache with a request, then list, delete, verify gone.
+        r = client.post("/v1/completions", json={
+            "prompt": "List three colors.",
+            "max_tokens": 16,
+            "temperature": 0.0,
+        })
+        assert r.status_code == 200
+        cache_id = r.json()["cache"]["cache_id"]
+        assert cache_id
+
+        listing = client.get("/cache/list")
+        assert listing.status_code == 200
+        ids = [e["cache_id"] for e in listing.json()["entries"]]
+        assert cache_id in ids
+
+        r = client.delete(f"/cache/{cache_id}")
+        assert r.status_code == 200
+        assert r.json()["status"] == "deleted"
+
+        listing = client.get("/cache/list")
+        ids = [e["cache_id"] for e in listing.json()["entries"]]
+        assert cache_id not in ids
+
+    def test_cache_delete_missing_returns_404(self, client):
+        r = client.delete("/cache/does-not-exist")
+        assert r.status_code == 404

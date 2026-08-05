@@ -3,8 +3,6 @@
 import tempfile
 from pathlib import Path
 
-import pytest
-
 from tokirecur.cache.tree import (
     BLOCK_SIZE,
     TreeCache,
@@ -66,9 +64,19 @@ class TestTreeCache:
             assert depth == 0
 
     def test_register_lookup_with_data(self):
+        """``register`` then ``lookup`` returns the full token count
+        once a ``<cache_id>.trkv`` sidecar exists. The default
+        whole-prompt lookup treats the saved data as covering all
+        leading tokens."""
         with tempfile.TemporaryDirectory() as d:
             tc = TreeCache(Path(d))
             tc.register("c1", list(range(100)), save_fn=lambda bid: b"data")
+            # Whole-prompt fast path: if a ``.trkv`` sidecar (or
+            # ``.bin``) file named after the cache_id exists, the entire
+            # token list is "served". Since ``register`` writes per-block
+            # files under ``blocks/``, we also need to drop a cache_id-
+            # named file for the fast path to fire.
+            (Path(d) / "c1.trkv").write_bytes(b"\x00" * 32)
             depth = tc.lookup("c1", list(range(100)))
             assert depth == 100
 

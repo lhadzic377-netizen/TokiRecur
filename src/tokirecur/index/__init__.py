@@ -15,7 +15,6 @@ Both expose the same three methods used by the recycling engine:
 
 from __future__ import annotations
 
-import math
 import sqlite3
 import threading
 import time
@@ -52,6 +51,14 @@ class Index:
     def stats(self) -> dict:
         raise NotImplementedError
 
+    def delete(self, cache_id: str) -> bool:
+        """Delete an entry by cache_id. Returns True if it existed."""
+        raise NotImplementedError
+
+    def entries(self) -> list[dict]:
+        """List stored entries (metadata only), newest use first."""
+        raise NotImplementedError
+
 
 class BruteForceIndex(Index):
     """Exact cosine similarity over all stored embeddings.
@@ -70,6 +77,7 @@ class BruteForceIndex(Index):
         self._conn.execute("PRAGMA synchronous=NORMAL")
         self._init_schema()
         self._embeddings: dict[str, np.ndarray] = {}
+        self._token_counts: dict[str, int] = {}
         self._load_all()
 
     def _init_schema(self) -> None:
@@ -85,18 +93,30 @@ class BruteForceIndex(Index):
                 bytes_on_disk INTEGER NOT NULL,
                 created_at    REAL NOT NULL,
                 last_used_at  REAL NOT NULL,
-                hit_count     INTEGER NOT NULL DEFAULT 0
+                hit_count     INTEGER NOT NULL DEFAULT 0,
+                token_count   INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS cache_entries_last_used
                 ON cache_entries(last_used_at);
             """
         )
+        # Add token_count column if an older DB predates this schema.
+        cols = {row[1] for row in self._conn.execute(
+            "PRAGMA table_info(cache_entries)"
+        ).fetchall()}
+        if "token_count" not in cols:
+            self._conn.execute(
+                "ALTER TABLE cache_entries ADD COLUMN token_count INTEGER NOT NULL DEFAULT 0"
+            )
         self._conn.commit()
 
     def _load_all(self) -> None:
-        cur = self._conn.execute("SELECT cache_id, embedding FROM cache_entries")
-        for cache_id, blob in cur.fetchall():
+        cur = self._conn.execute(
+            "SELECT cache_id, embedding, token_count FROM cache_entries"
+        )
+        for cache_id, blob, token_count in cur.fetchall():
             self._embeddings[cache_id] = np.frombuffer(blob, dtype=np.float32).copy()
+            self._token_counts[cache_id] = int(token_count or 0)
 
     def search(self, embedding: list[float]) -> Match | None:
         """Find the best match by cosine similarity.
@@ -121,23 +141,23 @@ class BruteForceIndex(Index):
             sims = (matrix @ q) / (norms * q_norm)
             # Among candidates with similar similarity (within 5% of top),
             # prefer the one with the longest token list — more potential
-            # for prefix reuse. This dampens the "cosine finds a similar-
-            # looking 1-token match" pathology.
+            # for prefix reuse. Token counts live in their own column so we
+            # fetch them in one SQL roundtrip instead of one per candidate.
             top_sim = float(np.max(sims))
             threshold = top_sim * 0.95
             candidates = np.where(sims >= threshold)[0]
             if len(candidates) > 1:
-                # Load token counts for the candidates.
-                counts = []
-                for idx in candidates:
-                    cid = ids[int(idx)]
-                    row = self._conn.execute(
-                        "SELECT length(token_ids)/4 FROM cache_entries WHERE cache_id = ?",
-                        (cid,),
-                    ).fetchone()
-                    counts.append(int(row[0]) if row else 0)
-                best_local = int(candidates[int(np.argmax(counts))])
-                best_idx = best_local
+                cid_list = [ids[int(idx)] for idx in candidates]
+                placeholders = ",".join("?" * len(cid_list))
+                count_rows = self._conn.execute(
+                    f"SELECT cache_id, token_count FROM cache_entries "
+                    f"WHERE cache_id IN ({placeholders})",
+                    cid_list,
+                ).fetchall()
+                count_map = {row[0]: row[1] for row in count_rows}
+                counts = [count_map.get(cid, 0) for cid in cid_list]
+                best_local = candidates[int(np.argmax(counts))]
+                best_idx = int(best_local)
             else:
                 best_idx = int(np.argmax(sims))
             best_sim = float(sims[best_idx])
@@ -167,8 +187,9 @@ class BruteForceIndex(Index):
                 """
                 INSERT OR REPLACE INTO cache_entries
                     (cache_id, prompt, token_ids, embedding, n_past,
-                     model_id, bytes_on_disk, created_at, last_used_at, hit_count)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     model_id, bytes_on_disk, created_at, last_used_at,
+                     hit_count, token_count)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     entry.cache_id,
@@ -181,10 +202,12 @@ class BruteForceIndex(Index):
                     entry.created_at,
                     entry.last_used_at,
                     entry.hit_count,
+                    int(token_arr.size),
                 ),
             )
             self._conn.commit()
             self._embeddings[entry.cache_id] = embedding_arr
+            self._token_counts[entry.cache_id] = int(token_arr.size)
 
     def touch(self, cache_id: str) -> None:
         with self._lock:
@@ -202,11 +225,51 @@ class BruteForceIndex(Index):
                 "SELECT COUNT(*), COALESCE(SUM(bytes_on_disk), 0) FROM cache_entries"
             ).fetchone()
             count, total_bytes = row
+            # Report the actual stored embedding dimension so mixed-dim
+            # corruption (e.g. a 4096-dim entry inserted after a 384-dim
+            # one) shows up immediately instead of crashing inside
+            # search() with a confusing numpy error.
+            if self._embeddings:
+                first = next(iter(self._embeddings.values()))
+                embedding_dim = int(first.shape[0])
+            else:
+                embedding_dim = 0
             return {
                 "entries": int(count),
                 "bytes_on_disk": int(total_bytes),
-                "embedding_dim": 384,
+                "embedding_dim": embedding_dim,
             }
+
+    def delete(self, cache_id: str) -> bool:
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM cache_entries WHERE cache_id = ?", (cache_id,)
+            )
+            self._conn.commit()
+            removed = cur.rowcount > 0
+            if removed:
+                self._embeddings.pop(cache_id, None)
+                self._token_counts.pop(cache_id, None)
+            return removed
+
+    def entries(self) -> list[dict]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT cache_id, prompt, token_count, bytes_on_disk, "
+                "last_used_at, hit_count FROM cache_entries "
+                "ORDER BY last_used_at DESC"
+            ).fetchall()
+            return [
+                {
+                    "cache_id": row[0],
+                    "prompt": row[1],
+                    "token_count": int(row[2] or 0),
+                    "bytes_on_disk": int(row[3] or 0),
+                    "last_used_at": float(row[4] or 0),
+                    "hit_count": int(row[5] or 0),
+                }
+                for row in rows
+            ]
 
     def evict_lru(self, target_bytes: int) -> int:
         """Evict oldest entries until the cache is at most `target_bytes`.
@@ -227,6 +290,7 @@ class BruteForceIndex(Index):
                     "DELETE FROM cache_entries WHERE cache_id = ?", (cache_id,)
                 )
                 self._embeddings.pop(cache_id, None)
+                self._token_counts.pop(cache_id, None)
                 current -= int(size)
                 evicted += 1
             self._conn.commit()
@@ -234,7 +298,15 @@ class BruteForceIndex(Index):
 
 
 class HNSWIndex(Index):
-    """Approximate nearest-neighbour index using hnswlib. Optional."""
+    """Approximate nearest-neighbour index using hnswlib. Optional.
+
+    NOTE: this class is currently a thin wrapper that delegates every
+    method to the in-memory :class:`BruteForceIndex`. The hnswlib
+    import is verified at construction time so a missing optional
+    dependency surfaces clearly, but the ANN code path is not yet
+    wired up. Treat this as a placeholder until the ANN search is
+    implemented. For now, prefer :class:`BruteForceIndex` directly.
+    """
 
     def __init__(self, db_path: str | Path, dim: int = 384, max_elements: int = 100_000):
         try:
@@ -258,6 +330,12 @@ class HNSWIndex(Index):
 
     def stats(self) -> dict:
         return self._brute.stats()
+
+    def delete(self, cache_id: str) -> bool:
+        return self._brute.delete(cache_id)
+
+    def entries(self) -> list[dict]:
+        return self._brute.entries()
 
     def evict_lru(self, target_bytes: int) -> int:
         return self._brute.evict_lru(target_bytes)

@@ -1,6 +1,5 @@
 """Integration tests for the RecyclingEngine.serve_native end-to-end."""
 
-import pytest
 
 
 class TestEngineBasic:

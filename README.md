@@ -40,6 +40,55 @@ toki
 ```
 
 If `toki` is not found after install, your shell's PATH may not include the venv's bin directory. Either activate the venv (`source .venv/bin/activate`) or use the full path (`./.venv/bin/toki`). On systems where `pip install -e` writes a shim to `~/.local/bin` that points at system Python (and thus misses venv-only deps like `textual`), delete that shim and re-run `pip install -e .` from inside the activated venv so the shim is regenerated with the correct shebang.
+
+## Platforms
+
+Toki Recur is pure Python over the llama-server HTTP API — it runs on **any x86_64 or aarch64 device** running Linux, macOS or Windows, with whatever GPU backend your llama-server build has (ROCm, CUDA, Vulkan, Metal, CPU). The only per-platform piece is the llama-server binary itself:
+
+| Platform | Architecture | llama-server builds |
+|---|---|---|
+| Linux | x86_64, aarch64 | ROCm, CUDA, Vulkan, CPU |
+| macOS | x86_64, aarch64 (Apple Silicon) | Metal |
+| Windows | x86_64, aarch64 | ROCm, CUDA, Vulkan, CPU |
+
+One command installs the matching official build:
+
+```bash
+toki model install-llama            # latest release for this OS/arch
+toki model install-llama --tag b6400
+toki model install-llama --name 35b # ...and point a registry model at it
+```
+
+Or point `binary:` at any llama-server on PATH in the registry (`~/.config/tokirecur/models.yaml`). Override locations per-machine with `TOKI_MODEL_REGISTRY` (config) and `TOKI_STATE_DIR` (logs/pid/bin). On Windows the systemd service commands are unavailable (reported cleanly); the RAM guard uses GlobalMemoryStatusEx, and on macOS the UMA/RAM guard uses `sysctl hw.memsize`.
+
+### The launcher
+
+Bare `toki` opens an Ollama-style full-screen launcher in a black + yellow design: a letter-spaced yellow `TOKI` wordmark with tagline and amber divider, then a vertically-centred column of app cards — toki Chat, OpenCode, Hermes, OpenClaw, web dashboards — each bound to the pinned model (shown as a right-aligned chip). The active row is highlighted with a yellow accent bar. A status line shows the pinned model, backend health dots, and key hints; keys `1`–`5` jump straight to an app (or model).
+
+```
+T O K I
+recycled-prefill LLM stack · AMD Ryzen AI
+──────────────────────────────────────────
+▌ Chat                                                  (9b) ↵
+      Chat with models in the Toki TUI
+  Launch OpenCode                                       (9b)
+  Launch Hermes Agent                                   (9b)
+  Launch OpenClaw                                       (9b)
+  Launch Web Dashboards
+
+  ● 9b            1-5 jump · enter launch · esc quit
+```
+
+| Key | Action |
+|---|---|
+| `↑` / `↓` (or `k` / `j`) | navigate apps or models |
+| `Enter` | launch the highlighted app with the pinned model |
+| `→` / `Tab` | flip to the model picker (per-model health dots + ctx) |
+| `←` | back to the app list |
+| `Space` | pin the highlighted model in the picker |
+| `Esc` / `q` | quit |
+
+The chat TUI and `toki status` share the same wordmark header and black + yellow palette.
 ```
 
 ```
@@ -61,9 +110,11 @@ If you prefer one-shot commands instead of an interactive shell:
 
 ```bash
 toki up --detach
-toki bench --model ~/Downloads/Qwen3.5-9B-Q4_K_M.gguf \
-           --workload agent_long_context --max-tokens 64 \
-           --output-json report.json
+toki bench                      # interactive: pick a model + workload, then run
+toki bench --workload agent_long_context   # skip the workload picker
+toki bench --model 9b --workload agent_long_context   # fully scripted (registry name)
+toki bench --model ~/Downloads/Qwen3.5-9B-Q4_K_M.gguf --workload agent_long_context \
+           --max-tokens 64 --output-json report.json   # unregistered path
 toki down
 ```
 
@@ -150,10 +201,12 @@ toki down -y                                           # skip confirmation
 toki status                                            # show stack state
 
 # ── benchmark (the headline tool) ──────────────────────────────────────────
-toki bench --model ~/Downloads/Qwen3.5-9B-Q4_K_M.gguf \
-           --workload agent_long_context \
-           --max-tokens 64 \
-           --output-json report.json
+# Interactive: pick a model from the registry + a workload from a menu.
+toki bench
+
+# Or fully scripted (registry name or path):
+toki bench --model 9b --workload agent_long_context \
+           --max-tokens 64 --output-json report.json
 
 # Available workloads:
 #   agent_long_context   ~90% cache hit (long fixed system prompt + queries)
@@ -191,6 +244,21 @@ All three processes (llama-server, daemon, web UI) ship as systemd
 units in `packaging/systemd/`. Point `EnvironmentFile=` at a
 `/etc/toki-recur/toki.env` (chmod 600) with `TOKI_AUTH_TOKEN` set —
 that single token then gates **both** the daemon API and the web UI.
+
+### Cross-session cache persistence (disabled)
+
+Prefix reuse is **in-memory only**: the engine routes similar prompts to
+the same llama-server slot and lets the slot's KV cache serve the shared
+prefix (`cache_prompt=true`). This is lossless — outputs are
+byte-identical to a no-cache run.
+
+Disk persistence via `?action=save` / `?action=restore` was removed:
+restoring disk KV corrupted precision (benchmarks showed 88% substantive
+divergence from baseline outputs). The `--slot-save-path` flag and the
+`.trkv` sidecar layer (`cache/blob.py`) remain in the codebase but are
+dormant — the engine never calls `cache_save` / `cache_load`, and
+starting llama-server with or without `--slot-save-path` changes
+nothing about behavior.
 
 ### Web UI auth + TLS
 
@@ -355,6 +423,8 @@ toki tui --auth-token <token>      # if TOKI_AUTH_TOKEN is set
 toki tui --daemon-url http://other:8787 --raw-url http://other:8088
 ```
 
+The chat opens with the same TOKI wordmark header the launcher shows, then your persisted history (if any) below it.
+
 **Features:**
 - Three modes (raw / cached / compare) with Ctrl+1/2/3 keyboard shortcuts
 - Live TTFT sparkline + running hit-rate counter in the right panel
@@ -490,10 +560,14 @@ tokirecur/
 ## Tests
 
 ```bash
-pytest tests/unit/ -v
+pytest tests/unit/ -v        # fast (seconds)
+pytest tests/ -v             # includes integration (needs a live llama-server)
 ```
 
-22 tests covering the recycling engine and the index.
+285+ unit tests cover the recycling engine, the index, the rate limiter,
+the tree-cache wiring, the persistent-slot pool, and the .trkv sidecar
+format. CI runs the unit-test matrix on Python 3.11 / 3.12 / 3.13 on
+every push and PR.
 
 ## License
 

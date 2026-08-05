@@ -11,15 +11,13 @@ Run via:
 
 from __future__ import annotations
 
-import asyncio
 import uuid
-from typing import Any
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Horizontal, Vertical
+from textual.containers import Container, Horizontal
 from textual.reactive import reactive
-from textual.widgets import Input, Static
+from textual.widgets import Input
 
 from . import history
 from .client import DaemonClient
@@ -121,6 +119,9 @@ class TokiApp(App):
         self.status_bar.ctx_pct = 0
         self.sidebar.auth_status = self.auth_status
         self.info.set_ctx(0)
+
+        # Brand header first, then history below it.
+        self.chat.write_header()
 
         # Load history (last N messages).
         loaded = history.load(limit=100)
@@ -368,6 +369,13 @@ class TokiApp(App):
                     accumulated += chunk
                     # Live-render the in-progress line on every token.
                     self.chat.append_assistant_token(chunk)
+                elif ev == "reasoning":
+                    # Thinking-mode delta: streamed dim alongside the
+                    # answer, then placed on its own indented dim line
+                    # when the message finalises.
+                    self.chat.append_assistant_reasoning(
+                        event.get("content", "")
+                    )
                 elif ev == "done":
                     metrics = event.get("metrics", {}) or {}
                     cache = event.get("cache", {}) or {}
@@ -486,7 +494,7 @@ class TokiApp(App):
             first_diff = -1
         else:
             diff_chars = sum(
-                1 for a, b in zip(raw_text, cached_text) if a != b
+                1 for a, b in zip(raw_text, cached_text, strict=False) if a != b
             ) + abs(len(raw_text) - len(cached_text))
             first_diff = 0
             for i in range(min(len(raw_text), len(cached_text))):

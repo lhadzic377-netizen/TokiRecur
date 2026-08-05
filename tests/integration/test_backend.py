@@ -156,7 +156,7 @@ class TestBackendSlotManagement:
         prefill (not a cache hit)."""
         # Fill the slot with a long prompt via cache_prompt=True.
         long_prompt = "Long prompt that fills the slot. " * 30
-        r1 = backend.complete_native(
+        backend.complete_native(
             long_prompt,
             slot_id=0,
             max_tokens=4,

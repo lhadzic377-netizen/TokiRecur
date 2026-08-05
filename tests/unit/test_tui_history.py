@@ -1,10 +1,6 @@
 """Unit tests for the TUI chat history (JSONL persistence)."""
 
 import json
-import tempfile
-from pathlib import Path
-
-import pytest
 
 from tokirecur.tui import history
 

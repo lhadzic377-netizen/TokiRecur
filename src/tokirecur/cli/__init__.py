@@ -77,6 +77,7 @@ def serve(
 ) -> None:
     """Start the tokirecur daemon."""
     import uvicorn  # noqa: F401
+
     from ..api.app import create_app
     from ..backend import LlamaServerBackend
     from ..index import BruteForceIndex
@@ -284,9 +285,7 @@ def tui(daemon_url: str, raw_url: str, auth_token: str | None) -> None:
     except ImportError as e:
         click.echo(f"error: {e}", err=True)
         click.echo("hint: install textual with `pip install textual`.", err=True)
-        raise SystemExit(1)
-
-
+        raise SystemExit(1) from None
 @cli.command("diff")
 @click.option("--raw-url", default="http://127.0.0.1:8088")
 @click.option("--daemon-url", default="http://127.0.0.1:8787")
@@ -309,12 +308,12 @@ def diff(raw_url: str, daemon_url: str, system: str | None, max_tokens: int,
     with con.status("[dim]running raw...[/dim]"):
         raw_text, raw_m = completion_once(
             raw_url, full_prompt, max_tokens=max_tokens,
-            temperature=temperature, system=system,
+            temperature=temperature, system=system, api="native",
         )
     with con.status("[dim]running cached...[/dim]"):
         cached_text, cached_m = completion_once(
             daemon_url, full_prompt, max_tokens=max_tokens,
-            temperature=temperature, system=system,
+            temperature=temperature, system=system, api="openai",
         )
     con.print(Panel(
         raw_text, title=f"[bold red]raw[/bold red]  ttft={raw_m.get('ttft_ms', 0):.0f}ms  total={raw_m.get('total_ms', 0):.0f}ms",
@@ -424,6 +423,7 @@ def web(host: str, port: int, raw_url: str, daemon_url: str,
         raise click.UsageError(f"TLS key not found: {tls_key}")
 
     import uvicorn  # noqa: F401
+
     from ..web import create_web_app
 
     app = create_web_app(raw_url=raw_url, daemon_url=daemon_url, tls=bool(tls_cert))
@@ -431,7 +431,8 @@ def web(host: str, port: int, raw_url: str, daemon_url: str,
 
     if detach:
         import subprocess
-        log_path = Path(os.environ.get("TOKI_WEB_LOG", "/tmp/toki/web.log"))
+        log_path = Path(os.environ.get(
+            "TOKI_WEB_LOG", str(Path.home() / ".local/state/tokirecur/web.log")))
         log_path.parent.mkdir(parents=True, exist_ok=True)
         cmd = [
             sys.executable, "-m", "uvicorn",
@@ -529,7 +530,7 @@ def up(
             click.echo(f"llama-server started (pid={pid})  http://127.0.0.1:{llama_port}")
         except Exception as e:
             click.echo(f"failed to start llama-server: {e}", err=True)
-            raise SystemExit(1)
+            raise SystemExit(1) from None
     else:
         click.echo(f"skipping llama-server start (assumed on :{llama_port})")
 
@@ -554,8 +555,7 @@ def up(
         )
     except Exception as e:
         click.echo(f"failed to spawn toki daemon: {e}", err=True)
-        raise SystemExit(1)
-
+        raise SystemExit(1) from None
     click.echo(f"toki daemon  http://127.0.0.1:{daemon_port}")
     click.echo(f"logs: {lifecycle.LLAMA_LOG}  {lifecycle.DAEMON_LOG}")
     click.echo("Ctrl+C to stop everything.")
@@ -578,52 +578,87 @@ def up(
 @cli.command()
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation")
 def down(yes: bool) -> None:
-    """Stop the Toki Recur stack (llama-server + daemon)."""
+    """Stop everything: every model stack (llama-server + daemon) and
+    the legacy stack."""
     from .. import lifecycle
+    from ..ctl import load_registry, model_status, stop_model
     s = lifecycle.status()
-    if not s["llama_server"]["alive"] and not s["toki_daemon"]["alive"]:
-        click.echo("nothing to stop (no processes tracked).")
+    targets: list[str] = []
+    if s["llama_server"]["alive"] or s["toki_daemon"]["alive"]:
+        targets.append("legacy stack")
+    for spec in load_registry():
+        st = model_status(spec)
+        if st["llama"]["reachable"] or st["daemon"]["reachable"]:
+            targets.append(f"{spec.name} (llama :{spec.llama_port}, daemon :{spec.daemon_port})")
+    if not targets:
+        click.echo("nothing to stop (all stacks are down).")
         return
     if not yes:
         click.echo("will stop:")
-        if s["llama_server"]["alive"]:
-            click.echo(f"  llama-server (pid={s['llama_server']['pid']})")
-        if s["toki_daemon"]["alive"]:
-            click.echo(f"  toki daemon   (pid={s['toki_daemon']['pid']})")
+        for t in targets:
+            click.echo(f"  {t}")
         if not click.confirm("proceed?", default=True):
             raise SystemExit(0)
-    lifecycle.stop_all()
-    click.echo("stopped.")
+    stopped: list[str] = []
+    if s["llama_server"]["alive"] or s["toki_daemon"]["alive"]:
+        lifecycle.stop_all()
+        stopped.append("legacy stack")
+    for spec in load_registry():
+        st = model_status(spec)
+        if st["llama"]["reachable"] or st["daemon"]["reachable"]:
+            try:
+                stop_model(spec, force=True)
+                stopped.append(spec.name)
+            except RuntimeError as e:
+                click.echo(f"warning: could not stop {spec.name}: {e}", err=True)
+    if stopped:
+        click.echo("stopped: " + ", ".join(stopped))
+    else:
+        click.echo("stopped.")
 
 
 @cli.command()
 def status() -> None:
-    """Show the state of the Toki Recur stack."""
-    from .. import lifecycle
-    import json
-    s = lifecycle.status()
+    """Show the state of the Toki Recur stack (all registered models)."""
+    from rich.console import Console
 
-    def row(label: str, data: dict, port: int) -> None:
-        if data["alive"] and data["reachable"]:
-            state = "[green]running[/green]"
-        elif data["alive"] and not data["reachable"]:
-            state = "[yellow]stuck (alive but unreachable)[/yellow]"
-        elif data["pid"] and not data["alive"]:
-            state = "[red]dead (stale pidfile)[/red]"
-        else:
-            state = "[dim]stopped[/dim]"
-        pid = f"pid={data['pid']}" if data["pid"] else "no pidfile"
-        click.echo(f"  {label.ljust(15)} {state}  {pid}  http://127.0.0.1:{port}")
+    from ..ctl import load_registry, model_status, read_active
+    from ..tui import art
 
-    click.echo("Toki Recur stack:")
-    row("llama-server", s["llama_server"], 8088)
-    row("toki daemon", s["toki_daemon"], 8787)
-    if s["llama_server"]["alive"] and s["toki_daemon"]["alive"]:
-        click.echo("use `toki bench` to run the benchmark, `toki down` to stop.")
-    elif s["llama_server"]["alive"] or s["toki_daemon"]["alive"]:
-        click.echo("stack is partial; `toki down` then `toki up` to reset.")
+    specs = load_registry()
+    active = read_active()
+
+    def state(data: dict) -> tuple[str, str]:
+        if data["reachable"]:
+            return "[green]running[/green]", f"pid={data['pid'] or '?'}"
+        pid = data.get("pid")
+        if pid:
+            return "[red]dead (stale pidfile)[/red]", f"pid={pid}"
+        return "[dim]stopped[/dim]", "no pidfile"
+
+    con = Console()
+    con.print(art.WORDMARK, style=f"bold {art.YELLOW}", highlight=False)
+    con.print(art.TAGLINE, style="dim", highlight=False)
+    con.print("")
+    con.print("")
+    con.print("Toki Recur stack:")
+    up = 0
+    for spec in specs:
+        s = model_status(spec)
+        lstate, lpid = state(s["llama"])
+        dstate, dpid = state(s["daemon"])
+        if s["llama"]["reachable"] or s["daemon"]["reachable"]:
+            up += 1
+        marker = "  (active)" if spec.name == active else ""
+        con.print(
+            f"  {spec.name:<22} llama :{spec.llama_port:5d} {lstate}  "
+            f"daemon :{spec.daemon_port:5d} {dstate}{marker}",
+        )
+    if up:
+        con.print(f"{up} model stack(s) running; `toki model use <name>` to switch, "
+                  "`toki model stop <name>` to stop.")
     else:
-        click.echo("nothing running. `toki up` to start.")
+        con.print("nothing running. `toki up` to start, `toki model use <name>` for one.")
 
 
 @cli.command()
@@ -634,13 +669,405 @@ def interactive(ctx: click.Context) -> None:
     raise SystemExit(repl.run())
 
 
+# ── Multi-model plug & play ──────────────────────────────────────────────
+
+
+@cli.group()
+def model() -> None:
+    """Manage the plug-and-play model stacks (9b / 35b / laguna).
+
+    Each model gets its own llama-server + toki daemon on dedicated
+    ports; `toki model use <name>` starts it, stops competing big-model
+    stacks, and points opencode, openclaw and hermes at it.
+    """
+
+
+@model.command()
+def list() -> None:
+    """List the models in the registry."""
+    from ..ctl import load_registry
+    for spec in load_registry():
+        flags = []
+        if spec.always_on:
+            flags.append("always on")
+        if spec.boot:
+            flags.append("boot")
+        extra = f" ({', '.join(flags)})" if flags else ""
+        click.echo(f"  {spec.name.ljust(8)} {spec.label}{extra}")
+        click.echo(f"            llama :{spec.llama_port}  daemon :{spec.daemon_port}  "
+                   f"ctx {spec.ctx_size}  kv {spec.kv}  -> {spec.gguf}")
+
+
+@model.command()
+def status() -> None:  # noqa: F811
+
+    """Show per-model stack status."""
+    from ..ctl import load_registry, model_status, read_active
+    active = read_active()
+    click.echo(f"active model: {active or 'none'}")
+    for spec in load_registry():
+        s = model_status(spec)
+        llama = s["llama"]
+        daemon = s["daemon"]
+        ctx = f"slot_ctx={llama['slot_ctx']}" if llama["slot_ctx"] else ""
+        llama_state = "up" if llama["reachable"] else "down"
+        daemon_state = "up" if daemon["reachable"] else "down"
+        mark = "*" if spec.name == active else " "
+        click.echo(
+            f"  {mark} {spec.name.ljust(8)} llama={llama_state} ({ctx})  "
+            f"daemon={daemon_state}  pids={llama['pid']}/{daemon['pid']}"
+        )
+
+
+@model.command()
+@click.argument("name")
+@click.option(
+    "--keep-others", is_flag=True,
+    help="Do not stop the other big-model stacks (uses more RAM).",
+)
+@click.option(
+    "--wait", is_flag=True,
+    help="Stay attached (for systemd units). The stack is torn down "
+         "when this process is stopped.",
+)
+def use(name: str, keep_others: bool, wait: bool) -> None:
+    """Start the model stack and select it in opencode/openclaw/hermes."""
+    from ..ctl import sync_cli_configs, use_model
+    try:
+        spec = use_model(name, stop_others=not keep_others)
+    except (KeyError, FileNotFoundError, RuntimeError) as e:
+        click.echo(f"error: {e}", err=True)
+        raise SystemExit(1) from None
+    paths = sync_cli_configs(spec)
+    click.echo(f"model '{name}' is up: llama :{spec.llama_port}  daemon :{spec.daemon_port}")
+    for tool, path in paths.items():
+        click.echo(f"  {tool:9s} -> {path}")
+    click.echo("switched. per-run override: opencode --model, openclaw agent --model, "
+               "hermes -m --provider")
+    if wait:
+        # systemd KillMode=control-group reaps the spawned llama-server /
+        # daemon when this process exits, so stay alive until stopped.
+        #
+        # Also tell the kernel to auto-reap any child that dies while we
+        # sleep — without this, a llama-server crash (OOM, model file
+        # gone, etc.) leaves a defunct (Z) child attached to us, and
+        # systemd keeps showing the unit as "active" with zombie
+        # grandchildren attached. SIG_IGN on SIGCHLD is the POSIX way
+        # to opt into the kernel's auto-reap.
+        import signal
+        import time
+        # SIGCHLD does not exist on Windows; the auto-reap trick is a
+        # POSIX-only nicety, skip it elsewhere.
+        if hasattr(signal, "SIGCHLD"):
+            signal.signal(signal.SIGCHLD, signal.SIG_IGN)
+        while True:
+            time.sleep(3600)
+
+
+@model.command()
+@click.argument("name")
+@click.option("--force", "-f", is_flag=True,
+              help="Stop the stack even if it was not started by `toki model`.")
+def stop(name: str, force: bool) -> None:
+    """Stop a model's llama-server + daemon."""
+    from ..ctl import get_model, stop_model
+    try:
+        stop_model(get_model(name), force=force)
+    except (KeyError, RuntimeError) as e:
+        click.echo(f"error: {e}", err=True)
+        raise SystemExit(1) from None
+    click.echo(f"model '{name}' stopped.")
+
+
+@model.command()
+def repair() -> None:
+    """Backfill binary/env on legacy pulled entries.
+
+    Entries written before `pull_defaults` existed are missing the
+    machine's tuned llama.cpp path and ROCm env vars, which makes
+    pulled stacks fall back to the old Debian build. This rewrites
+    those entries in place to inherit from the first reference spec
+    that already has them. Idempotent: no-op if nothing needs repair.
+
+    This also runs automatically on every `toki model use`.
+    """
+    from ..ctl import backfill_binary_env
+
+    healed = backfill_binary_env()
+    if not healed:
+        click.echo("nothing to repair.")
+        return
+    click.echo(f"repaired: {', '.join(healed)}")
+    click.echo("re-run `toki model use <name>` (already restarted stacks will pick up the new binary on their next launch).")
+
+
+@model.command()
+@click.argument("repo")
+@click.option("--name", default=None,
+              help="Registry name (defaults to a lowercase slug of REPO).")
+@click.option("--file", "gguf_file", default=None,
+              help="Exact GGUF filename in the repo (needed when the repo "
+                   "contains several; otherwise you are prompted).")
+@click.option("--ctx", "ctx_size", default=200000, type=int,
+              help="Context size for the registry entry.")
+@click.option("--kv", default="f16", help="KV cache type (f16, q8_0, ...).")
+@click.option("--endpoint", default=None,
+              help="HF mirror base URL, e.g. http://localhost:8090 "
+                   "(overrides HF_ENDPOINT).")
+@click.option("--use", "use_it", is_flag=True,
+              help="Start the model stack and select it everywhere.")
+@click.option("--reasoning", "reasoning", default="auto",
+              type=click.Choice(["auto", "off"]),
+              help="How to handle thinking-mode models: 'auto' streams "
+                   "reasoning with headroom (default); 'off' passes "
+                   "--reasoning off to llama-server at launch.")
+def pull(repo: str, name: str | None, gguf_file: str | None, ctx_size: int,
+         kv: str, endpoint: str | None, use_it: bool,
+         reasoning: str) -> None:
+    """Download a GGUF from Hugging Face and register it.
+
+    Uses huggingface_hub, so `HF_ENDPOINT` (or --endpoint) transparently
+    routes downloads through a mirror such as DingoSpeed. The registry
+    name defaults to a lowercase slug of the repo. Ports are auto-assigned
+    after the existing models. When the repo has several GGUF files you
+    get a numbered chooser; with no interactive input the recommended
+    quant is used.
+    """
+    from ..ctl import pull_model, use_model
+    try:
+        spec = pull_model(repo, name, file=gguf_file, ctx_size=ctx_size,
+                          kv=kv, endpoint=endpoint, reasoning=reasoning,
+                          choose_file=_pick_gguf_interactive)
+    except (ValueError, RuntimeError, KeyError) as e:
+        click.echo(f"error: {e}", err=True)
+        raise SystemExit(1) from None
+    click.echo(f"pulled '{spec.name}' -> {spec.gguf}")
+    click.echo(f"  llama :{spec.llama_port}  daemon :{spec.daemon_port}  "
+               f"ctx {spec.ctx_size}  kv {spec.kv}")
+    if use_it:
+        use_model(spec.name)
+        click.echo(f"model '{spec.name}' is up and active everywhere.")
+    else:
+        click.echo(
+            f"run `toki model use {spec.name}` to start it (or re-run with --use)."
+        )
+
+
+@model.command("install-llama")
+@click.option("--tag", default=None,
+              help="llama.cpp release tag to install, e.g. b6400 "
+                   "(default: latest).")
+@click.option("--to", "dest", default=None,
+              help="Install directory (default: the toki state bin dir).")
+@click.option("--name", default=None,
+              help="Registry model to point at the installed binary, e.g. 35b.")
+def install_llama(tag: str | None, dest: str | None, name: str | None) -> None:
+    """Download the llama-server binary for this OS/arch.
+
+    Fetches the matching llama.cpp release asset (linux → ubuntu build,
+    macOS → Metal build, windows → CPU/Vulkan build; x86_64 and aarch64
+    both supported), extracts llama-server and its sidecar libraries
+    into the toki state bin dir, and optionally rewrites a registry
+    model's ``binary`` to point at it.
+    """
+    import platform
+    import shutil
+    import tempfile
+    import zipfile
+
+    import httpx
+
+    from ..ctl import set_binary
+
+    system = sys.platform
+    if system.startswith("linux"):
+        os_name = "ubuntu"
+    elif system == "darwin":
+        os_name = "macos"
+    elif system.startswith("win"):
+        os_name = "windows"
+    else:
+        click.echo(f"error: unsupported platform '{system}'", err=True)
+        raise SystemExit(1) from None
+    machine = platform.machine().lower()
+    if machine in ("amd64", "x86_64"):
+        arch = "x86_64"
+    elif machine in ("arm64", "aarch64"):
+        arch = "aarch64"
+    else:
+        click.echo(f"error: unsupported architecture '{machine}'", err=True)
+        raise SystemExit(1) from None
+
+    state_dir = Path(os.environ.get(
+        "TOKI_STATE_DIR", str(Path.home() / ".local" / "state" / "tokirecur"),
+    ))
+    bin_dir = Path(dest) if dest else state_dir / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    exe_name = "llama-server.exe" if os_name == "windows" else "llama-server"
+
+    api = httpx.Client(timeout=30.0, follow_redirects=True)
+    try:
+        if tag:
+            release = api.get(
+                "https://api.github.com/repos/ggml-org/llama.cpp"
+                f"/releases/tags/{tag}"
+            ).json()
+        else:
+            release = api.get(
+                "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest"
+            ).json()
+        if "assets" not in release:
+            raise RuntimeError(f"release lookup failed: {release.get('message')}")
+    except RuntimeError:
+        raise
+    except Exception as e:
+        raise RuntimeError(f"could not reach GitHub: {e}") from e
+
+    tag_name = release["tag_name"]
+    assets = release["assets"]
+    wanted = []
+    if os_name == "windows":
+        wanted = ["win-vulkan", "win-cpu"]
+    elif os_name == "macos":
+        wanted = [f"macos-{arch}", "macos-universal"]
+    else:
+        wanted = [f"ubuntu-{arch}"]
+
+    def _score(name: str) -> int:
+        low = name.lower()
+        for i, frag in enumerate(wanted):
+            if frag in low:
+                return i
+        return len(wanted)
+
+    candidates = [a for a in assets if _score(a["name"]) < len(wanted)]
+    candidates.sort(key=lambda a: _score(a["name"]))
+    if not candidates:
+        raise RuntimeError(
+            f"no asset matching {wanted} in {tag_name}; "
+            "pick a newer tag with --tag"
+        )
+    asset = candidates[0]
+    click.echo(f"downloading {asset['name']} ({asset['size'] / 1048576:.0f} MB)...")
+
+    with tempfile.TemporaryDirectory(prefix="toki-llama-") as tmp:
+        zip_path = Path(tmp) / asset["name"]
+        with api.stream("GET", asset["browser_download_url"]) as resp:
+            resp.raise_for_status()
+            with open(zip_path, "wb") as fh:
+                for chunk in resp.iter_bytes(1 << 20):
+                    fh.write(chunk)
+        with zipfile.ZipFile(zip_path) as zf:
+            zf.extractall(tmp)
+
+        matches = sorted(Path(tmp).rglob(exe_name))
+        if not matches:
+            raise RuntimeError(f"no {exe_name} found in the release archive")
+        src = matches[0]
+        dst = bin_dir / exe_name
+        shutil.copy2(src, dst)
+        for side in src.parent.iterdir():
+            if side.is_file() and side != src:
+                shutil.copy2(side, bin_dir / side.name)
+    if os_name != "windows":
+        dst.chmod(dst.stat().st_mode | 0o111)
+    click.echo(f"installed: {dst}")
+
+    if name:
+        try:
+            spec = set_binary(name, str(dst))
+        except KeyError as e:
+            click.echo(f"error: {e}", err=True)
+            raise SystemExit(1) from None
+        click.echo(f"registry: '{spec.name}' now uses {dst}")
+    else:
+        click.echo(f"registry: pass --name <model> to point a model at it "
+                   f"(or edit `binary:` in "
+                   f"{os.environ.get('TOKI_MODEL_REGISTRY', str(Path.home() / '.config/tokirecur/models.yaml'))})")
+
+
+def _pick_gguf_interactive(files: list[tuple[str, int | None]]) -> str:
+    """Numbered chooser; falls back to the recommended quant on EOF."""
+    from ..ctl import recommend_quant
+
+    names = [name for name, _ in files]
+    recommended = recommend_quant(names)
+    click.echo("Several GGUF files in the repo:")
+    for i, (name, size) in enumerate(files, 1):
+        mark = "  (recommended)" if name == recommended else ""
+        sz = f"  ({size / 1048576:.1f} MB)" if size else ""
+        click.echo(f"  {i:>2}. {name}{sz}{mark}")
+    try:
+        idx = click.prompt(
+            "Pick a file",
+            type=click.IntRange(1, len(files)),
+            default=names.index(recommended) + 1,
+            show_default=False,
+        )
+    except click.exceptions.Abort:
+        idx = names.index(recommended) + 1
+        click.echo(f"Using recommended: {recommended}")
+    return names[idx - 1]
+
+
+@cli.group()
+def service() -> None:
+    """Manage systemd plug-and-play boot units for the model stacks.
+
+    Installs `toki-model@.service` template units for every model marked
+    always_on in the registry, chains them in registry order (so the
+    last one, by default laguna, is the active model the clients point
+    at), and enables user linger so the stacks come up at boot.
+    """
+
+
+@service.command()
+def install() -> None:
+    """Write units, enable linger, and start always-on model stacks."""
+    from ..service import install as svc_install
+    raise SystemExit(svc_install())
+
+
+@service.command()
+def uninstall() -> None:
+    """Disable and remove the toki-model boot units."""
+    from ..service import uninstall as svc_uninstall
+    raise SystemExit(svc_uninstall())
+
+
+@service.command()
+def status() -> None:  # noqa: F811
+
+    """Show linger state and per-model boot unit status."""
+    from ..service import status as svc_status
+    raise SystemExit(svc_status())
+
+
+@service.command("logs")
+@click.argument("name")
+def service_logs(name: str) -> None:
+    """Tail journal logs for a model's boot unit."""
+    from ..service import logs as svc_logs
+    raise SystemExit(svc_logs(name))
+
+
 def main() -> int:
     # Known subcommands. Anything else (no args, or a flag) prints help
     # and shows stack status instead of running a multi-minute benchmark.
     if len(sys.argv) == 1:
-        # No args — show help + status, exit fast.
+        # No args — open the interactive launcher selector (TTY) or show
+        # help + status (scripts).
+        if sys.stdin.isatty() and sys.stdout.isatty():
+            from ..selector import run as selector_run
+            return selector_run()
         click.echo(cli.get_help(click.Context(cli)))
         click.echo("")
+        from rich.console import Console
+
+        from ..tui import art
+        con = Console()
+        con.print(art.WORDMARK, style=f"bold {art.YELLOW}", highlight=False)
+        con.print("")
         click.echo("Current stack status:")
         try:
             from .. import lifecycle
@@ -669,7 +1096,7 @@ def main() -> int:
 _SUBCOMMANDS = {
     "bench", "doctor", "down", "evict", "interactive", "run",
     "serve", "stats", "status", "up", "shell",
-    "chat", "diff", "web", "dashboard", "tui",
+    "chat", "diff", "web", "dashboard", "tui", "model", "service",
 }
 
 
@@ -688,6 +1115,7 @@ def run_default_benchmark() -> int:
         --keep-running    leave llama-server running after the bench
     """
     import argparse
+
     from .. import lifecycle
 
     parser = argparse.ArgumentParser(
@@ -764,10 +1192,10 @@ def run_default_benchmark() -> int:
 
     # Phase 3: clean up if we started llama-server.
     if started_by_us and not args.keep_running:
-        click.echo(f"[3/3] stopping llama-server...")
+        click.echo("[3/3] stopping llama-server...")
         lifecycle.stop_pid(lifecycle.LLAMA_PID, "llama-server")
     else:
-        click.echo(f"[3/3] leaving llama-server running (use `toki down` to stop)")
+        click.echo("[3/3] leaving llama-server running (use `toki down` to stop)")
 
     return rc
 

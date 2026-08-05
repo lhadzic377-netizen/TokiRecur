@@ -23,9 +23,11 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import time
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Protocol
+from typing import Any, Protocol
 
 logger = logging.getLogger(__name__)
 
@@ -141,6 +143,7 @@ class RecyclingResult:
     prefill_tokens_per_sec: float
     generated_tokens_per_sec: float
     output_text: str = ""
+    reasoning: str = ""
     output_tokens: list[int] = field(default_factory=list)
     slot_id: int = 0  # which slot served the request
     spilled: bool = False  # True if this slot was cleared due to context budget
@@ -178,7 +181,7 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
     dot = 0.0
     na = 0.0
     nb = 0.0
-    for x, y in zip(a, b):
+    for x, y in zip(a, b, strict=False):
         dot += x * y
         na += x * x
         nb += y * y
@@ -195,16 +198,21 @@ class RecyclingEngine:
     orchestrates the policy.
 
     Optional components:
-      - tree_cache: deduplicates KV blocks across prompts with shared
-        prefixes; provides a fast tree-hit check before embedding.
-      - persistent_pool: keeps the top-N most-used prefixes in dedicated
-        slots to skip the save/load cycle.
+      - tree_cache: dormant disk-KV index. Routing is purely in-memory
+        slot reuse — disk save/restore round-trips were removed because
+        they corrupted KV precision (cached outputs diverged from
+        baseline). Retained so the design can be revived behind a
+        precision-safe backend. Defaults to a fresh ``TreeCache``
+        rooted at ``~/.local/state/tokirecur/slot-save``.
+      - persistent_pool: keeps the top-N most-used prefixes in
+        dedicated slots as an in-memory routing hint (no disk
+        round-trip). Defaults to a fresh ``PersistentSlotPool``.
     """
 
     def __init__(
         self,
         backend: LlamaBackend,
-        index: "Index",  # noqa: F821 - forward-declared
+        index: Index,  # noqa: F821 - forward-declared
         *,
         similarity_threshold: float = 0.85,
         tree_cache: Any | None = None,
@@ -213,7 +221,21 @@ class RecyclingEngine:
         self.backend = backend
         self.index = index
         self.similarity_threshold = similarity_threshold
+        if tree_cache is None:
+            from pathlib import Path
+
+            from ..cache.tree import TreeCache
+            default_dir = Path(
+                os.environ.get(
+                    "TOKI_SLOT_SAVE_DIR",
+                    str(Path.home() / ".local/state/tokirecur/slot-save"),
+                )
+            )
+            tree_cache = TreeCache(default_dir)
         self.tree_cache = tree_cache
+        if persistent_pool is None:
+            from ..cache.persistent_pool import PersistentSlotPool
+            persistent_pool = PersistentSlotPool()
         self.persistent_pool = persistent_pool
 
     def serve_native(
@@ -358,18 +380,23 @@ class RecyclingEngine:
         max_slots: int,
         session_id: str | None,
         max_context_tokens: int | None,
-    ) -> tuple[list[int], list[float], int, int, bool, bool]:
+    ) -> tuple[list[int], list[float], int, int, bool, bool, str]:
         """Shared slot-routing: decide which llama-server slot to use
         and whether to force a fresh prefill.
 
         Returns ``(new_tokens, new_embedding, slot_id, reuse_depth,
-        spilled, cache_prompt)``.
+        spilled, cache_prompt, cache_id)``.
+
+        The embedding is deferred until after the spill check — if the
+        current slot is going to be spilled, the slot-id is going to
+        change, so any embedding work for routing is wasted. The
+        /embedding HTTP call is the dominant per-request cost after
+        tokenize, so skipping it on spill saves a roundtrip.
         """
         # Initialise slot state lazily.
         self._init_slot_state()
 
         new_tokens = self.backend.tokenize(tokenize_text)
-        new_embedding = self.backend.embed(tokenize_text)
 
         # Spill check on the session's current slot, if any. Reserved
         # slots are exempt from spilling.
@@ -390,12 +417,18 @@ class RecyclingEngine:
                 spilled = True
                 cache_prompt = False  # Force fresh prefill on the new slot
 
+        # Compute the content-addressed cache_id once. Used for index
+        # lookup, hot-prefix pooling and the result payload.
+        cache_id = make_cache_id(tokenize_text, "llama-server-slot")
+
         # Pick the slot that has the longest matching prefix with the new
         # prompt. llama-server will then reuse the prefix automatically.
         slot_id, reuse_depth = self._pick_slot(
             new_tokens, max_slots, session_id=session_id,
         )
-        return new_tokens, new_embedding, slot_id, reuse_depth, spilled, cache_prompt
+
+        new_embedding = self.backend.embed(tokenize_text)
+        return new_tokens, new_embedding, slot_id, reuse_depth, spilled, cache_prompt, cache_id
 
     def _finalize_request(
         self,
@@ -409,6 +442,7 @@ class RecyclingEngine:
         session_id: str | None,
         backend_result: dict[str, Any],
         started: float,
+        cache_id: str,
     ) -> RecyclingResult:
         """Update slot bookkeeping + index after a completion and build
         the :class:`RecyclingResult`."""
@@ -421,26 +455,46 @@ class RecyclingEngine:
         if session_id is not None:
             self._session_to_slot[session_id] = slot_id
 
-        # Hot-prefix detection: if this prefix has been seen N+ times,
-        # reserve the slot so it never spills.
-        self._maybe_reserve_slot(slot_id, new_tokens)
-
-        # Index for future routing (only on cache miss; on hit, the
-        # entry already exists in the index).
-        model_id = "llama-server-slot"
-        cache_id = make_cache_id(tokenize_text, model_id)
-        entry = CacheEntry(
-            cache_id=cache_id,
-            prompt=tokenize_text,
-            token_ids=new_tokens,
-            embedding=new_embedding,
-            n_past=backend_result.get("prefill_tokens", len(new_tokens)),
-            model_id=model_id,
-            bytes_on_disk=0,
-        )
-        self.index.insert(entry)
-
+        # Hot-prefix detection only counts MISSES — a hit on an already-
+        # reserved prefix shouldn't push us past the threshold a second
+        # time. Same-prefix hits still flow through, but they don't bump
+        # the count.
         real_hit = reuse_depth >= MIN_REUSE_FOR_HIT
+        if not real_hit:
+            self._maybe_reserve_slot(slot_id, new_tokens, cache_id)
+
+        # Index for future routing — only on miss. On hit the entry
+        # already exists in the index; INSERT OR REPLACE was wasted I/O.
+        # cache_id is still derived for every request: the result carries
+        # it, and on a hit it names the existing index entry.
+        model_id = "llama-server-slot"
+
+        if not real_hit:
+            entry = CacheEntry(
+                cache_id=cache_id,
+                prompt=tokenize_text,
+                token_ids=new_tokens,
+                embedding=new_embedding,
+                n_past=backend_result.get("prefill_tokens", len(new_tokens)),
+                model_id=model_id,
+                bytes_on_disk=0,
+            )
+            self.index.insert(entry)
+
+        # Best-effort embedding similarity vs the index. The engine
+        # routes by token-prefix match, not by embedding similarity, so
+        # this number is purely informational — but callers (and the
+        # /v1/metrics/live panel) expect it and the index lookup is
+        # in-memory numpy, so it's cheap.
+        match = self.index.search(new_embedding)
+        embedding_similarity = match.similarity if match is not None else 0.0
+        if real_hit and match is not None and match.cache_id != cache_id:
+            # On a hit we want to report the similarity to the entry
+            # we actually matched against (the slot's cached prefix),
+            # not to ourselves — they differ when the prompt is the
+            # longest known and we just inserted a near-duplicate.
+            embedding_similarity = match.similarity
+
         soft_hit = 1 <= reuse_depth < MIN_REUSE_FOR_HIT
         elapsed = time.perf_counter() - started
 
@@ -449,7 +503,7 @@ class RecyclingEngine:
             soft_hit=soft_hit,
             cache_id=cache_id,
             reuse_depth=reuse_depth,
-            embedding_similarity=0.0,
+            embedding_similarity=embedding_similarity,
             prefilled_tokens=backend_result["prefill_tokens"],
             skipped_tokens=reuse_depth,
             generated_tokens=backend_result["tokens_generated"],
@@ -460,6 +514,7 @@ class RecyclingEngine:
                 backend_result["tokens_generated"] / (elapsed or 1e-9)
             ),
             output_text=backend_result.get("text", ""),
+            reasoning=backend_result.get("reasoning", ""),
             slot_id=slot_id,
             spilled=spilled,
             tool_calls=backend_result.get("tool_calls"),
@@ -486,7 +541,7 @@ class RecyclingEngine:
         :meth:`LlamaServerBackend.complete_native`.
         """
         started = time.perf_counter()
-        new_tokens, new_embedding, slot_id, reuse_depth, spilled, cache_prompt = (
+        new_tokens, new_embedding, slot_id, reuse_depth, spilled, cache_prompt, cache_id = (
             self._route_request(
                 tokenize_text=tokenize_text,
                 max_slots=max_slots,
@@ -508,6 +563,7 @@ class RecyclingEngine:
             session_id=session_id,
             backend_result=backend_result,
             started=started,
+            cache_id=cache_id,
         )
 
     async def serve_chat_stream(
@@ -543,7 +599,7 @@ class RecyclingEngine:
         routing_text = _last_routing_text(messages)
 
         started = time.perf_counter()
-        new_tokens, new_embedding, slot_id, reuse_depth, spilled, cache_prompt = (
+        new_tokens, new_embedding, slot_id, reuse_depth, spilled, cache_prompt, cache_id = (
             self._route_request(
                 tokenize_text=routing_text,
                 max_slots=max_slots,
@@ -565,6 +621,8 @@ class RecyclingEngine:
         ):
             if item.get("kind") == "delta":
                 yield {"kind": "delta", "delta": item.get("delta", "")}
+            elif item.get("kind") == "reasoning":
+                yield {"kind": "reasoning", "delta": item.get("delta", "")}
             elif item.get("kind") == "tool_calls":
                 yield {"kind": "tool_calls", "tool_calls": item.get("tool_calls", [])}
             elif item.get("kind") == "finish":
@@ -596,6 +654,7 @@ class RecyclingEngine:
                 session_id=session_id,
                 backend_result=backend_result,
                 started=started,
+                cache_id=cache_id,
             ),
         }
 
@@ -621,15 +680,8 @@ class RecyclingEngine:
             self._max_context_tokens: int = 6144
         if not hasattr(self, "_spill_count"):
             self._spill_count: int = 0
-        # Persistent slot pool: reserved slots never spill.
-        if not hasattr(self, "_reserved_slots"):
-            self._reserved_slots: dict[int, list[int]] = {}
-        if not hasattr(self, "_prefix_use_count"):
-            self._prefix_use_count: dict[int, int] = {}
-        if not hasattr(self, "_reservation_threshold"):
-            self._reservation_threshold: int = 10
-        if not hasattr(self, "_max_reserved_slots"):
-            self._max_reserved_slots: int = 2
+        # Persistent slot pool owns the "reserved slot" concept; the
+        # engine no longer maintains its own _reserved_slots dict.
 
     def _spill_slot(self, slot_id: int) -> None:
         """Clear a slot's KV state and reset its tracking.
@@ -637,10 +689,10 @@ class RecyclingEngine:
         Called when a slot's context has grown beyond the configured
         budget. Subsequent requests on this session will pick a fresh
         slot via prefix matching (or round-robin if no match).
-        Reserved slots are NOT spilled — they persist for hot prefixes.
+        Pool-owned slots are NOT spilled — they persist for hot prefixes.
         """
-        if slot_id in self._reserved_slots:
-            logger.debug("slot %d is reserved; skipping spill", slot_id)
+        if slot_id in self.persistent_pool._slots:
+            logger.debug("slot %d is pool-owned; skipping spill", slot_id)
             return
         try:
             self.backend.clear_slot(slot_id)
@@ -649,7 +701,6 @@ class RecyclingEngine:
         self._slot_history.pop(slot_id, None)
         self._slot_context_tokens.pop(slot_id, None)
         self._slot_use_count[slot_id] = 0
-        self._prefix_use_count.pop(slot_id, None)
         self._spill_count += 1
         logger.info(
             "spilled slot %d (total spills=%d)", slot_id, self._spill_count,
@@ -685,35 +736,42 @@ class RecyclingEngine:
             )
             return pinned, depth
 
-        # Check reserved slots first (their prefix is hot, reuse it).
-        for slot_id, reserved_prefix in self._reserved_slots.items():
-            depth = compute_reuse_depth(reserved_prefix, new_tokens)
+        # Check persistent-pool slots first (their prefix is hot, reuse it).
+        # The pool stores the prefix tokens alongside the slot, so we
+        # route by prefix-match without a second lookup.
+        for persistent_slot in self.persistent_pool._slots.values():
+            if persistent_slot.prefix_tokens is None:
+                continue
+            depth = compute_reuse_depth(
+                persistent_slot.prefix_tokens, new_tokens
+            )
             if depth >= MIN_REUSE_FOR_HIT:
-                return slot_id, depth
+                return persistent_slot.slot_id, depth
 
         # Find the slot with the longest matching prefix.
         best_slot = 0
         best_depth = 0
 
         for slot_id, prev_tokens in self._slot_history.items():
-            # Skip reserved slots unless their prefix actually matches.
-            if slot_id in self._reserved_slots:
+            # Skip pool-owned slots unless their prefix actually matches.
+            if slot_id in self.persistent_pool._slots:
                 continue
             depth = compute_reuse_depth(prev_tokens, new_tokens)
             if depth > best_depth:
                 best_depth = depth
                 best_slot = slot_id
 
-        # If no slot has any prefix match, round-robin among NON-reserved slots.
+        # If no slot has any prefix match, round-robin among non-pool slots.
         if best_depth == 0:
             used = set(self._slot_history.keys())
+            pool_owned = set(self.persistent_pool._slots.keys())
             for slot_id in range(max_slots):
-                if slot_id not in used and slot_id not in self._reserved_slots:
+                if slot_id not in used and slot_id not in pool_owned:
                     return slot_id, 0
-            # All non-reserved slots used; pick the LRU non-reserved slot.
+            # All non-pool slots used; pick the LRU non-pool slot.
             non_reserved = {
                 k: v for k, v in self._slot_use_count.items()
-                if k not in self._reserved_slots
+                if k not in self.persistent_pool._slots
             }
             if non_reserved:
                 return min(non_reserved.items(), key=lambda kv: kv[1])[0], 0
@@ -722,36 +780,34 @@ class RecyclingEngine:
 
         return best_slot, best_depth
 
-    def _maybe_reserve_slot(self, slot_id: int, prefix_tokens: list[int]) -> None:
-        """If the prefix on `slot_id` has been hit enough times, reserve
-        the slot. Reserved slots never spill and are prioritised for
-        matching prefixes."""
-        self._init_slot_state()
-        # Track use count for this slot's prefix.
-        current_count = self._prefix_use_count.get(slot_id, 0) + 1
-        self._prefix_use_count[slot_id] = current_count
+    def _maybe_reserve_slot(self, slot_id: int, prefix_tokens: list[int], cache_id: str) -> None:
+        """Promote ``slot_id`` to a reserved (hot-prefix) slot via the
+        ``PersistentSlotPool``.
 
-        # Already reserved — nothing to do.
-        if slot_id in self._reserved_slots:
-            return
+        The pool enforces its own threshold (default 50 hits across all
+        sessions) and capacity (default 4 slots); when a slot crosses
+        the threshold, the pool marks it as "owned by the pool" so it
+        survives normal spills, and tracks use counts so LRU eviction
+        can run when the pool is full. Pool ownership is purely a
+        routing hint — no disk save/restore is involved.
 
-        # Reservation only kicks in if the slot's prefix is hot AND we
-        # have spare reservation slots.
-        if current_count < self._reservation_threshold:
-            return
-        if len(self._reserved_slots) >= self._max_reserved_slots:
-            # Already at capacity. Don't reserve this one.
-            return
-
-        # Reserve.
-        self._reserved_slots[slot_id] = list(prefix_tokens)
-        logger.info(
-            "reserved slot %d after %d hits (max_reserved=%d)",
-            slot_id, current_count, self._max_reserved_slots,
-        )
+        Hot prefixes that are also in the pool short-circuit
+        :meth:`_pick_slot` to the dedicated slot, skipping the prefix
+        scan and the embedding-based routing entirely.
+        """
+        try:
+            self.persistent_pool.acquire(
+                cache_id,
+                filename=cache_id,
+                n_past=len(prefix_tokens),
+                prefix_tokens=prefix_tokens,
+            )
+        except Exception as e:
+            logger.debug("persistent_pool.acquire failed: %s", e)
 
     def _is_slot_reserved(self, slot_id: int) -> bool:
-        return slot_id in self._reserved_slots
+        # A slot is "reserved" iff it is owned by the pool.
+        return slot_id in self.persistent_pool._slots
 
     def slot_state(self) -> dict:
         """Return current per-slot state for observability.
@@ -767,7 +823,7 @@ class RecyclingEngine:
                     "context_tokens": self._slot_context_tokens.get(sid, 0),
                     "last_prompt_tokens": len(self._slot_history.get(sid, [])),
                     "use_count": self._slot_use_count.get(sid, 0),
-                    "reserved": sid in self._reserved_slots,
+                    "reserved": sid in self.persistent_pool._slots,
                 }
                 for sid in sorted(
                     set(self._slot_history)
@@ -781,7 +837,7 @@ class RecyclingEngine:
             },
             "spill_count": self._spill_count,
             "max_context_tokens": self._max_context_tokens,
-            "reserved_slots": sorted(self._reserved_slots.keys()),
+            "reserved_slots": sorted(self.persistent_pool._slots.keys()),
         }
 
     def reset_state(self) -> None:
@@ -797,6 +853,9 @@ class RecyclingEngine:
         self._slot_use_count.clear()
         self._session_to_slot.clear()
         self._session_order.clear()
-        self._reserved_slots.clear()
-        self._prefix_use_count.clear()
+        # PersistentSlotPool owns its own use-counts / slot registry;
+        # clearing it here drops the engine's view of "reserved slots"
+        # without touching the on-disk cache files.
+        self.persistent_pool._slots.clear()
+        self.persistent_pool._use_counts.clear()
         self._spill_count = 0

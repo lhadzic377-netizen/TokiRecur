@@ -99,6 +99,7 @@ class DaemonMetrics:
         soft_hit: bool,
         slot_id: int,
         context_tokens: int,
+        spilled: bool = False,
     ) -> None:
         if hit:
             self.cache_hits.labels(kind="hit").inc()
@@ -111,6 +112,8 @@ class DaemonMetrics:
         self.prefill_tokens.inc(prefill_tokens)
         self.generated_tokens.inc(generated_tokens)
         self.slot_context_tokens.labels(slot_id=str(slot_id)).set(context_tokens)
+        if spilled:
+            self.spills_total.inc()
 
 
 METRICS = DaemonMetrics()

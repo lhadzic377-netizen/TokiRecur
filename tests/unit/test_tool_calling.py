@@ -6,14 +6,13 @@ the daemon's OpenAI wire format in both streaming and non-streaming
 chat completions (stubbed backend — no live llama-server).
 """
 
-import asyncio
 import json
 from dataclasses import dataclass, field
 
-import pytest
 from fastapi.testclient import TestClient
 
 from tokirecur.api.app import ChatCompletionRequest, ChatMessage, create_app
+from tokirecur.backend import _sanitize_tools, _strip_patterns
 from tokirecur.core.recycling import RecyclingEngine
 
 # ── Fakes ──────────────────────────────────────────────────────────────
@@ -339,3 +338,50 @@ class TestDaemonToolCompletions:
         assert text == "Hello"
         final = [c for c in chunks if c["choices"][0]["finish_reason"]]
         assert final[-1]["choices"][0]["finish_reason"] == "stop"
+
+
+# ── Schema pattern stripping ───────────────────────────────────────────
+
+
+def test_patterns_stripped():
+    schema = {"type": "string", "pattern": "[A-Za-z0-9_ -]{1,64}"}
+    assert _strip_patterns(schema) == {"type": "string"}
+
+
+def test_nested_schema_patterns_stripped():
+    schema = {
+        "type": "object",
+        "properties": {
+            "items": {"type": "array", "items": {"type": "string", "pattern": "[a-z]+"}},
+            "code": {"pattern": "\\S"},
+        },
+    }
+    out = _strip_patterns(schema)
+    assert out["properties"]["items"]["items"] == {"type": "string"}
+    assert out["properties"]["code"] == {}
+
+
+def test_sanitize_tools_strips_patterns_and_defaults_parameters():
+    tools = [
+        {"type": "function", "function": {"name": "no_params"}},
+        {
+            "type": "function",
+            "function": {
+                "name": "with_params",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"x": {"type": "string", "pattern": "^(?:\\S)$"}},
+                },
+            },
+        },
+    ]
+    out = _sanitize_tools(tools)
+    assert out[0]["function"]["parameters"] == {}
+    assert out[1]["function"]["parameters"]["properties"]["x"] == {"type": "string"}
+
+
+def test_sanitize_tools_preserves_non_tool_entries():
+    tools = [{"not": "a tool"}, {"function": "bare"}]
+    out = _sanitize_tools(tools)
+    assert out[0] == {"not": "a tool"}
+    assert out[1]["function"] == "bare"

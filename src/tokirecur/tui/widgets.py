@@ -27,6 +27,7 @@ from textual.containers import VerticalScroll
 from textual.reactive import reactive
 from textual.widgets import Static
 
+from .art import AMBER, YELLOW
 
 # ── ChatLog ──────────────────────────────────────────────────────────
 
@@ -52,6 +53,7 @@ class ChatLog(VerticalScroll):
         self._lines: list[Text] = []
         self._current_assistant_id: int | None = None
         self._current_assistant_text: str = ""
+        self._current_assistant_reasoning: str = ""
         self._current_assistant_mode: str = "cached"
         self._streaming_line_idx: int | None = None
 
@@ -74,6 +76,7 @@ class ChatLog(VerticalScroll):
         self._lines.clear()
         self._current_assistant_id = None
         self._current_assistant_text = ""
+        self._current_assistant_reasoning = ""
         self._streaming_line_idx = None
         self._rerender()
 
@@ -86,10 +89,18 @@ class ChatLog(VerticalScroll):
         text.append(content, style="white")
         self.write(text)
 
+    def write_header(self) -> None:
+        """Render the typographic brand header as the first lines."""
+        from . import art
+
+        self.write(Text(art.WORDMARK, style=f"bold {art.YELLOW}"))
+        self.write(Text(art.TAGLINE, style="dim"))
+
     def begin_assistant(self, message_id: int, mode: str = "cached") -> None:
         self._current_assistant_id = message_id
         self._current_assistant_mode = mode
         self._current_assistant_text = ""
+        self._current_assistant_reasoning = ""
         self._lines.append(self._streaming_text())
         self._streaming_line_idx = len(self._lines) - 1
         self._trim()
@@ -98,7 +109,13 @@ class ChatLog(VerticalScroll):
     def append_assistant_token(self, token: str) -> None:
         """Tokens arrive fast; buffer and re-render the live line."""
         self._current_assistant_text += token
-        self._rerender()
+        self._refresh_streaming_line()
+
+    def append_assistant_reasoning(self, token: str) -> None:
+        """Thinking-mode delta: streamed dimmed on the live line, rendered
+        separately at end_assistant for the final transcript."""
+        self._current_assistant_reasoning += token
+        self._refresh_streaming_line()
 
     def end_assistant(
         self,
@@ -125,6 +142,7 @@ class ChatLog(VerticalScroll):
             self._replace_streaming_line(text)
             self._current_assistant_id = None
             self._current_assistant_text = ""
+            self._current_assistant_reasoning = ""
             self._streaming_line_idx = None
             return
 
@@ -156,9 +174,17 @@ class ChatLog(VerticalScroll):
             if skipped_tokens > 0:
                 text.append(f" · reused {skipped_tokens}", style="dim cyan")
             text.append("]", style="dim")
-        self._replace_streaming_line(text)
+        if self._current_assistant_reasoning:
+            think_line = Text()
+            think_line.append(f"    think › {self._current_assistant_reasoning}",
+                              style="dim italic")
+            self._replace_streaming_line(think_line)
+            self._lines.append(text)
+        else:
+            self._replace_streaming_line(text)
         self._current_assistant_id = None
         self._current_assistant_text = ""
+        self._current_assistant_reasoning = ""
         self._streaming_line_idx = None
 
     def write_compare_pair(
@@ -230,11 +256,25 @@ class ChatLog(VerticalScroll):
         text.append("ai  ", style="bold green")
         text.append(f"[{self._current_assistant_mode}] ", style="green")
         text.append("▸ ", style="green")
+        if self._current_assistant_reasoning:
+            # Live: show reasoning dimmed so the user sees the model
+            # thinking while it streams, followed by any visible content.
+            text.append("think ", style="dim italic")
+            text.append(self._current_assistant_reasoning, style="dim")
         if self._current_assistant_text:
+            if self._current_assistant_reasoning:
+                text.append("\n    ", style="white")
             text.append(self._current_assistant_text, style="white")
-        else:
+        elif not self._current_assistant_reasoning:
             text.append("…", style="dim")
         return text
+
+    def _refresh_streaming_line(self) -> None:
+        """Rebuild the in-flight assistant line in place so the user
+        sees tokens as they stream, not only after the response ends."""
+        if self._streaming_line_idx is not None and self._streaming_line_idx < len(self._lines):
+            self._lines[self._streaming_line_idx] = self._streaming_text()
+        self._rerender()
 
     def _replace_streaming_line(self, final_text: Text) -> None:
         if self._streaming_line_idx is not None and self._streaming_line_idx < len(self._lines):
@@ -300,10 +340,10 @@ class StatusBar(Static):
         text.append("daemon ", style="dim")
         text.append(_auth_glyph(self.auth_status), style=_auth_color(self.auth_status))
         text.append("auth │ ", style="dim")
-        text.append(f"mode={self.mode} ", style="bold")
+        text.append(f"mode={self.mode} ", style=f"bold {YELLOW}")
         text.append(f"session={self.session_id[:10]} ", style="dim")
         text.append(f"ctx={self.ctx_pct}% ", style="bold cyan")
-        text.append(f"maxtok={self.max_tokens} ", style="bold yellow")
+        text.append(f"maxtok={self.max_tokens} ", style=f"bold {AMBER}")
         text.append(f"hits={self.hit_rate} ", style="dim cyan")
         text.append("│ Ctrl+R · Ctrl+T · /help", style="dim")
         return text
@@ -380,7 +420,7 @@ class InfoPanel(Static):
         panel = Text()
 
         # Live metrics.
-        panel.append("Live\n", style="bold")
+        panel.append("Live\n", style=f"bold {YELLOW}")
         m = self._metrics
         reqs = int(m.get("requests_total", 0))
         hits = int(m.get("cache_hits", 0))
@@ -400,7 +440,7 @@ class InfoPanel(Static):
         panel.append("\n")
 
         # Session counters (client-side).
-        panel.append("Session\n", style="bold")
+        panel.append("Session\n", style=f"bold {YELLOW}")
         s = self._session_stats
         msgs = int(s.get("messages", 0))
         gen = int(s.get("tokens_generated", 0))
@@ -411,7 +451,7 @@ class InfoPanel(Static):
         panel.append("\n")
 
         # Precision results.
-        panel.append("Precision\n", style="bold")
+        panel.append("Precision\n", style=f"bold {YELLOW}")
         d = self.precision
         if not d:
             panel.append("  (Ctrl+P to run)\n", style="dim")
@@ -479,7 +519,7 @@ class Sidebar(Static):
 
     def render(self) -> RenderableType:
         panel = Text()
-        panel.append("Toki\n", style="bold cyan")
+        panel.append("Toki\n", style=f"bold {YELLOW}")
         panel.append("─" * 20 + "\n", style="dim")
 
         # Mode
@@ -492,7 +532,7 @@ class Sidebar(Static):
         sid = self.session_id
         if len(sid) > 16:
             sid = sid[:8] + "…" + sid[-4:]
-        panel.append(f"ses  {sid}\n", style="cyan")
+        panel.append(f"ses  {sid}\n", style=YELLOW)
 
         # Backends
         panel.append("─" * 20 + "\n", style="dim")
@@ -517,7 +557,7 @@ class Sidebar(Static):
 
         # Slots
         panel.append("─" * 20 + "\n", style="dim")
-        panel.append("Slots\n", style="bold")
+        panel.append("Slots\n", style=f"bold {YELLOW}")
         slots = self.slots or []
         if not slots:
             panel.append("  (none)\n", style="dim")

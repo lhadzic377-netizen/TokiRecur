@@ -3,8 +3,6 @@
 import tempfile
 from pathlib import Path
 
-import pytest
-
 from tokirecur.core.recycling import CacheEntry
 from tokirecur.index import BruteForceIndex
 

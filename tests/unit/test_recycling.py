@@ -3,8 +3,8 @@
 import pytest
 
 from tokirecur.core.recycling import (
-    cosine_similarity,
     compute_reuse_depth,
+    cosine_similarity,
     make_cache_id,
 )
 

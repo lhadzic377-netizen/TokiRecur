@@ -11,9 +11,11 @@ when a backend is down.
 
 from __future__ import annotations
 
+import json
 import os
+from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any
 
 
 def _make_client(base_url: str, auth_token: str | None):
@@ -287,8 +289,10 @@ class DaemonClient:
         started_at = _now()
         first_token_at: float | None = None
         text_chunks: list[str] = []
+        reasoning_chunks: list[str] = []
         error_msg: str | None = None
         prompt_tokens = 0
+        cache_verdict: dict | None = None
         # Raw mode bypasses the daemon (no auth needed for loopback).
         # Cached mode forwards the token (TUI shares auth file with daemon).
         auth_for_request = self._auth_token if mode == "cached" else None
@@ -323,8 +327,11 @@ class DaemonClient:
                         }
                         return
 
+                    pending = ""
                     async for chunk_text in r.aiter_text():
-                        for line in _split_sse(chunk_text):
+                        pending += chunk_text
+                        lines, pending = _split_sse(pending)
+                        for line in lines:
                             if not line.strip():
                                 continue
                             if line.startswith("data: "):
@@ -339,12 +346,24 @@ class DaemonClient:
                                 # OpenAI-style usage chunk arrives after
                                 # the finish_reason chunk.
                                 prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
+                            if isinstance(obj.get("cache"), dict):
+                                # The daemon's terminal chunk carries the
+                                # cache verdict (hit, soft_hit, cache_id,
+                                # reuse_depth, skipped_tokens, ...). Preserve
+                                # it so the TUI can render hits/misses.
+                                cache_verdict = obj["cache"]
                             text = _extract_text(obj)
                             if text:
                                 if first_token_at is None:
                                     first_token_at = _now()
                                 text_chunks.append(text)
                                 yield {"event": "token", "content": text}
+                            reasoning = _extract_reasoning(obj)
+                            if reasoning:
+                                if first_token_at is None:
+                                    first_token_at = _now()
+                                reasoning_chunks.append(reasoning)
+                                yield {"event": "reasoning", "content": reasoning}
                             if obj.get("stop") or obj.get("finish_reason"):
                                 break
         except Exception as e:  # noqa: BLE001
@@ -379,10 +398,15 @@ class DaemonClient:
         if mode == "raw":
             cache_marker: dict = {"applicable": False, "mode": "raw"}
         else:
-            cache_marker = {"hit": False, "skipped_tokens": 0}
+            # Cached mode: prefer the daemon's verdict chunk (hit,
+            # soft_hit, reuse_depth, cache_id, ...); fall back to a
+            # conservative miss if no verdict arrived (e.g. upstream
+            # closed early).
+            cache_marker = cache_verdict or {"hit": False, "skipped_tokens": 0}
         yield {
             "event": "done",
             "text": "".join(text_chunks),
+            "reasoning": "".join(reasoning_chunks),
             "metrics": {
                 "ttft_ms": ttft_ms,
                 "total_ms": total_ms,
@@ -401,24 +425,23 @@ def _now() -> float:
     return time.perf_counter()
 
 
-def _split_sse(chunk: str) -> list[str]:
-    """Split an SSE buffer into complete lines, leaving the trailing
-    partial line for the next iteration."""
-    lines: list[str] = []
-    while "\n" in chunk:
-        line, chunk = chunk.split("\n", 1)
-        if line:
-            lines.append(line)
-    # If chunk ends with a partial line, stash it back via a list
-    # return — caller will prepend next iteration. We use a single-
-    # line sentinel for the partial remainder.
-    if chunk:
-        lines.append(chunk)
-    return lines
+def _split_sse(chunk: str) -> tuple[list[str], str]:
+    """Split an SSE buffer into complete lines plus a partial remainder.
+
+    A line is complete once it ends with ``\\n``. The trailing partial
+    line (if any) is returned separately so the caller can prepend it
+    to the next chunk — otherwise a JSON event split across two HTTP
+    chunks would be parsed as invalid JSON and silently dropped.
+    """
+    if "\n" not in chunk:
+        return [], chunk
+    complete, _, remainder = chunk.rpartition("\n")
+    if not complete:
+        return [], remainder
+    return complete.split("\n"), remainder
 
 
 def _parse_sse_line(line: str) -> dict | None:
-    import json
     try:
         return json.loads(line)
     except Exception:
@@ -442,4 +465,26 @@ def _extract_text(obj: dict) -> str:
         delta = choices[0].get("delta") or {}
         if isinstance(delta, dict) and delta.get("content"):
             return str(delta["content"])
+    return ""
+
+
+def _extract_reasoning(obj: dict) -> str:
+    """Pull thinking/reasoning content from a streaming chunk.
+
+    Sent in its own ``reasoning_content`` SSE delta by the daemon (or
+    directly by llama-server). Forwarded verbatim so thinking models
+    can render their chain of thought.
+    """
+    if not isinstance(obj, dict):
+        return ""
+    rc = obj.get("reasoning_content")
+    if rc:
+        return str(rc)
+    choices = obj.get("choices")
+    if choices and isinstance(choices, list):
+        delta = choices[0].get("delta") or {}
+        if isinstance(delta, dict):
+            rc = delta.get("reasoning_content")
+            if rc:
+                return str(rc)
     return ""

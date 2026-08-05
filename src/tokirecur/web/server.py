@@ -17,14 +17,17 @@ import json
 import logging
 import os
 import time
+from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any
 from urllib.parse import urlparse
 
 import httpx
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+
+from ..daemon.ratelimit import RateLimiter
 
 # Configure logging once. Honor TOKI_LOG_LEVEL env var (default INFO).
 logging.basicConfig(
@@ -123,6 +126,9 @@ def _token_headers(token: str | None) -> dict[str, str]:
 
 AUTH_COOKIE = "toki_session"
 SESSION_TTL_SECONDS = 12 * 3600
+# Brute-force protection: per-IP cap on /login attempts. Without this,
+# an attacker can grind the token in a tight loop.
+LOGIN_RATE_LIMIT_PER_MINUTE = 10
 
 
 def _configured_token() -> str | None:
@@ -196,6 +202,13 @@ def create_web_app(
     app.state.daemon_url = daemon_url
     web_token = _configured_token()
     secure_cookies = tls or os.environ.get("TOKI_WEB_TLS") == "1"
+    # Per-IP token bucket for /login. Keyed by remote address; entries
+    # older than ~10 min fall out naturally as their tokens refill
+    # back to capacity and stop triggering 429s.
+    login_limiter = RateLimiter(
+        burst=LOGIN_RATE_LIMIT_PER_MINUTE,
+        refill_rate=LOGIN_RATE_LIMIT_PER_MINUTE / 60.0,
+    )
 
     @app.middleware("http")
     async def security_and_no_store(request: Request, call_next):
@@ -218,12 +231,34 @@ def create_web_app(
                 return RedirectResponse("/login", status_code=307)
         response = await call_next(request)
         response.headers["Cache-Control"] = "no-store"
+        # Defence-in-depth CSP. The static UI is self-hosted so a tight
+        # policy is possible: only same-origin scripts/styles, no
+        # inline event handlers, no eval, no framing by third parties.
+        # `unsafe-inline` is allowed for styles only because the static
+        # stylesheet uses inline `style="..."` attributes on a handful
+        # of dynamically sized elements.
+        if response.headers.get("Content-Type", "").startswith("text/html"):
+            response.headers.setdefault(
+                "Content-Security-Policy",
+                (
+                    "default-src 'self'; "
+                    "script-src 'self'; "
+                    "style-src 'self' 'unsafe-inline'; "
+                    "img-src 'self' data:; "
+                    "connect-src 'self'; "
+                    "frame-ancestors 'none'; "
+                    "base-uri 'self'; "
+                    "form-action 'self'"
+                ),
+            )
         return response
 
     @app.get("/", response_class=HTMLResponse)
     async def root() -> HTMLResponse:
         index = STATIC_DIR / "index.html"
-        body = index.read_text(encoding="utf-8") if index.exists() else "<h1>Toki Recur</h1><p>UI not found.</p>"
+        body = index.read_text(encoding="utf-8") if index.exists() else (
+            "<h1>Toki Recur</h1><p>UI not found.</p>"
+        )
         return HTMLResponse(body, headers={"Cache-Control": "no-store"})
 
     @app.get("/login", response_class=HTMLResponse)
@@ -234,7 +269,15 @@ def create_web_app(
 
     @app.post("/login")
     async def login(request: Request) -> JSONResponse:
-        """Verify the supplied token (constant-time) and issue a cookie."""
+        """Verify the supplied token (constant-time) and issue a cookie.
+
+        Rate-limited per client IP to blunt brute-force attempts."""
+        client_ip = (request.client.host if request.client else "unknown")
+        if not login_limiter.check(f"login:{client_ip}"):
+            return JSONResponse(
+                {"ok": False, "detail": "too many login attempts; slow down"},
+                status_code=429,
+            )
         data = {}
         try:
             data = await request.json()
@@ -751,7 +794,9 @@ async def _do_compare(
     cancelled = asyncio.Event()
     watcher = asyncio.create_task(_watch_abort(ws, cancelled))
 
-    async def run_one(label: str, endpoint: str, payload: dict, token: str | None) -> tuple[str, dict, dict, str | None, bool]:
+    async def run_one(
+        label: str, endpoint: str, payload: dict, token: str | None
+    ) -> tuple[str, dict, dict, str | None, bool]:
         """Returns (text, metrics, cache, error_message, aborted)."""
         await ws.send_json({"type": "compare_start", "label": label, "target": endpoint})
         started = time.perf_counter()
@@ -900,7 +945,7 @@ async def _do_compare(
         else:
             first_diff = min(len(raw_text), len(cached_text))
     diff_chars = sum(
-        1 for a, b in zip(raw_text, cached_text) if a != b
+        1 for a, b in zip(raw_text, cached_text, strict=False) if a != b
     ) + abs(len(raw_text) - len(cached_text))
 
     await ws.send_json({

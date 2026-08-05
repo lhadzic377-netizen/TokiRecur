@@ -9,6 +9,7 @@ A/B comparison between cached and raw inference paths.
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 from dataclasses import dataclass, field
@@ -17,10 +18,7 @@ from typing import Any
 
 import httpx
 from rich.console import Console
-from rich.live import Live
 from rich.panel import Panel
-from rich.spinner import Spinner
-from rich.text import Text
 
 console = Console()
 
@@ -32,6 +30,29 @@ class Message:
     metrics: dict[str, Any] = field(default_factory=dict)
 
 
+def _auth_headers() -> dict[str, str]:
+    """Bearer header for the toki daemon when a token is configured.
+
+    Same read order as the daemon: TOKI_AUTH_TOKEN env var, then
+    ~/.config/tokirecur/auth, then /etc/toki-recur/auth.
+    """
+    token = os.environ.get("TOKI_AUTH_TOKEN")
+    if not token:
+        for path in (
+            Path.home() / ".config" / "tokirecur" / "auth",
+            Path("/etc/toki-recur/auth"),
+        ):
+            try:
+                if path.is_file():
+                    content = path.read_text().strip()
+                    if content:
+                        token = content
+                        break
+            except OSError:
+                pass
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
+
 def stream_completion(
     base_url: str,
     prompt: str,
@@ -41,12 +62,22 @@ def stream_completion(
     system: str | None = None,
     history: list[dict] | None = None,
     timeout: float = 120.0,
+    api: str = "native",
 ) -> tuple[str, dict[str, Any]]:
-    """Send a streaming completion to `base_url`. Returns (full_text, metrics).
+    """Send a streaming completion. Returns (full_text, metrics).
+
+    ``api="native"`` talks to llama-server's own ``/completion`` endpoint.
+    ``api="openai"`` talks to the toki daemon's OpenAI-compatible
+    ``/v1/chat/completions`` (recycling engine, SSE stream).
 
     metrics keys: ttft_ms, total_ms, tokens_generated, prefill_tokens,
                  hit (bool), reuse_depth, cache_id.
     """
+    if api == "openai":
+        return _stream_openai(
+            base_url, prompt, max_tokens=max_tokens, temperature=temperature,
+            system=system, history=history, timeout=timeout,
+        )
     payload: dict[str, Any] = {
         "prompt": prompt,
         "n_predict": max_tokens,
@@ -54,18 +85,16 @@ def stream_completion(
         "stream": True,
     }
     if system:
-        payload["system_prompt"] = system  # legacy llama-server slot
-    if history:
-        payload["messages"] = history  # OpenAI-compatible path
+        payload["system_prompt"] = system  # llama-server native param
 
     metrics: dict[str, Any] = {"ttft_ms": 0.0, "prefill_tokens": 0, "tokens_generated": 0}
     chunks: list[str] = []
     started = time.perf_counter()
     first_token_time: float | None = None
     try:
-        with httpx.stream("POST", f"{base_url}/completion", json=payload, timeout=timeout) as r:
+        with httpx.stream("POST", f"{base_url}/completion", json=payload,
+                          timeout=timeout, headers=_auth_headers()) as r:
             r.raise_for_status()
-            buf = ""
             for line in r.iter_lines():
                 if not line:
                     continue
@@ -98,7 +127,23 @@ def stream_completion(
     return "".join(chunks), metrics
 
 
-def completion_once(
+def _openai_messages(
+    prompt: str,
+    *,
+    system: str | None = None,
+    history: list[dict] | None = None,
+) -> list[dict]:
+    """Build OpenAI chat messages, system first, history, then user."""
+    messages: list[dict] = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    if history:
+        messages.extend(history)
+    messages.append({"role": "user", "content": prompt})
+    return messages
+
+
+def _stream_openai(
     base_url: str,
     prompt: str,
     *,
@@ -108,7 +153,113 @@ def completion_once(
     history: list[dict] | None = None,
     timeout: float = 120.0,
 ) -> tuple[str, dict[str, Any]]:
-    """Send a non-streaming completion. Used for compare mode and benchmarking."""
+    """Stream from the toki daemon's OpenAI-compatible endpoint.
+
+    Parses the daemon's SSE chunks (``choices[0].delta.content``) and
+    the terminal chunk carrying ``usage``/``cache`` verdicts.
+    """
+    payload: dict[str, Any] = {
+        "model": "default",
+        "messages": _openai_messages(prompt, system=system, history=history),
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "stream": True,
+    }
+    metrics: dict[str, Any] = {"ttft_ms": 0.0, "prefill_tokens": 0, "tokens_generated": 0}
+    chunks: list[str] = []
+    started = time.perf_counter()
+    first_token_time: float | None = None
+    try:
+        with httpx.stream("POST", f"{base_url}/v1/chat/completions", json=payload,
+                          timeout=timeout, headers=_auth_headers()) as r:
+            r.raise_for_status()
+            for line in r.iter_lines():
+                if not line:
+                    continue
+                if line.startswith("data: "):
+                    line = line[6:]
+                if line.strip() == "[DONE]":
+                    break
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    obj = None
+                if not obj:
+                    continue
+                cache = obj.get("cache") or {}
+                usage = obj.get("usage") or {}
+                if usage:
+                    metrics["prefill_tokens"] = int(usage.get("prompt_tokens", 0))
+                    metrics["tokens_generated"] = int(usage.get("completion_tokens", 0))
+                if cache:
+                    metrics["hit"] = bool(cache.get("hit"))
+                    metrics["reuse_depth"] = cache.get("reuse_depth", 0)
+                    metrics["cache_id"] = cache.get("cache_id")
+                    if cache.get("ttft_ms") is not None:
+                        metrics["ttft_ms"] = float(cache["ttft_ms"])
+                    if cache.get("total_ms") is not None:
+                        metrics["total_ms"] = float(cache["total_ms"])
+                choices = obj.get("choices") or []
+                if not choices:
+                    continue
+                delta = choices[0].get("delta") or {}
+                tok = delta.get("content", "") or ""
+                if tok:
+                    if first_token_time is None:
+                        first_token_time = time.perf_counter()
+                    chunks.append(tok)
+                    sys.stdout.write(tok)
+                    sys.stdout.flush()
+    except httpx.HTTPError as e:
+        sys.stdout.write(f"\n[error: {e}]")
+    if first_token_time is not None:
+        metrics["ttft_ms"] = first_token_time - started
+    metrics["total_ms"] = (time.perf_counter() - started) * 1000.0
+    return "".join(chunks), metrics
+
+
+def completion_once(
+    base_url: str,
+    prompt: str,
+    *,
+    max_tokens: int = 256,
+    temperature: float = 0.0,
+    system: str | None = None,
+    history: list[dict] | None = None,
+    timeout: float = 120.0,
+    api: str = "native",
+) -> tuple[str, dict[str, Any]]:
+    """Send a non-streaming completion. Used for compare mode and benchmarking.
+
+    ``api="openai"`` targets the toki daemon's ``/v1/chat/completions``.
+    """
+    if api == "openai":
+        payload: dict[str, Any] = {
+            "model": "default",
+            "messages": _openai_messages(prompt, system=system, history=history),
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "stream": False,
+        }
+        started = time.perf_counter()
+        try:
+            r = httpx.post(f"{base_url}/v1/chat/completions", json=payload,
+                           timeout=timeout, headers=_auth_headers())
+            r.raise_for_status()
+            body = r.json()
+            cache = body.get("cache") or {}
+            usage = body.get("usage") or {}
+            return body.get("choices", [{}])[0].get("message", {}).get("content", ""), {
+                "ttft_ms": float(cache.get("ttft_ms", 0.0)),
+                "total_ms": (time.perf_counter() - started) * 1000.0,
+                "tokens_generated": int(usage.get("completion_tokens", 0)),
+                "prefill_tokens": int(usage.get("prompt_tokens", 0)),
+                "hit": bool(cache.get("hit")),
+                "reuse_depth": int(cache.get("reuse_depth", 0)),
+                "cache_id": cache.get("cache_id"),
+            }
+        except httpx.HTTPError as e:
+            return f"[error: {e}]", {}
     payload: dict[str, Any] = {
         "prompt": prompt,
         "n_predict": max_tokens,
@@ -117,11 +268,10 @@ def completion_once(
     }
     if system:
         payload["system_prompt"] = system
-    if history:
-        payload["messages"] = history
     started = time.perf_counter()
     try:
-        r = httpx.post(f"{base_url}/completion", json=payload, timeout=timeout)
+        r = httpx.post(f"{base_url}/completion", json=payload, timeout=timeout,
+                       headers=_auth_headers())
         r.raise_for_status()
         body = r.json()
         elapsed_ms = (time.perf_counter() - started) * 1000.0
@@ -164,7 +314,6 @@ def chat_session(
     history: list[Message] = []
     mode = initial_mode  # "raw" | "cached" | "compare"
     system = initial_system
-    model_name = initial_model
 
     console.print(
         Panel(
@@ -303,6 +452,7 @@ def chat_session(
             prompt_for_send,
             max_tokens=max_tokens,
             temperature=temperature,
+            api="native" if target == raw_url else "openai",
         )
         sys.stdout.write("\n")
         last_metrics = metrics
@@ -340,12 +490,14 @@ def _do_compare(
     console.print("[dim]running raw...[/dim]")
     with console.status("[dim]running raw (no cache)...[/dim]"):
         raw_text, raw_m = completion_once(
-            raw_url, prompt_for_send, max_tokens=max_tokens, temperature=temperature
+            raw_url, prompt_for_send, max_tokens=max_tokens, temperature=temperature,
+            api="native",
         )
     # Run cached.
     console.print("[dim]running cached...[/dim]")
     cached_text, cached_m = completion_once(
-        daemon_url, prompt_for_send, max_tokens=max_tokens, temperature=temperature
+        daemon_url, prompt_for_send, max_tokens=max_tokens, temperature=temperature,
+        api="openai",
     )
 
     # Side-by-side.
@@ -370,7 +522,7 @@ def _do_compare(
     cached_prefill = cached_m.get("prefill_tokens", 0)
     skipped = max(0, raw_prefill - cached_prefill)
     identical = raw_text == cached_text
-    diff_chars = sum(1 for a, b in zip(raw_text, cached_text) if a != b)
+    diff_chars = sum(1 for a, b in zip(raw_text, cached_text, strict=False) if a != b)
     diff_chars += abs(len(raw_text) - len(cached_text))
 
     verdict_color = "green" if speedup > 1.05 else "yellow" if speedup > 0.95 else "red"

@@ -19,10 +19,10 @@ Endpoint reference (upstream llama.cpp >= b3524):
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
-import json
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +31,51 @@ import httpx
 from ..core.recycling import LlamaBackend
 
 logger = logging.getLogger(__name__)
+
+
+def _strip_patterns(node: Any) -> Any:
+    """Return a copy of a JSON schema with ``pattern`` and length
+    constraints removed.
+
+    The laguna fork's JSON-schema -> GBNF converter inlines ``pattern``
+    values verbatim into GBNF string literals. Regex escapes the converter
+    does not know (e.g. ``\\S`` in OpenClaw's ``cron`` tool) produce
+    ``unknown escape`` errors that fail grammar generation for the whole
+    request. ``minLength``/``maxLength`` map to GBNF repetitions, and
+    values above the fork's ``MAX_REPETITION_THRESHOLD`` (2000) — e.g.
+    ``maxLength: 65536`` — are rejected outright. These are advisory
+    constraints, so they are dropped.
+    """
+    if isinstance(node, dict):
+        out: dict[str, Any] = {}
+        for key, value in node.items():
+            if key in ("pattern", "minLength", "maxLength"):
+                continue
+            out[key] = _strip_patterns(value)
+        return out
+    if isinstance(node, list):
+        return [_strip_patterns(item) for item in node]
+    return node
+
+
+def _sanitize_tools(tools: list) -> list:
+    """Return tools with function parameter schemas stripped of the
+    ``pattern`` keyword, which the laguna fork's grammar generator cannot
+    handle."""
+    out: list[dict] = []
+    for tool in tools:
+        if isinstance(tool, dict):
+            tool = dict(tool)
+            fn = tool.get("function")
+            if isinstance(fn, dict):
+                fn = dict(fn)
+                params = fn.get("parameters")
+                if isinstance(params, dict):
+                    fn["parameters"] = _strip_patterns(params)
+                fn["parameters"] = fn.get("parameters") or {}
+                tool["function"] = fn
+        out.append(tool)
+    return out
 
 
 class LlamaServerBackend(LlamaBackend):
@@ -169,23 +214,78 @@ class LlamaServerBackend(LlamaBackend):
         return [int(t) for t in body["tokens"]]
 
     def cache_save(self, slot_id: int, cache_id: str) -> dict[str, Any]:
-        """Save the slot's KV cache to `<cache_dir>/<cache_id>.bin` using
-        llama-server's built-in `?action=save` endpoint."""
+        """Save the slot's KV cache to ``<cache_dir>/<cache_id>.bin``
+        via llama-server's ``?action=save`` endpoint, then drop a
+        ``<cache_dir>/<cache_id>.trkv`` digest sidecar via
+        :class:`tokirecur.cache.blob.BlobWriter`.
+
+        The ``.bin`` file is llama-server's native on-disk format and
+        is what ``?action=restore`` consumes. The ``.trkv`` sidecar is
+        a small header + SHA-256 digest that the tree-cache uses for
+        a fast file-existence check (``tree_cache.lookup``) and that
+        :meth:`cache_load` verifies against before restoring.
+        """
         filename = self.cache_path(cache_id)
         body = self._post(
             f"/slots/{slot_id}?action=save",
             {"filename": filename},
         )
         info = self.cache_info(slot_id)
+        n_written = int(body.get("n_written", 0))
+
+        # Write the digest sidecar. The ``.trkv`` file contains the
+        # blob header (model_id, n_past, vocab_size) plus the SHA-256
+        # of the underlying ``.bin`` payload — same byte content as
+        # what llama-server persisted, so any tampering surfaces as a
+        # digest mismatch on restore.
+        try:
+            self._write_trkv_sidecar(cache_id, n_past=n_written, info=info)
+        except Exception as e:
+            logger.warning("failed to write .trkv sidecar for %s: %s",
+                           cache_id, e)
+
         return {
             "n_past": int(body.get("n_saved", info["n_past"])),
-            "bytes": int(body.get("n_written", 0)),
+            "bytes": n_written,
             "model_id": info["model_id"],
         }
 
+    def _write_trkv_sidecar(
+        self, cache_id: str, *, n_past: int, info: dict[str, Any],
+    ) -> None:
+        """Write a ``<cache_id>.trkv`` digest sidecar alongside the
+        ``.bin`` payload llama-server just persisted.
+
+        Returns silently if ``cache_dir`` isn't configured (e.g. when
+        the daemon is wired against a custom backend that doesn't
+        materialise files locally).
+        """
+        if self.cache_dir is None:
+            return
+        from ..cache.blob import BlobWriter, blob_path
+        bin_path = self.cache_dir / f"{cache_id}.bin"
+        if not bin_path.exists():
+            return
+        trkv_path = blob_path(self.cache_dir, cache_id)
+        with BlobWriter(trkv_path) as w:
+            w.write_header(
+                model_id=info.get("model_id", "unknown"),
+                n_past=n_past,
+                vocab_size=info.get("vocab_size", 152064),
+            )
+            w.write_payload(bin_path.read_bytes())
+            w.finalize()
+
     def cache_load(self, slot_id: int, cache_id: str) -> dict[str, Any]:
         """Restore the slot's KV cache from a previously saved file
-        using llama-server's built-in `?action=restore` endpoint."""
+        using llama-server's built-in ``?action=restore`` endpoint.
+
+        Verifies the ``.trkv`` digest sidecar matches the ``.bin``
+        payload before issuing the restore — a mismatch means either
+        disk corruption or tampering, and we refuse to feed garbage
+        to llama-server.
+        """
+        self._verify_trkv_sidecar(cache_id)
         filename = self.cache_path(cache_id)
         body = self._post(
             f"/slots/{slot_id}?action=restore",
@@ -196,6 +296,29 @@ class LlamaServerBackend(LlamaBackend):
             "n_past": int(body.get("n_restored", info["n_past"])),
             "model_id": info["model_id"],
         }
+
+    def _verify_trkv_sidecar(self, cache_id: str) -> None:
+        """Verify the ``.trkv`` digest sidecar's SHA-256 matches the
+        ``.bin`` payload's SHA-256. Skips silently if either file is
+        missing or if the sidecar was never written (legacy cache_dir
+        populated by older daemon versions)."""
+        if self.cache_dir is None:
+            return
+        from ..cache.blob import BlobReader, blob_path
+        bin_path = self.cache_dir / f"{cache_id}.bin"
+        trkv_path = blob_path(self.cache_dir, cache_id)
+        if not (bin_path.exists() and trkv_path.exists()):
+            return
+        try:
+            reader = BlobReader(trkv_path)
+            payload = reader.read_payload()
+        except (ValueError, OSError):
+            return
+        if reader.digest != BlobReader.compute_sha256(payload):
+            raise RuntimeError(
+                f".trkv sidecar digest mismatch for {cache_id}; "
+                f"refusing to feed corrupted KV to llama-server"
+            )
 
     def cache_info(self, slot_id: int) -> dict[str, Any]:
         """Return n_past, model_id, vocab_size for the slot."""
@@ -245,7 +368,11 @@ class LlamaServerBackend(LlamaBackend):
         except Exception:
             # Endpoint not supported — caller must use cache_prompt=false
             # on the next request to reset the slot.
-            return {"cleared": False, "method": "noop", "note": "next request must use cache_prompt=False"}
+            return {
+                "cleared": False,
+                "method": "noop",
+                "note": "next request must use cache_prompt=False",
+            }
 
     def list_slots(self) -> list[dict[str, Any]]:
         """Return the list of slots and their current state."""
@@ -264,11 +391,17 @@ class LlamaServerBackend(LlamaBackend):
         temperature: float = 0.0,
         prefix_token_ids: list[int] | None = None,
         cached_n_past: int = 0,
+        cache_prompt: bool = True,
     ) -> dict[str, Any]:
         """Run a completion. If `cached_n_past > 0` and the caller has
         already loaded a saved KV state into this slot, the server still
         needs to see the full prompt — but the server's own slot cache
         will hit the prefix matches and skip the prefill work for them.
+
+        Pass ``cache_prompt=False`` to force a fresh prefill (overwrites
+        the slot's existing KV). Used by the precision-retention check
+        to establish a true baseline where the cache cannot influence
+        the result.
 
         Returns the same dict shape the engine expects."""
         payload = {
@@ -277,7 +410,7 @@ class LlamaServerBackend(LlamaBackend):
             "temperature": temperature,
             "stream": False,
             "slot_id": slot_id if slot_id is not None else 0,
-            "cache_prompt": True,
+            "cache_prompt": cache_prompt,
         }
         started = time.perf_counter()
         r = self._client.post(
@@ -412,7 +545,7 @@ class LlamaServerBackend(LlamaBackend):
             "cache_prompt": cache_prompt,
         }
         if tools:
-            payload["tools"] = tools
+            payload["tools"] = _sanitize_tools(tools)
             if tool_choice is not None:
                 payload["tool_choice"] = tool_choice
         if chat_template_kwargs:
@@ -504,7 +637,7 @@ class LlamaServerBackend(LlamaBackend):
             "cache_prompt": cache_prompt,
         }
         if tools:
-            payload["tools"] = tools
+            payload["tools"] = _sanitize_tools(tools)
             if tool_choice is not None:
                 payload["tool_choice"] = tool_choice
         if chat_template_kwargs:
@@ -512,6 +645,7 @@ class LlamaServerBackend(LlamaBackend):
         started = time.perf_counter()
         first_token_at: float | None = None
         text_parts: list[str] = []
+        reasoning_parts: list[str] = []
         timings: dict = {}
         usage: dict = {}
         finish_reason: str | None = None
@@ -552,6 +686,12 @@ class LlamaServerBackend(LlamaBackend):
                                 first_token_at = time.perf_counter()
                             text_parts.append(content)
                             yield {"kind": "delta", "delta": content}
+                        reasoning = delta.get("reasoning_content")
+                        if reasoning:
+                            if first_token_at is None:
+                                first_token_at = time.perf_counter()
+                            reasoning_parts.append(reasoning)
+                            yield {"kind": "reasoning", "delta": reasoning}
                         tcs = delta.get("tool_calls")
                         if tcs:
                             # Forward the delta verbatim (OpenAI format)
@@ -594,6 +734,7 @@ class LlamaServerBackend(LlamaBackend):
             "kind": "result",
             "result": {
                 "text": "".join(text_parts),
+                "reasoning": "".join(reasoning_parts),
                 "tool_calls": tool_calls,
                 "finish_reason": finish_reason,
                 "tokens_generated": int(

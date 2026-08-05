@@ -1,20 +1,12 @@
 """Persistent slot pool for hot prefixes.
 
-The default recycling engine calls `?action=save` and `?action=restore`
-on every request, which has overhead. For prefixes that are accessed
-frequently (e.g. an agent's system prompt), this overhead exceeds the
-prefill savings.
-
-The persistent slot pool solves this: the top-N most-frequently-used
-prefixes get dedicated slots that never clear. When a new request
-matches one of these prefixes (by token-level prefix check), we skip the
-save+restore cycle entirely — the slot already has the KV state in
-memory.
-
-We use the upstream llama-server endpoints to drive the pool:
-  - `?action=save`    — explicit save (used for cache_dir persistence)
-  - `?action=restore` — load a previously saved file into a slot
-  - `/slots/:id` POST action=get — query current n_past for the slot
+STATUS: experimental. The recycling engine calls ``PersistentSlotPool.acquire``
+to track hot prefixes; pool ownership is purely an in-memory routing hint
+(owned slots survive normal spills and get priority in ``_pick_slot``). No
+``?action=save`` / ``?action=restore`` round-trips are made — those were
+removed because restoring disk KV corrupted precision (cached outputs
+diverged from baseline). The upstream-endpoint helpers below are kept
+importable so the design can be revived behind a precision-safe backend.
 
 The pool maintains a priority list of prefixes and their corresponding
 slot IDs. When a slot is requested and is not in use, it can be reused
@@ -27,7 +19,6 @@ import logging
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from typing import Optional
 
 import httpx
 
@@ -42,6 +33,11 @@ class PersistentSlot:
     cache_id: str  # filename used in --slot-save-path
     n_past: int
     last_used_at: float = field(default_factory=time.time)
+    # The token IDs of the prefix this slot owns. Lets the engine
+    # route by prefix-match against the pool without a second
+    # lookup. ``None`` for callers that don't have tokens handy
+    # (legacy pool owners that only track slot IDs).
+    prefix_tokens: list[int] | None = None
     use_count: int = 0
 
 
@@ -76,7 +72,7 @@ class PersistentSlotPool:
                 evicted_cache_id, evicted_slot.slot_id, evicted_slot.use_count,
             )
 
-    def _allocate_slot(self) -> Optional[int]:
+    def _allocate_slot(self) -> int | None:
         """Find a free slot. llama-server exposes slot IDs via /slots.
         We use the first slot that's not currently processing."""
         try:
@@ -110,11 +106,26 @@ class PersistentSlotPool:
         r.raise_for_status()
         return r.json()[0]
 
-    def acquire(self, cache_id: str, filename: str, n_past: int) -> Optional[PersistentSlot]:
-        """Acquire a slot pre-loaded with the KV for `cache_id`.
+    def acquire(
+        self,
+        cache_id: str,
+        filename: str,
+        n_past: int,
+        prefix_tokens: list[int] | None = None,
+    ) -> PersistentSlot | None:
+        """Acquire pool ownership for ``cache_id``'s slot.
 
         Returns the slot if poolable, None if the pool is full and this
         prefix doesn't deserve a slot (below `min_reuse_for_pooling`).
+
+        ``prefix_tokens`` is stored on the returned :class:`PersistentSlot`
+        so the engine can route by prefix-match against the pool without
+        a second lookup (e.g. ``index.search`` or a per-slot cache).
+
+        ``filename`` is retained in the signature for API stability with
+        the disk-persistence design; no file is read or written here.
+        KV is loaded lazily by llama-server on the first ``cache_prompt``
+        request routed to the allocated slot.
         """
         # Already pooled.
         if cache_id in self._slots:
@@ -130,22 +141,19 @@ class PersistentSlotPool:
             self._use_counts[cache_id] = self._use_counts.get(cache_id, 0) + 1
             return None
 
-        # Evict if needed, then allocate.
+        # Evict if needed, then allocate. The slot is reserved for this
+        # prefix; its KV gets prefilled on the next routed request.
         self._evict_lru()
         slot_id = self._allocate_slot()
         if slot_id is None:
             logger.warning("no free slot available for %s", cache_id)
-            return None
-        try:
-            self._restore_to_slot(slot_id, cache_id, filename)
-        except Exception as e:
-            logger.warning("restore to slot %d failed: %s", slot_id, e)
             return None
         slot = PersistentSlot(
             slot_id=slot_id,
             cache_id=cache_id,
             n_past=n_past,
             use_count=self._use_counts[cache_id],
+            prefix_tokens=list(prefix_tokens) if prefix_tokens is not None else None,
         )
         self._slots[cache_id] = slot
         logger.info(

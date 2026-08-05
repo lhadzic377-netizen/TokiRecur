@@ -21,12 +21,15 @@ dependencies = [
     "click>=8.1",
     "prometheus-client>=0.19",
     "textual>=0.85",
+    "pyyaml>=6.0",
+    "huggingface_hub>=0.24",
+    "pyfiglet>=0.8",
 ]
 
 [project.optional-dependencies]
 embeddings = ["sentence-transformers>=2.6", "torch>=2.2"]
 index = ["hnswlib>=0.7"]
-dev = ["pytest>=8.0", "pytest-asyncio>=1.0", "ruff>=0.4"]
+dev = ["pytest>=8.0", "pytest-asyncio>=1.0", "ruff>=0.4", "build>=1.0"]
 
 [project.scripts]
 toki = "tokirecur.cli:main"
@@ -45,6 +48,22 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "B", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+# bench/cli.py is heavy on long prompt strings (user-facing workload text)
+# and table-rendering code. The strings are intentional and rewrapping
+# them risks altering prompt semantics.
+"src/tokirecur/bench/cli.py" = ["E501"]
+# cli/__init__.py and cli/chat.py contain click help/epilog strings that
+# read better as one line each.
+"src/tokirecur/cli/__init__.py" = ["E501"]
+"src/tokirecur/cli/chat.py" = ["E501"]
+# ctl/__init__.py embeds provider-config dicts whose keys are intentionally
+# long (OpenClaw/OpenCode schema field names).
+"src/tokirecur/ctl/__init__.py" = ["E501"]
+# Tests frequently embed long fixture strings (realistic JSON, SSE
+# payloads, chat histories). Wrapping them would obscure intent.
+"tests/**/*.py" = ["E501"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -4,8 +4,9 @@ Uses Textual's `run_test` to drive the app headlessly. We mock the
 `DaemonClient` so we don't need a live backend.
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from tokirecur.tui.app import TokiApp
 
@@ -60,6 +61,18 @@ class TestTokiApp:
                 assert pilot.app.query_one("StatusBar") is not None
                 assert pilot.app.query_one("InfoPanel") is not None
                 assert pilot.app.query_one("Input") is not None
+
+    @pytest.mark.asyncio
+    async def test_header_rendered_on_mount(self):
+        from tokirecur.tui import art
+
+        client = _mock_client()
+        with patch("tokirecur.tui.app.DaemonClient", return_value=client):
+            app = TokiApp()
+            async with app.run_test():
+                rendered = "\n".join(str(line) for line in app.chat.lines)
+        assert art.WORDMARK in rendered
+        assert art.TAGLINE in rendered
 
     @pytest.mark.asyncio
     async def test_mode_switching(self):
@@ -137,7 +150,7 @@ class TestTokiApp:
                 await pilot.press("enter")
                 await pilot.pause()
                 # ChatLog should be empty (or only the "cleared" system line).
-                chat = pilot.app.query_one("ChatLog")
+                pilot.app.query_one("ChatLog")
                 # After clear, only the system message remains.
                 # RichLog.lines is the internal store.
 
@@ -294,7 +307,7 @@ class TestTokiContextAndMaxTokens:
         client = _mock_client()
         with patch("tokirecur.tui.app.DaemonClient", return_value=client):
             app = TokiApp()
-            async with app.run_test() as pilot:
+            async with app.run_test():
                 for i in range(30):
                     app._history.append({"role": "user", "content": f"msg {i}"})
                 sent = app._history_for_api()
@@ -426,3 +439,98 @@ class TestTokiInfoAndScroll:
                 await pilot.press("end")
                 await pilot.pause()
                 assert app.chat.scroll_y >= app.chat.max_scroll_y - 1
+
+
+class TestChatLogStreamingLive:
+    """Tokens must appear on the in-flight line as they arrive, not
+    only after the response completes.
+
+    Regression: append_assistant_token only mutated internal state and
+    re-rendered a frozen snapshot, so the TUI showed '…' until
+    end_assistant — the answer popped in all at once instead of
+    streaming.
+    """
+
+    @pytest.mark.asyncio
+    async def test_partial_tokens_visible_mid_stream(self):
+        from tokirecur.tui.widgets import ChatLog
+
+        log = ChatLog()
+        log.begin_assistant(message_id=1, mode="cached")
+
+        log.append_assistant_token("Hello ")
+        rendered = _line_text(log.lines[-1])
+        assert "Hello " in rendered, (
+            f"token not visible on live line mid-stream: {rendered!r}"
+        )
+        assert "…" not in rendered.split("▸ ")[-1], (
+            f"placeholder should be replaced once text streams: {rendered!r}"
+        )
+
+        log.append_assistant_token("world")
+        rendered = _line_text(log.lines[-1])
+        assert "Hello world" in rendered, (
+            f"accumulated text not on live line: {rendered!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_reasoning_visible_live_then_final(self):
+        from tokirecur.tui.widgets import ChatLog
+
+        log = ChatLog()
+        log.begin_assistant(message_id=1, mode="cached")
+
+        log.append_assistant_reasoning("think ")
+        rendered = _line_text(log.lines[-1])
+        assert "think think " in rendered, (
+            f"reasoning not visible mid-stream: {rendered!r}"
+        )
+
+        log.append_assistant_token("answer")
+        log.end_assistant(
+            mode="cached", hit=False, soft_hit=False,
+            ttft_ms=5.0, total_ms=20.0, tokens_generated=1,
+            prompt_tokens=3,
+        )
+        final = "\n".join(_line_text(ln) for ln in log.lines)
+        assert "answer" in final
+        assert "think › think" in final
+
+
+class TestChatLogReasoning:
+    """Thinking-mode deltas render dim alongside the live answer, then
+    end up on their own indented dim line at end_assistant time."""
+
+    @pytest.mark.asyncio
+    async def test_reasoning_and_content_both_rendered(self):
+        from tokirecur.tui.widgets import ChatLog
+
+        log = ChatLog()
+        log.begin_assistant(message_id=1, mode="cached")
+        log.append_assistant_reasoning("thinking…")
+        log.append_assistant_token("Hello")
+        log.append_assistant_reasoning(" more")
+        log.append_assistant_token(" world")
+        log.end_assistant(
+            mode="cached", hit=False, soft_hit=False,
+            ttft_ms=10.0, total_ms=50.0, tokens_generated=2,
+            prompt_tokens=4,
+        )
+
+        # The streaming line is replaced by a final block: a dim
+        # indented "think ›" line followed by the answer line.
+        rendered = "\n".join(_line_text(ln) for ln in log.lines)
+        assert "think › thinking… more" in rendered
+        assert "Hello world" in rendered
+        # And the content line should appear AFTER the think line.
+        think_idx = rendered.find("think ›")
+        answer_idx = rendered.find("Hello world")
+        assert 0 <= think_idx < answer_idx
+
+
+def _line_text(line) -> str:
+    """Plain-text rendering of a rich Text line for assertions."""
+    from rich.text import Text
+    if isinstance(line, Text):
+        return line.plain
+    return str(line)

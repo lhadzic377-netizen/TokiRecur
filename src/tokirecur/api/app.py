@@ -20,6 +20,7 @@ requests/minute.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
@@ -33,16 +34,42 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel, Field
 
 from ..core.recycling import (
-    CacheEntry,
     LlamaBackend,
     RecyclingEngine,
-    make_cache_id,
 )
-from ..index import Index
 from ..daemon.metrics import METRICS
 from ..daemon.ratelimit import RateLimiter
+from ..index import Index
 
 logger = logging.getLogger(__name__)
+
+# Thinking-mode headroom. Many GGUF chat templates (Qwen3 "Thinking",
+# unsloth "Thinking-2507", DeepSeek-R1 distill, etc.) burn hundreds of
+# tokens on reasoning before producing visible content. If the client
+# sends a small `max_tokens`, llama-server cuts the model off inside
+# reasoning and returns `content: ""`. The daemon therefore floors the
+# budget at MAX_TOKENS_FLOOR so thinking models always answer; non-
+# thinking models stop on EOS regardless.
+MAX_TOKENS_FLOOR = 512
+
+_FLOOR_WARNED = False
+
+
+def _resolve_max_tokens(requested: int) -> int:
+    """Floor at MAX_TOKENS_FLOOR without capping larger client requests.
+
+    Logs a one-time warning when a client's budget is silently raised.
+    """
+    global _FLOOR_WARNED
+    requested = int(requested)
+    if requested < MAX_TOKENS_FLOOR and not _FLOOR_WARNED:
+        _FLOOR_WARNED = True
+        logger.warning(
+            "client requested max_tokens=%d below the %d floor; "
+            "budget raised so thinking models can finish reasoning",
+            requested, MAX_TOKENS_FLOOR,
+        )
+    return max(requested, MAX_TOKENS_FLOOR)
 
 
 class CompletionRequest(BaseModel):
@@ -189,11 +216,28 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         logger.info("Toki Recur daemon starting")
+        if _get_auth_token() == "demo-token":
+            logger.warning(
+                "auth token is the well-known default 'demo-token'; set "
+                "TOKI_AUTH_TOKEN (or ~/.config/tokirecur/auth) to a real "
+                "secret before exposing the daemon beyond localhost",
+            )
         yield
         logger.info("Toki Recur daemon shutting down")
 
     app = FastAPI(title="Toki Recur", version="0.2.0", lifespan=lifespan)
     engine = RecyclingEngine(backend, index, similarity_threshold=similarity_threshold)
+
+    # The engine's serve_* methods are synchronous and mutate shared slot
+    # state. Run them in a threadpool (so concurrent requests don't stall
+    # the event loop) but serialize them behind a lock (so state mutations
+    # never interleave).
+    engine_lock = asyncio.Lock()
+
+    async def _run_engine(call, *args, **kwargs):
+        async with engine_lock:
+            return await asyncio.to_thread(call, *args, **kwargs)
+
     if max_context_tokens:
         # Match the engine's per-slot recycling budget to llama-server's
         # context window (llama.cpp truncates n_predict to what fits in
@@ -254,6 +298,12 @@ def create_app(
     @app.get("/metrics")
     async def metrics() -> Response:
         METRICS.uptime_seconds.set(time.time() - started_at)
+        # active_slots = slots with non-zero KV context (the engine
+        # evicts spilled slots from its map, so this tracks "live").
+        state = engine.slot_state()
+        METRICS.active_slots.set(
+            sum(1 for s in state.get("slots", []) if s.get("context_tokens", 0) > 0)
+        )
         return Response(
             content=generate_latest(),
             media_type=CONTENT_TYPE_LATEST,
@@ -271,7 +321,7 @@ def create_app(
 
     @app.post("/cache/lookup")
     async def cache_lookup(req: CacheLookupRequest) -> dict:
-        emb = backend.embed(req.prompt)
+        emb = await asyncio.to_thread(backend.embed, req.prompt)
         match = index.search(emb)
         if match is None:
             return {"match": None}
@@ -318,8 +368,10 @@ def create_app(
             cross_identical = 0
             per_prompt = []
             # We don't have direct llama-server access here; reuse
-            # `backend.complete()` which hits llama-server with
-            # cache_prompt=False/True.
+            # `backend.complete()`. Baseline must run with cache_prompt
+            # disabled or it would hit llama-server's slot cache and the
+            # precision comparison would silently degenerate to "same
+            # path vs same path".
             for idx, prompt in enumerate(data):
                 base_runs = []
                 rec_runs = []
@@ -327,7 +379,7 @@ def create_app(
                     try:
                         r = backend.complete(
                             prompt, slot_id=0, max_tokens=max_tokens,
-                            temperature=0.0,
+                            temperature=0.0, cache_prompt=False,
                         )
                         base_runs.append(r.get("text", ""))
                     except Exception:
@@ -446,6 +498,10 @@ def create_app(
         """
         import json as _json
         object_type = "chat.completion.chunk" if is_chat else "text_completion"
+        # Thinking-mode headroom: never let llama-server cut a model off
+        # inside its reasoning tokens. Cheap for non-thinking models
+        # (they stop on EOS).
+        max_tokens = _resolve_max_tokens(max_tokens)
 
         def chunk_with(
             delta: dict,
@@ -491,6 +547,11 @@ def create_app(
                     kind = item["kind"]
                     if kind == "delta":
                         yield chunk_with({"content": item["delta"]})
+                    elif kind == "reasoning":
+                        # Streamed in a separate SSE delta so OpenAI-aware
+                        # clients can render it dimmed; clients that don't
+                        # know the field simply ignore it.
+                        yield chunk_with({"reasoning_content": item["delta"]})
                     elif kind == "tool_calls":
                         # OpenAI delta-format tool-call chunk, verbatim
                         # from llama-server so SDK-side accumulation
@@ -518,7 +579,8 @@ def create_app(
             # Non-chat (native) streaming: blocking call, approximate
             # token-by-token emission (native endpoint has no streaming
             # support in the engine yet).
-            result = engine.serve_native(
+            result = await _run_engine(
+                engine.serve_native,
                 prompt,
                 max_tokens=max_tokens,
                 temperature=temperature,
@@ -573,6 +635,7 @@ def create_app(
             soft_hit=result.soft_hit,
             slot_id=result.slot_id,
             context_tokens=slot_ctx,
+            spilled=result.spilled,
         )
 
     @app.post("/v1/completions")
@@ -594,9 +657,10 @@ def create_app(
                     ),
                     media_type="text/event-stream",
                 )
-            result = engine.serve_native(
+            result = await _run_engine(
+                engine.serve_native,
                 req.prompt,
-                max_tokens=req.max_tokens,
+                max_tokens=_resolve_max_tokens(req.max_tokens),
                 temperature=req.temperature,
                 max_slots=req.max_slots,
                 session_id=req.session_id,
@@ -616,6 +680,7 @@ def create_app(
                 soft_hit=result.soft_hit,
                 slot_id=result.slot_id,
                 context_tokens=slot_ctx,
+                spilled=result.spilled,
             )
             return CompletionResponse(
                 id=f"cmpl-{int(time.time() * 1000)}",
@@ -647,7 +712,7 @@ def create_app(
             )
         except Exception as e:
             logger.exception("completion failed")
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail=str(e)) from e
 
     @app.post("/v1/chat/completions")
     async def chat_completions(req: ChatCompletionRequest) -> Response:
@@ -680,9 +745,10 @@ def create_app(
             ctk = req.chat_template_kwargs
             if ctk is None:
                 ctk = {"enable_thinking": False}
-            result = engine.serve_chat(
+            result = await _run_engine(
+                engine.serve_chat,
                 messages,
-                max_tokens=req.max_tokens,
+                max_tokens=_resolve_max_tokens(req.max_tokens),
                 temperature=req.temperature,
                 max_slots=req.max_slots,
                 session_id=req.session_id,
@@ -704,6 +770,7 @@ def create_app(
                 soft_hit=result.soft_hit,
                 slot_id=result.slot_id,
                 context_tokens=slot_ctx,
+                spilled=result.spilled,
             )
             # OpenAI chat response shape. In tool mode the assistant
             # message carries tool_calls (and null content) and the
@@ -712,6 +779,8 @@ def create_app(
                 "role": "assistant",
                 "content": result.output_text,
             }
+            if result.reasoning:
+                assistant_message["reasoning_content"] = result.reasoning
             if result.tool_calls:
                 assistant_message["content"] = None
                 assistant_message["tool_calls"] = result.tool_calls
@@ -746,11 +815,29 @@ def create_app(
             )
         except Exception as e:
             logger.exception("chat completion failed")
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail=str(e)) from e
+
+    @app.get("/cache/list")
+    async def cache_list() -> dict:
+        return {
+            "entries": index.entries(),
+            "cache_dir": str(cache_dir),
+        }
 
     @app.delete("/cache/{cache_id}")
     async def cache_delete(cache_id: str) -> dict:
-        raise HTTPException(status_code=501, detail="delete not implemented yet")
+        from ..cache.blob import blob_path
+
+        removed = index.delete(cache_id)
+        blob = blob_path(cache_dir, cache_id)
+        if blob.exists():
+            blob.unlink()
+        if not removed:
+            raise HTTPException(
+                status_code=404,
+                detail=f"cache_id {cache_id!r} not found",
+            )
+        return {"status": "deleted", "cache_id": cache_id}
 
     return app
 

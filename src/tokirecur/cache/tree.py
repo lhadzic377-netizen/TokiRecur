@@ -4,6 +4,14 @@ Tracks KV blocks by (prefix_length, prefix_hash) so that multiple cache
 entries sharing a prefix share the underlying KV tensors instead of
 duplicating them on disk.
 
+STATUS: dormant. The recycling engine (see ``core/recycling.py``)
+instantiates a default ``TreeCache`` (rooted at ``TOKI_SLOT_SAVE_DIR``)
+but no longer drives it: routing is purely in-memory slot reuse, and the
+``?action=save`` / ``?action=restore`` disk round-trips were removed
+because they corrupted KV precision (cached outputs diverged from
+baseline). ``TreeCache`` is kept importable so the design can be revived
+behind a precision-safe backend.
+
 Design
 ------
 
@@ -26,22 +34,21 @@ When a new prompt arrives, we compute the prefix hash for each block and
 look up the corresponding block files. If we have blocks for the first
 N tokens of the prompt, we have a cache hit of depth N.
 
-In production this relies on llama-server's `?action=save` and
-`?action=restore` endpoints for the full slot state. The tree cache is a
-data-structure layer on top: it tracks which blocks are "hot" (frequently
-reused) and should be served from the persistent slot pool rather than
-the save/restore cycle.
+In production this used to rely on llama-server's `?action=save` and
+`?action=restore` endpoints for the full slot state; that round-trip was
+removed for correctness. The tree cache remains a data-structure layer
+on top: it tracks which blocks are "hot" (frequently reused) and could
+be served from the persistent slot pool rather than the save/restore
+cycle, should the disk path ever be revived.
 """
 
 from __future__ import annotations
 
 import hashlib
 import logging
-import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
 
 logger = logging.getLogger(__name__)
 
@@ -136,16 +143,29 @@ class TreeCache:
         return blocks
 
     def lookup(self, cache_id: str, token_ids: list[int]) -> int:
-        """Return the number of leading tokens for which we already
-        have KV blocks on disk. This is the "tree hit depth" — a quick
-        check independent of the embedding-based index."""
-        blocks = block_ids_for_tokens(cache_id, token_ids)
-        depth = 0
-        for i, bid in enumerate(blocks):
-            if not cache_path_for(self.cache_dir, bid).exists():
-                return depth
-            depth = min((i + 1) * BLOCK_SIZE, len(token_ids))
-        return depth
+        """Return the number of leading tokens we have KV for on disk.
+
+        Looks up by ``cache_id`` (the content-addressed prompt ID).
+        Returns ``len(token_ids)`` if a ``.trkv`` digest sidecar OR a
+        ``.bin`` payload exists at the cache root or under
+        ``blocks/``, ``0`` otherwise. Either signal indicates that a
+        previous request persisted enough KV to restore the prefix.
+
+        Per-block slicing is preserved in :meth:`register` for callers
+        that want it; the whole-prompt lookup is what the recycling
+        engine actually drives in production, because llama-server's
+        ``?action=save`` writes one file per slot rather than per
+        64-token block.
+        """
+        for candidate in (
+            self.cache_dir / f"{cache_id}.trkv",
+            self.cache_dir / f"{cache_id}.bin",
+            self.blocks_dir / f"{cache_id}.bin",
+            self.blocks_dir / f"{cache_id}.trkv",
+        ):
+            if candidate.exists():
+                return len(token_ids)
+        return 0
 
     def unregister(self, cache_id: str) -> None:
         """Remove an entry's block references. Blocks that are no longer

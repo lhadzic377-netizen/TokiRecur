@@ -21,7 +21,6 @@ from tokirecur.web.server import (
     create_web_app,
 )
 
-
 # ── Fakes ──────────────────────────────────────────────────────────────
 
 

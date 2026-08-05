@@ -1,8 +1,9 @@
 """Process lifecycle for the local llama-server managed by `toki up`.
 
-We keep it simple: a state directory under /tmp/toki with one PID file
-per managed process, and start/stop/status helpers. No systemd, no
-docker, no daemons-of-daemons — just os.fork + signal handling.
+We keep it simple: a state directory under ~/.local/state/tokirecur
+(override with TOKI_STATE_DIR) with one PID file per managed process,
+and start/stop/status helpers. No systemd, no docker, no
+daemons-of-daemons — just os.fork + signal handling.
 """
 
 from __future__ import annotations
@@ -14,17 +15,25 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Optional
 
 import httpx
 
 logger = logging.getLogger(__name__)
 
-STATE_DIR = Path(os.environ.get("TOKI_STATE_DIR", "/tmp/toki"))
+STATE_DIR = Path(os.environ.get("TOKI_STATE_DIR", str(Path.home() / ".local/state/tokirecur")))
 LLAMA_PID = STATE_DIR / "llama-server.pid"
 DAEMON_PID = STATE_DIR / "tokid.pid"
 LLAMA_LOG = STATE_DIR / "llama-server.log"
 DAEMON_LOG = STATE_DIR / "tokid.log"
+
+# systemd sets INVOCATION_ID in the environment of every service process;
+# use it to decide whether to detach spawned children. Detaching is the
+# right call for `toki up` (the launcher should be able to exit without
+# killing the stack) but wrong under systemd (the wrapper is the cgroup
+# owner; detached children survive cgroup kills and become orphaned
+# zombies when the wrapper is reaped).
+_UNDER_SYSTEMD = bool(os.environ.get("INVOCATION_ID"))
+_DETACH = not _UNDER_SYSTEMD
 
 
 def _state_dir() -> Path:
@@ -32,7 +41,7 @@ def _state_dir() -> Path:
     return STATE_DIR
 
 
-def _read_pid(path: Path) -> Optional[int]:
+def _read_pid(path: Path) -> int | None:
     if not path.exists():
         return None
     try:
@@ -67,7 +76,7 @@ def _wait_for(url: str, timeout: float = 180.0) -> bool:
     return False
 
 
-def find_llama_server() -> Optional[str]:
+def find_llama_server() -> str | None:
     """Locate the llama-server binary."""
     from shutil import which
     return which("llama-server") or which("/usr/local/bin/llama-server")
@@ -104,7 +113,7 @@ def start_llama_server(
     port: int = 8088,
     ctx_size: int = 8192,
     n_gpu_layers: int = 99,
-    extra_args: Optional[list[str]] = None,
+    extra_args: list[str] | None = None,
     wait: bool = True,
 ) -> int:
     """Start llama-server. Returns the PID. If already running, returns
@@ -130,7 +139,7 @@ def start_llama_server(
         stdout=log,
         stderr=subprocess.STDOUT,
         stdin=subprocess.DEVNULL,
-        start_new_session=True,
+        start_new_session=_DETACH,
     )
     LLAMA_PID.write_text(str(proc.pid))
     logger.info("llama-server pid=%d log=%s", proc.pid, LLAMA_LOG)
@@ -178,7 +187,7 @@ def start_daemon(
         env={**os.environ, "TOKI_BACKEND_URL": backend_url,
              "TOKI_SIMILARITY_THRESHOLD": str(similarity_threshold),
              "TOKI_MEMORY_BUDGET_MB": str(memory_budget_mb)},
-        start_new_session=True,
+        start_new_session=_DETACH,
     )
     DAEMON_PID.write_text(str(proc.pid))
     logger.info("toki daemon pid=%d log=%s", proc.pid, DAEMON_LOG)

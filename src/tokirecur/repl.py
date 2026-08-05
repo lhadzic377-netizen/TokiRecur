@@ -35,9 +35,10 @@ import shlex
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from rich.console import Console
 from rich.panel import Panel
@@ -171,7 +172,8 @@ def cmd_up(args: list[str], cfg: ReplConfig) -> None:
         )
         console.print(f"[green]toki daemon started[/green] (pid={pid})  http://127.0.0.1:{cfg.daemon_port}")
     else:
-        console.print(f"[yellow]start the daemon with: toki up --detach, or run `toki serve` in another shell[/yellow]")
+        console.print("[yellow]start the daemon with: toki up --detach,")
+        console.print("[yellow]or run `toki serve` in another shell[/yellow]")
 
 
 def cmd_down(args: list[str], cfg: ReplConfig) -> None:
@@ -523,8 +525,8 @@ def run() -> int:
     try:
         from prompt_toolkit import PromptSession
         from prompt_toolkit.completion import WordCompleter
-        from prompt_toolkit.history import FileHistory
         from prompt_toolkit.formatted_text import HTML
+        from prompt_toolkit.history import FileHistory
 
         completer = WordCompleter(list(COMMANDS.keys()), ignore_case=True)
         history_path = Path.home() / ".tokirecur_history"

@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  ruff:
+    name: Ruff lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install ruff
+        run: pip install ruff==0.4
+      - name: Lint
+        run: ruff check src/ tests/
+
+  unit-tests:
+    name: Unit tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python-version: "3.11"
+          - os: ubuntu-latest
+            python-version: "3.12"
+          - os: ubuntu-latest
+            python-version: "3.13"
+          - os: ubuntu-24.04-arm
+            python-version: "3.13"
+          - os: macos-14
+            python-version: "3.13"
+          - os: windows-latest
+            python-version: "3.13"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install package
+        run: pip install -e ".[dev]"
+      - name: Smoke import
+        run: python -c "import tokirecur; print('ok')"
+      - name: Run unit tests
+        run: pytest tests/unit/ -q
+
+  wheel:
+    name: Build universal wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install build
+        run: pip install build
+      - name: Build wheel + sdist
+        run: python -m build
+      - name: Assert platform-agnostic wheel
+        run: |
+          WHEEL=$(ls dist/*.whl)
+          echo "wheel: $WHEEL"
+          case "$WHEEL" in
+            *any.whl) echo "ok: platform-agnostic" ;;
+            *) echo "error: platform-specific wheel" >&2; exit 1 ;;
+          esac
+      - name: Install wheel in clean venv and smoke test
+        run: |
+          python -m venv /tmp/wheelvenv
+          /tmp/wheelvenv/bin/pip install "$(ls dist/*.whl)"
+          /tmp/wheelvenv/bin/python -c "import tokirecur; print('ok')"
+          /tmp/wheelvenv/bin/pytest -q tests/unit/test_tree_cache_wiring.py
