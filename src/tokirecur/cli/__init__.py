@@ -889,11 +889,13 @@ def install_llama(tag: str | None, dest: str | None, name: str | None) -> None:
     else:
         click.echo(f"error: unsupported platform '{system}'", err=True)
         raise SystemExit(1) from None
+    # llama.cpp release assets use x64/arm64 naming regardless of the
+    # Python platform.machine() spelling.
     machine = platform.machine().lower()
     if machine in ("amd64", "x86_64"):
-        arch = "x86_64"
+        arch = "x64"
     elif machine in ("arm64", "aarch64"):
-        arch = "aarch64"
+        arch = "arm64"
     else:
         click.echo(f"error: unsupported architecture '{machine}'", err=True)
         raise SystemExit(1) from None
@@ -927,7 +929,7 @@ def install_llama(tag: str | None, dest: str | None, name: str | None) -> None:
     assets = release["assets"]
     wanted = []
     if os_name == "windows":
-        wanted = ["win-vulkan", "win-cpu"]
+        wanted = [f"win-vulkan-{arch}", f"win-cpu-{arch}", "win-cpu", "win-vulkan"]
     elif os_name == "macos":
         wanted = [f"macos-{arch}", "macos-universal"]
     else:
@@ -943,9 +945,10 @@ def install_llama(tag: str | None, dest: str | None, name: str | None) -> None:
     candidates = [a for a in assets if _score(a["name"]) < len(wanted)]
     candidates.sort(key=lambda a: _score(a["name"]))
     if not candidates:
+        names = ", ".join(a["name"] for a in assets[:12])
         raise RuntimeError(
             f"no asset matching {wanted} in {tag_name}; "
-            "pick a newer tag with --tag"
+            f"available (first 12): {names}"
         )
     asset = candidates[0]
     click.echo(f"downloading {asset['name']} ({asset['size'] / 1048576:.0f} MB)...")
@@ -957,8 +960,19 @@ def install_llama(tag: str | None, dest: str | None, name: str | None) -> None:
             with open(zip_path, "wb") as fh:
                 for chunk in resp.iter_bytes(1 << 20):
                     fh.write(chunk)
-        with zipfile.ZipFile(zip_path) as zf:
-            zf.extractall(tmp)
+        # Windows assets are .zip; Linux/macOS are .tar.gz (and older
+        # releases used .zip everywhere, so accept both).
+        if zip_path.suffix == ".zip":
+            with zipfile.ZipFile(zip_path) as zf:
+                zf.extractall(tmp)
+        else:
+            import tarfile
+
+            with tarfile.open(zip_path) as tf:
+                try:
+                    tf.extractall(tmp, filter="data")
+                except TypeError:  # Python < 3.12
+                    tf.extractall(tmp)
 
         matches = sorted(Path(tmp).rglob(exe_name))
         if not matches:
