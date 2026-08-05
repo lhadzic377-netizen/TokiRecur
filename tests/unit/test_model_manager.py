@@ -31,7 +31,7 @@ def test_registry_defaults_created(env):
     specs = ctl.load_registry()
     assert [s.name for s in specs] == ["9b", "35b", "laguna"]
     by_name = {s.name: s for s in specs}
-    assert by_name["9b"].llama_port == 8088 and by_name["9b"].always_on
+    assert by_name["9b"].llama_port == 8088 and not by_name["9b"].always_on
     assert by_name["35b"].model_id == "qwen3.6-35b-a3b"
     assert by_name["laguna"].ctx_size == 131072
     assert by_name["laguna"].kv == "q8_0"
@@ -56,11 +56,11 @@ def test_get_model_unknown(env):
 
 
 def test_active_marker_roundtrip(env):
-    assert ctl.read_active() == "9b"  # falls back to always-on model
+    assert ctl.read_active() is None  # no preloaded/always-on models
     ctl.set_active("laguna")
     assert ctl.read_active() == "laguna"
     (ctl.ACTIVE_MARKER).write_text("gone")
-    assert ctl.read_active() == "9b"
+    assert ctl.read_active() is None  # stale marker, no always-on default
 
 
 def _specs(env):
@@ -184,6 +184,8 @@ def test_model_status_down(env):
 def test_use_model_tolerates_broken_always_on(env, monkeypatch):
     """A broken always-on spec (e.g. missing GGUF -> FileNotFoundError)
     must not abort the model switch."""
+    ctl.update_spec_field("9b", "always_on", "true")
+
     def fake_start_model(spec, wait=True):
         if spec.name == "9b":
             raise FileNotFoundError(f"model file not found: {spec.gguf}")

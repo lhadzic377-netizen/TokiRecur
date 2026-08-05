@@ -77,8 +77,20 @@ def _wait_for(url: str, timeout: float = 180.0) -> bool:
 
 
 def find_llama_server() -> str | None:
-    """Locate the llama-server binary."""
+    """Locate the llama-server binary.
+
+    Priority: the toki state bin dir (where `toki model install-llama`
+    puts builds) first, then PATH, then the classic systemd install
+    path. This makes `toki up` use the build we actually installed
+    instead of whatever random llama-server happens to be on PATH.
+    """
     from shutil import which
+
+    state_bin = STATE_DIR / "bin"
+    if state_bin.exists():
+        candidate = state_bin / ("llama-server.exe" if os.name == "nt" else "llama-server")
+        if candidate.exists():
+            return str(candidate)
     return which("llama-server") or which("/usr/local/bin/llama-server")
 
 
@@ -86,8 +98,9 @@ def llama_default_args(model: str, port: int, ctx_size: int, n_gpu_layers: int) 
     # Ensure required dirs exist before llama-server validates them.
     slot_save_dir = STATE_DIR / "slot-save"
     slot_save_dir.mkdir(parents=True, exist_ok=True)
+    binary = find_llama_server() or "llama-server"
     return [
-        "llama-server",
+        binary,
         "-m", model,
         "--host", "127.0.0.1",
         "--port", str(port),

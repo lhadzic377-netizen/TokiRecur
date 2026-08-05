@@ -36,14 +36,20 @@ Toki Recur is a Python app, so install it like one — with pip. While the repo 
 #    (one-time: sudo apt install pipx   or   python3 -m pip install --user pipx)
 pipx install "tokirecur[embeddings] @ git+https://x-access-token:<PAT>@github.com/lhadzic377-netizen/TokiRecur.git"
 
-# 2. Fetch the llama-server binary matching your OS/arch
+# 2. Fetch the llama-server binary matching your OS/arch and GPU.
+#    Auto-detects the best backend: ROCm (AMD/HIP), CUDA (NVIDIA),
+#    Vulkan, Metal (macOS), CPU. Pass --backend to override.
 toki model install-llama
 
-# 3. Run it
-toki serve
+# 3. Start a model — nothing is preloaded; you choose. Start with a
+#    registry model (list them with `toki model list`):
+toki model use 35b
+
+# 4. Talk to it
+toki chat
 ```
 
-`toki serve` is the API daemon (default 127.0.0.1:8787) that proxies to llama-server. Other ways in: bare `toki` opens the full-screen launcher, `toki chat` is the TUI chat, and `toki up` starts the whole stack.
+No models are started at install time — `toki model use <name>` is the explicit, documented way to bring one up (it starts llama-server + the toki daemon, stops competing big-model stacks, and wires opencode/openclaw/hermes at it). `toki up --model <path>` is the single-model equivalent for a raw GGUF. `toki serve` is **only** the API daemon (default 127.0.0.1:8787) that proxies to an already-running llama-server; it warns loudly if the backend isn't reachable instead of failing silently. Bare `toki` opens the full-screen launcher, `toki chat` is the TUI chat.
 
 Without pipx, install into your own venv instead:
 
@@ -58,20 +64,24 @@ If `toki` is not found after install, your shell's PATH may not include the venv
 
 Toki Recur is pure Python over the llama-server HTTP API — it runs on **any x86_64 or aarch64 device** running Linux, macOS or Windows, with whatever GPU backend your llama-server build has (ROCm, CUDA, Vulkan, Metal, CPU). The only per-platform piece is the llama-server binary itself:
 
-| Platform | Architecture | llama-server builds |
-|---|---|---|
-| Linux | x86_64, aarch64 | ROCm, CUDA, Vulkan, CPU |
-| macOS | x86_64, aarch64 (Apple Silicon) | Metal |
-| Windows | x86_64, aarch64 | ROCm, CUDA, Vulkan, CPU |
+| Platform | Architecture | llama-server builds | install-llama asset |
+|---|---|---|---|
+| Linux | x86_64 | ROCm (auto if HIP present), Vulkan, CPU | `ubuntu-rocm-7.2-x64`, `ubuntu-vulkan-x64`, `ubuntu-x64` |
+| Linux | aarch64 | Vulkan, CPU | `ubuntu-vulkan-arm64`, `ubuntu-arm64` |
+| macOS | x86_64, arm64 | Metal (also runs CPU-only) | `macos-x64`, `macos-arm64` |
+| Windows | x86_64 | CUDA (auto if NVIDIA), ROCm/HIP, Vulkan, CPU | `win-cuda-13.3-x64`, `win-hip-radeon-x64`, `win-vulkan-x64`, `win-cpu-x64` |
+| Windows | aarch64 | CPU, Adreno OpenCL | `win-cpu-arm64` |
 
-CI runs the test suite on all three OSes (x86_64 + aarch64), executes the Linux and macOS system installers end-to-end, and runs `toki model install-llama` on all four platform legs (Linux x86_64/ARM, macOS Apple Silicon, Windows) then executes the downloaded llama-server binary. Windows has no shell service manager, so it uses the pip package + `toki model install-llama` + a plain `toki serve` (or NSSM/scheduled task). The GPU backends are provided by the llama-server binary itself — Toki Recur talks to it over HTTP and is backend-agnostic.
+CI runs the test suite on all three OSes (x86_64 + aarch64), executes the Linux and macOS system installers end-to-end, and runs `toki model install-llama` on all four platform legs (Linux x86_64/ARM, macOS Apple Silicon, Windows) for both auto-detect and explicit `--backend cpu`, then executes the downloaded llama-server binary. Windows has no shell service manager, so it uses the pip package + `toki model install-llama` + a plain `toki serve` (or NSSM/scheduled task). The GPU backends are provided by the llama-server binary itself — Toki Recur talks to it over HTTP and is backend-agnostic.
 
 One command installs the matching official build:
 
 ```bash
-toki model install-llama            # latest release for this OS/arch
-toki model install-llama --tag b6400
-toki model install-llama --name 35b # ...and point a registry model at it
+toki model install-llama                 # auto-detect backend, latest release
+toki model install-llama --backend rocm  # force a backend (rocm|cuda|vulkan|metal|cpu)
+toki model install-llama --backend rocm --gfx 11.5.1  # set HSA_OVERRIDE_GFX_VERSION
+toki model install-llama --tag b6400     # pin a release tag
+toki model install-llama --name 35b      # ...and point a registry model at it
 ```
 
 Optional — run as a system daemon (dedicated user + service manager unit + log rotation, auto-start at boot). `install.sh`/`install.ps1` bootstrap the full stack themselves (own venv at `/opt/toki-recur`, package + llama-server + service unit), so they work standalone — they don't need the pipx install above:

@@ -57,8 +57,8 @@ DEFAULT_MODELS: list[dict[str, Any]] = [
         "kv": "f16",
         "max_tokens": 100000,
         "model_id": "qwen3.5-9b",
-        "always_on": True,
-        "boot": True,
+        "always_on": False,
+        "boot": False,
         "source": "default",
     },
     {
@@ -87,7 +87,7 @@ DEFAULT_MODELS: list[dict[str, Any]] = [
         "max_tokens": 64000,
         "model_id": "laguna-s-2.1",
         "always_on": False,
-        "boot": True,
+        "boot": False,
         "binary": str(Path.home() / "llama.cpp/build/bin/llama-server"),
         "source": "default",
     },
@@ -389,11 +389,15 @@ def save_registry(specs: list[ModelSpec], path: Path | None = None) -> Path:
     return reg
 
 
-def set_binary(name: str, binary: str, path: Path | None = None) -> ModelSpec:
+def set_binary(name: str, binary: str, path: Path | None = None,
+               env: dict[str, str] | None = None) -> ModelSpec:
     """Point an existing registry model at a different llama-server binary.
 
     Replaces ``binary`` in place, keeps everything else (env, ports,
-    extra_args) untouched, and rewrites the registry atomically.
+    extra_args) untouched, and rewrites the registry atomically. When
+    ``env`` is given, its entries are merged into the model's env
+    (existing keys win on conflict — callers supply only what they
+    want to add or override).
     """
     specs = load_registry(path)
     match = next((s for s in specs if s.name == name), None)
@@ -401,6 +405,10 @@ def set_binary(name: str, binary: str, path: Path | None = None) -> ModelSpec:
         raise KeyError(f"model '{name}' not in registry")
     raw = dict(match.raw)
     raw["binary"] = binary
+    if env:
+        merged = dict(raw.get("env") or {})
+        merged.update(env)
+        raw["env"] = merged
     updated = ModelSpec(raw=raw, **raw)
     save_registry([updated if s.name == name else s for s in specs], path)
     return updated

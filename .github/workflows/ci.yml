@@ -146,12 +146,32 @@ jobs:
           & $bin --version
 
   install-llama:
-    name: install-llama (${{ matrix.os }})
+    name: install-llama (${{ matrix.os }} / ${{ matrix.backend }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, macos-14, windows-latest]
+        include:
+          # auto: proves the detection fallback lands on a working build
+          # (hosted runners have no GPU, so this must end up CPU/metal).
+          - os: ubuntu-latest
+            backend: auto
+          - os: ubuntu-24.04-arm
+            backend: auto
+          - os: macos-14
+            backend: auto
+          - os: windows-latest
+            backend: auto
+          # Explicit CPU: pins the no-GPU path on every OS so a future
+          # detection change can't silently downgrade/upgrade it.
+          - os: ubuntu-latest
+            backend: cpu
+          - os: ubuntu-24.04-arm
+            backend: cpu
+          - os: macos-14
+            backend: cpu
+          - os: windows-latest
+            backend: cpu
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -162,7 +182,7 @@ jobs:
       - name: Fetch llama-server binary for this OS/arch
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: toki model install-llama
+        run: toki model install-llama --backend ${{ matrix.backend }}
       - name: Verify binary runs
         shell: bash
         run: |

@@ -76,11 +76,34 @@ def serve(
     memory_budget_mb: int,
 ) -> None:
     """Start the tokirecur daemon."""
+    import httpx
     import uvicorn  # noqa: F401
 
     from ..api.app import create_app
     from ..backend import LlamaServerBackend
     from ..index import BruteForceIndex
+
+    # Fail loudly-but-kindly: a daemon with no llama-server behind it
+    # looks exactly like "the server doesn't start". Ping the backend
+    # before binding so the user gets a hint instead of silence.
+    try:
+        r = httpx.get(f"{backend_url}/health", timeout=2.0)
+        if r.status_code >= 500:
+            raise httpx.HTTPStatusError(
+                f"backend unhealthy: {r.status_code}", request=r.request, response=r
+            )
+        click.echo(f"backend: {backend_url} reachable ({r.status_code})")
+    except Exception as e:
+        click.echo(
+            f"WARNING: llama-server not reachable at {backend_url} "
+            f"({type(e).__name__}: {e})",
+            err=True,
+        )
+        click.echo(
+            "  Start it with `toki up` or `toki model use <name>` "
+            "before sending requests, or pass --backend-url.",
+            err=True,
+        )
 
     backend = LlamaServerBackend(backend_url)
     index = BruteForceIndex(ctx.obj["db"])
@@ -853,6 +876,117 @@ def pull(repo: str, name: str | None, gguf_file: str | None, ctx_size: int,
         )
 
 
+def _detect_gpu_backend(os_name: str) -> str:
+    """Best-guess GPU backend for this machine, without admin access."""
+    import shutil as _shutil
+
+    if os_name == "macos":
+        # llama.cpp macOS assets are always the Metal build (which also
+        # runs on CPU-only Macs).
+        return "metal"
+    if os_name == "windows":
+        if _shutil.which("nvidia-smi") or os.environ.get("CUDA_PATH"):
+            return "cuda"
+        if _shutil.which("hipconfig") or Path(
+            "C:/Program Files/AMD/ROCm"
+        ).exists():
+            return "rocm"
+        if _shutil.which("vulkaninfo"):
+            return "vulkan"
+        return "cpu"
+    # Linux
+    if _shutil.which("hipconfig") or Path("/opt/rocm").exists():
+        return "rocm"
+    if _shutil.which("vulkaninfo") or Path(
+        "/usr/lib/x86_64-linux-gnu/libvulkan.so.1"
+    ).exists():
+        return "vulkan"
+    return "cpu"
+
+
+def _asset_patterns(os_name: str, arch: str) -> list[tuple[str, str]]:
+    """Ordered (backend, asset-substring) pairs for this OS/arch.
+
+    Earlier entries win when several assets match. Generic "ubuntu-x64"
+    is deliberately last so GPU builds are preferred when both exist.
+    """
+    if os_name == "macos":
+        return [("metal", f"macos-{arch}"), ("metal", "macos-universal")]
+    if os_name == "windows":
+        if arch == "x64":
+            return [
+                ("cuda", "win-cuda-13.3-x64"),
+                ("cuda", "win-cuda-12.4-x64"),
+                ("rocm", "win-hip-radeon-x64"),
+                ("vulkan", "win-vulkan-x64"),
+                ("cpu", "win-cpu-x64"),
+            ]
+        # arm64 Windows: only CPU (and Adreno OpenCL) builds exist.
+        return [
+            ("vulkan", "win-opencl-adreno-arm64"),
+            ("cpu", "win-cpu-arm64"),
+        ]
+    if arch == "x64":
+        return [
+            ("rocm", "ubuntu-rocm-"),
+            ("vulkan", "ubuntu-vulkan-x64"),
+            ("cpu", "ubuntu-x64"),
+        ]
+    return [
+        ("vulkan", "ubuntu-vulkan-arm64"),
+        ("cpu", "ubuntu-arm64"),
+    ]
+
+
+def _pick_asset(
+    assets: list[dict],
+    patterns: list[tuple[str, str]],
+) -> tuple[dict | None, str | None]:
+    """Return (best asset, backend) or (None, None)."""
+    best: tuple[int, dict, str] | None = None
+    for a in assets:
+        low = a.get("name", "").lower()
+        for i, (backend, frag) in enumerate(patterns):
+            if frag in low:
+                if best is None or i < best[0]:
+                    best = (i, a, backend)
+                break
+    if best is None:
+        return None, None
+    _, asset, backend = best
+    return asset, backend
+
+
+def _detect_gfx_version() -> str | None:
+    """Parse `rocminfo` for the first gfxNNN target (e.g. gfx1151)."""
+    import re
+    import shutil
+    import subprocess
+
+    rocminfo = shutil.which("rocminfo")
+    if not rocminfo:
+        return None
+    try:
+        out = subprocess.run(
+            [rocminfo], capture_output=True, text=True, timeout=30
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    m = re.search(r"\bgfx(\d{4})\b", out)
+    if not m:
+        return None
+    digits = m.group(1)
+    # gfx1151 -> 11.5.1 (ROCm's HSA_OVERRIDE_GFX_VERSION spelling).
+    return f"{digits[0:2]}.{digits[2]}.{digits[3]}"
+
+
+def _rocm_env(gfx: str | None) -> dict[str, str]:
+    env = {"GGML_CUDA_ENABLE_UNIFIED_MEMORY": "1"}
+    if gfx:
+        env["HSA_OVERRIDE_GFX_VERSION"] = gfx
+    return env
+
+
 @model.command("install-llama")
 @click.option("--tag", default=None,
               help="llama.cpp release tag to install, e.g. b6400 "
@@ -861,17 +995,32 @@ def pull(repo: str, name: str | None, gguf_file: str | None, ctx_size: int,
               help="Install directory (default: the toki state bin dir).")
 @click.option("--name", default=None,
               help="Registry model to point at the installed binary, e.g. 35b.")
-def install_llama(tag: str | None, dest: str | None, name: str | None) -> None:
-    """Download the llama-server binary for this OS/arch.
+@click.option("--backend", default="auto",
+              type=click.Choice(["auto", "rocm", "cuda", "vulkan", "metal", "cpu"]),
+              help="GPU backend to install (default: auto-detect).")
+@click.option("--gfx", "gfx", default=None,
+              help="HSA_OVERRIDE_GFX_VERSION for ROCm builds, e.g. 11.5.1 "
+                   "(default: detected from rocminfo).")
+def install_llama(tag: str | None, dest: str | None, name: str | None,
+                  backend: str, gfx: str | None) -> None:
+    """Download the llama-server binary for this OS/arch and GPU backend.
 
-    Fetches the matching llama.cpp release asset (linux → ubuntu build,
-    macOS → Metal build, windows → CPU/Vulkan build; x86_64 and aarch64
-    both supported), extracts llama-server and its sidecar libraries
-    into the toki state bin dir, and optionally rewrites a registry
-    model's ``binary`` to point at it.
+    Fetches the matching llama.cpp release asset (ROCm, CUDA, Vulkan,
+    Metal or CPU; x86_64 and aarch64 both supported), extracts
+    llama-server and its sidecar libraries into the toki state bin dir,
+    self-checks the binary, and optionally rewrites a registry model's
+    ``binary`` (plus the ROCm env block) to point at it.
+
+    ``--backend`` defaults to auto-detect: Linux prefers ROCm when a
+    HIP toolchain is present, then Vulkan, then CPU; Windows prefers
+    CUDA, then ROCm/HIP, then Vulkan, then CPU; macOS always uses the
+    Metal build. When the requested backend has no asset for this arch
+    (e.g. ROCm on arm64 Linux), the next available backend is used and
+    a note is printed.
     """
     import platform
     import shutil
+    import subprocess
     import tempfile
     import zipfile
 
@@ -900,6 +1049,29 @@ def install_llama(tag: str | None, dest: str | None, name: str | None) -> None:
         click.echo(f"error: unsupported architecture '{machine}'", err=True)
         raise SystemExit(1) from None
 
+    if backend == "auto":
+        backend = _detect_gpu_backend(os_name)
+        click.echo(f"backend: auto-detected {backend} ({os_name}/{arch})")
+    elif backend == "metal" and os_name != "macos":
+        click.echo("error: --backend metal is only available on macOS", err=True)
+        raise SystemExit(1) from None
+    elif backend == "rocm" and os_name == "macos":
+        click.echo("error: --backend rocm is not available on macOS", err=True)
+        raise SystemExit(1) from None
+    elif backend == "cuda" and os_name != "windows":
+        click.echo("error: --backend cuda is only available on Windows "
+                   "(llama.cpp ships no Linux CUDA assets)", err=True)
+        raise SystemExit(1) from None
+    else:
+        click.echo(f"backend: {backend} ({os_name}/{arch})")
+
+    patterns = _asset_patterns(os_name, arch)
+    requested_patterns = [p for p in patterns if p[0] == backend]
+    # When the requested backend has no asset for this arch, fall back
+    # through the priority list so installs never dead-end on a missing
+    # build (e.g. ROCm on arm64).
+    patterns = requested_patterns or patterns
+
     state_dir = Path(os.environ.get(
         "TOKI_STATE_DIR", str(Path.home() / ".local" / "state" / "tokirecur"),
     ))
@@ -926,7 +1098,7 @@ def install_llama(tag: str | None, dest: str | None, name: str | None) -> None:
             # llama.cpp auto-publishes releases continuously and
             # occasionally ships a tag with zero assets for a few
             # minutes; walk newest -> oldest and use the first release
-            # that actually carries assets.
+            # that carries an asset for our OS/arch/backend.
             releases = api.get(
                 "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=10",
                 headers=headers,
@@ -938,8 +1110,15 @@ def install_llama(tag: str | None, dest: str | None, name: str | None) -> None:
             if not isinstance(releases, builtins.list) or not releases:
                 raise RuntimeError("no releases found")
             release = next(
-                (r for r in releases if r.get("assets")), releases[0]
+                (r for r in releases
+                 if _pick_asset(r.get("assets") or [], patterns)[0]),
+                None,
             )
+            if release is None:
+                raise RuntimeError(
+                    "no recent llama.cpp release carries an asset for "
+                    f"{os_name}/{arch} backend '{backend}'"
+                )
     except RuntimeError:
         raise
     except Exception as e:
@@ -947,30 +1126,19 @@ def install_llama(tag: str | None, dest: str | None, name: str | None) -> None:
 
     tag_name = release["tag_name"]
     assets = release["assets"]
-    wanted = []
-    if os_name == "windows":
-        wanted = [f"win-vulkan-{arch}", f"win-cpu-{arch}", "win-cpu", "win-vulkan"]
-    elif os_name == "macos":
-        wanted = [f"macos-{arch}", "macos-universal"]
-    else:
-        wanted = [f"ubuntu-{arch}"]
-
-    def _score(name: str) -> int:
-        low = name.lower()
-        for i, frag in enumerate(wanted):
-            if frag in low:
-                return i
-        return len(wanted)
-
-    candidates = [a for a in assets if _score(a["name"]) < len(wanted)]
-    candidates.sort(key=lambda a: _score(a["name"]))
-    if not candidates:
-        names = ", ".join(a["name"] for a in assets[:12])
+    asset, matched_backend = _pick_asset(assets, patterns)
+    if asset is None:
+        names = ", ".join(a.get("name", "") for a in assets[:12])
         raise RuntimeError(
-            f"no asset matching {wanted} in {tag_name}; "
+            f"no asset matching {backend} for {os_name}/{arch} in {tag_name}; "
             f"available (first 12): {names}"
         )
-    asset = candidates[0]
+    if matched_backend != backend:
+        click.echo(
+            f"note: no {backend} build for {os_name}/{arch}; "
+            f"installing {matched_backend} instead"
+        )
+        backend = matched_backend
     click.echo(f"downloading {asset['name']} ({asset['size'] / 1048576:.0f} MB)...")
 
     with tempfile.TemporaryDirectory(prefix="toki-llama-") as tmp:
@@ -1007,13 +1175,41 @@ def install_llama(tag: str | None, dest: str | None, name: str | None) -> None:
         dst.chmod(dst.stat().st_mode | 0o111)
     click.echo(f"installed: {dst}")
 
+    # Self-check: the binary must actually execute before we call it good.
+    try:
+        probe = subprocess.run(
+            [str(dst), "--version"],
+            capture_output=True, text=True, timeout=30,
+        )
+        if probe.returncode == 0:
+            click.echo(f"self-check: {probe.stdout.strip().splitlines()[0] if probe.stdout.strip() else 'ok'}")
+        else:
+            click.echo(
+                f"warning: {dst} --version failed (rc={probe.returncode}): "
+                f"{probe.stderr.strip() or probe.stdout.strip()}",
+                err=True,
+            )
+    except (OSError, subprocess.SubprocessError) as e:
+        click.echo(f"warning: could not self-check {dst}: {e}", err=True)
+
     if name:
+        env = None
+        if backend in ("rocm",):
+            gfx_value = gfx or _detect_gfx_version()
+            env = _rocm_env(gfx_value)
+            if gfx_value:
+                click.echo(f"rocm: HSA_OVERRIDE_GFX_VERSION={gfx_value}")
+            else:
+                click.echo("rocm: no gfx target detected; set --gfx <ver> for "
+                           "HSA_OVERRIDE_GFX_VERSION")
         try:
-            spec = set_binary(name, str(dst))
+            spec = set_binary(name, str(dst), env=env)
         except KeyError as e:
             click.echo(f"error: {e}", err=True)
             raise SystemExit(1) from None
         click.echo(f"registry: '{spec.name}' now uses {dst}")
+        if env:
+            click.echo(f"registry: '{spec.name}' env updated: {env}")
     else:
         click.echo(f"registry: pass --name <model> to point a model at it "
                    f"(or edit `binary:` in "
