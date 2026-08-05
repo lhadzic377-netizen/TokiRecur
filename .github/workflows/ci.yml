@@ -57,37 +57,83 @@ jobs:
     name: Installer (Linux systemd)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Run install.sh
-        run: sudo ./install.sh
+      # The exact one-liner from the README: fetch install.sh from the
+      # private repo with the Actions token (repo-scoped Contents:read)
+      # and pipe it into a root shell.
+      - name: One-liner install (curl | sudo bash)
+        env:
+          INSTALL_TOKEN: ${{ github.token }}
+        run: |
+          TOKI_INSTALL_TOKEN="$INSTALL_TOKEN" bash -c 'curl -fsSL "https://x-access-token:$TOKI_INSTALL_TOKEN@raw.githubusercontent.com/lhadzic377-netizen/TokiRecur/master/install.sh" | sudo TOKI_INSTALL_TOKEN=$TOKI_INSTALL_TOKEN bash'
       - name: Verify artifacts
         run: |
           set -e
           id toki
+          /usr/local/bin/toki --version
+          test -f /opt/toki-recur/venv/bin/toki
           test -f /etc/systemd/system/toki-recur.service
           test -f /etc/toki-recur/toki.env
           test -f /etc/logrotate.d/toki-recur
           systemctl is-enabled toki-recur.service
-      - name: Disable (no toki binary on runner PATH)
-        run: sudo systemctl disable toki-recur.service
+          test -x /var/lib/toki-recur/.local/state/tokirecur/bin/llama-server
+          /var/lib/toki-recur/.local/state/tokirecur/bin/llama-server --version
+      - name: Start the daemon via systemd
+        run: |
+          set -e
+          sudo systemctl start toki-recur.service
+          sleep 3
+          systemctl is-active toki-recur.service
+          journalctl -u toki-recur.service --no-pager -n 20
+      - name: Stop + disable (leave runner clean)
+        run: sudo systemctl stop toki-recur.service && sudo systemctl disable toki-recur.service
 
   installer-macos:
     name: Installer (macOS launchd)
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
-      - name: Run install.sh
-        run: sudo ./install.sh
+      - name: One-liner install (curl | sudo bash)
+        env:
+          INSTALL_TOKEN: ${{ github.token }}
+        run: |
+          TOKI_INSTALL_TOKEN="$INSTALL_TOKEN" bash -c 'curl -fsSL "https://x-access-token:$TOKI_INSTALL_TOKEN@raw.githubusercontent.com/lhadzic377-netizen/TokiRecur/master/install.sh" | sudo TOKI_INSTALL_TOKEN=$TOKI_INSTALL_TOKEN bash'
       - name: Verify artifacts
         run: |
           set -e
           id toki
+          /usr/local/bin/toki --version
+          test -f /opt/toki-recur/venv/bin/toki
           test -f /Library/LaunchDaemons/com.tokirecur.plist
           test -f /etc/toki-recur/toki.env
           test -f /etc/toki-recur/toki-serve.sh
+          test -x /var/lib/toki-recur/.local/state/tokirecur/bin/llama-server
+          /var/lib/toki-recur/.local/state/tokirecur/bin/llama-server --version
           launchctl print system/com.tokirecur | head -3
-      - name: Unload (no toki binary on runner PATH)
+      - name: Unload (leave runner clean)
         run: sudo launchctl bootout system/com.tokirecur || true
+
+  installer-windows:
+    name: Installer (Windows)
+    runs-on: windows-latest
+    steps:
+      # The exact one-liner from the README, in PowerShell: WebClient
+      # DownloadString (URL basic-auth works across PS 5.1 and 7) piped
+      # into iex.
+      - name: One-liner install (WebClient | iex)
+        env:
+          INSTALL_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $env:TOKI_INSTALL_TOKEN = "$env:INSTALL_TOKEN"
+          (New-Object System.Net.WebClient).DownloadString("https://x-access-token:$env:TOKI_INSTALL_TOKEN@raw.githubusercontent.com/lhadzic377-netizen/TokiRecur/master/install.ps1") | iex
+      - name: Verify artifacts
+        shell: pwsh
+        run: |
+          $toki = Join-Path $env:LOCALAPPDATA 'tokirecur\venv\Scripts\toki.exe'
+          Test-Path $toki
+          & $toki --version
+          $bin = Join-Path $env:USERPROFILE '.local\state\tokirecur\bin\llama-server.exe'
+          Test-Path $bin
+          & $bin --version
 
   install-llama:
     name: install-llama (${{ matrix.os }})

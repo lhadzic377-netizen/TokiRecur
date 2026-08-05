@@ -21,7 +21,8 @@ EnvironmentFile=/etc/toki-recur/toki.env
 
 # The daemon itself — listens on 127.0.0.1:8787 by default. Set
 # TOKI_AUTH_TOKEN in the env file to allow external clients.
-ExecStart=/usr/bin/toki serve \
+# (install.sh links /usr/local/bin/toki -> venv binary)
+ExecStart=/usr/local/bin/toki serve \
     --host 0.0.0.0 \
     --port 8787 \
     --backend-url http://127.0.0.1:8088

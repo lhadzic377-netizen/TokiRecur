@@ -29,6 +29,24 @@ The total wall-clock latency improves only 5% because generation (predict) domin
 
 ## Quick start
 
+One command, on any supported OS. While the repo is private the one-liners need a read-only token (a fine-grained PAT with **Contents: read** on `lhadzic377-netizen/TokiRecur` only — create/revoke at https://github.com/settings/personal-access-tokens); once the repo is public they work token-free.
+
+Linux / macOS:
+
+```bash
+TOKI_INSTALL_TOKEN=<PAT> bash -c 'curl -fsSL "https://x-access-token:$TOKI_INSTALL_TOKEN@raw.githubusercontent.com/lhadzic377-netizen/TokiRecur/master/install.sh" | sudo TOKI_INSTALL_TOKEN=$TOKI_INSTALL_TOKEN bash'
+```
+
+Windows (PowerShell):
+
+```powershell
+$env:TOKI_INSTALL_TOKEN='<PAT>'; (New-Object System.Net.WebClient).DownloadString("https://x-access-token:$env:TOKI_INSTALL_TOKEN@raw.githubusercontent.com/lhadzic377-netizen/TokiRecur/master/install.ps1") | iex
+```
+
+The bootstrap installs everything: a Python 3.10+ venv, the package (with embeddings extras), the matching llama-server binary (`toki model install-llama`), and on Linux/macOS the service manager unit (systemd / launchd) — then leaves you with a running-service summary. Re-running it updates in place. CI executes these exact one-liners on Ubuntu, macOS, and Windows and starts the installed daemon.
+
+Manual install (alternative):
+
 ```bash
 # 1. Create venv and install (recommended — keeps deps isolated)
 python3 -m venv .venv
@@ -61,12 +79,13 @@ toki model install-llama --tag b6400
 toki model install-llama --name 35b # ...and point a registry model at it
 ```
 
-System-wide daemon installs (dedicated user + service manager unit + log rotation):
+System-wide daemon installs (dedicated user + service manager unit + log rotation) are included in the one-liner above, or run directly from a checkout:
 
 ```bash
 sudo ./install.sh                   # Linux  -> systemd + logrotate
 sudo ./install.sh                   # macOS  -> launchd (LaunchDaemon)
-# Windows: pip install . && toki model install-llama && toki serve
+# Windows: install.ps1 (see the one-liner above); run `toki serve` yourself
+#          or wrap it in NSSM / a scheduled task.
 ```
 
 Or point `binary:` at any llama-server on PATH in the registry (`~/.config/tokirecur/models.yaml`). Override locations per-machine with `TOKI_MODEL_REGISTRY` (config) and `TOKI_STATE_DIR` (logs/pid/bin). On Windows the systemd service commands are unavailable (reported cleanly); the RAM guard uses GlobalMemoryStatusEx, and on macOS the UMA/RAM guard uses `sysctl hw.memsize`.
