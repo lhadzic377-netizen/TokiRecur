@@ -1085,7 +1085,21 @@ def service_logs(name: str) -> None:
     raise SystemExit(svc_logs(name))
 
 
+def _version() -> str:
+    try:
+        from importlib.metadata import version
+
+        return version("tokirecur")
+    except Exception:
+        return "0.1.0"  # running from source without an install
+
+
 def main() -> int:
+    # `--version` must be handled here: the dispatch below routes unknown
+    # flags into the argparse-based benchmark runner.
+    if len(sys.argv) > 1 and sys.argv[1] in ("--version", "-V"):
+        click.echo(f"toki, version {_version()}")
+        return 0
     # Known subcommands. Anything else (no args, or a flag) prints help
     # and shows stack status instead of running a multi-minute benchmark.
     if len(sys.argv) == 1:

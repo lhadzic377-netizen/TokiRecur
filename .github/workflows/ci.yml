@@ -59,12 +59,18 @@ jobs:
     steps:
       # The exact one-liner from the README: fetch install.sh from the
       # private repo with the Actions token (repo-scoped Contents:read)
-      # and pipe it into a root shell.
+      # and pipe it into a root shell. Retries guard against GitHub's raw
+      # CDN lagging behind a fresh push (stale or briefly-404 content).
       - name: One-liner install (curl | sudo bash)
         env:
           INSTALL_TOKEN: ${{ github.token }}
         run: |
-          TOKI_INSTALL_TOKEN="$INSTALL_TOKEN" bash -c 'curl -fsSL "https://x-access-token:$TOKI_INSTALL_TOKEN@raw.githubusercontent.com/lhadzic377-netizen/TokiRecur/master/install.sh" | sudo TOKI_INSTALL_TOKEN=$TOKI_INSTALL_TOKEN bash'
+          URL="https://x-access-token:$INSTALL_TOKEN@raw.githubusercontent.com/lhadzic377-netizen/TokiRecur/master/install.sh"
+          for i in $(seq 1 20); do
+            curl -fsSL "$URL" 2>/dev/null | grep -q "bootstrap installer" && break
+            sleep 10
+          done
+          TOKI_INSTALL_TOKEN="$INSTALL_TOKEN" curl -fsSL "$URL" | sudo TOKI_INSTALL_TOKEN="$INSTALL_TOKEN" bash
       - name: Verify artifacts
         run: |
           set -e
@@ -95,7 +101,12 @@ jobs:
         env:
           INSTALL_TOKEN: ${{ github.token }}
         run: |
-          TOKI_INSTALL_TOKEN="$INSTALL_TOKEN" bash -c 'curl -fsSL "https://x-access-token:$TOKI_INSTALL_TOKEN@raw.githubusercontent.com/lhadzic377-netizen/TokiRecur/master/install.sh" | sudo TOKI_INSTALL_TOKEN=$TOKI_INSTALL_TOKEN bash'
+          URL="https://x-access-token:$INSTALL_TOKEN@raw.githubusercontent.com/lhadzic377-netizen/TokiRecur/master/install.sh"
+          for i in $(seq 1 20); do
+            curl -fsSL "$URL" 2>/dev/null | grep -q "bootstrap installer" && break
+            sleep 10
+          done
+          TOKI_INSTALL_TOKEN="$INSTALL_TOKEN" curl -fsSL "$URL" | sudo TOKI_INSTALL_TOKEN="$INSTALL_TOKEN" bash
       - name: Verify artifacts
         run: |
           set -e
@@ -117,14 +128,25 @@ jobs:
     steps:
       # The exact one-liner from the README, in PowerShell: WebClient
       # DownloadString (URL basic-auth works across PS 5.1 and 7) piped
-      # into iex.
+      # into iex. Retries guard against GitHub's raw CDN lagging behind
+      # a fresh push (stale or briefly-404 content).
       - name: One-liner install (WebClient | iex)
         env:
           INSTALL_TOKEN: ${{ github.token }}
         shell: pwsh
         run: |
+          $url = "https://x-access-token:$env:INSTALL_TOKEN@raw.githubusercontent.com/lhadzic377-netizen/TokiRecur/master/install.ps1"
+          $script = $null
+          foreach ($i in 1..20) {
+            try {
+              $s = (New-Object System.Net.WebClient).DownloadString($url)
+              if ($s -match 'bootstrap installer') { $script = $s; break }
+            } catch { }
+            Start-Sleep -Seconds 10
+          }
+          if (-not $script) { throw "one-liner fetch failed (raw CDN not propagated)" }
           $env:TOKI_INSTALL_TOKEN = "$env:INSTALL_TOKEN"
-          (New-Object System.Net.WebClient).DownloadString("https://x-access-token:$env:TOKI_INSTALL_TOKEN@raw.githubusercontent.com/lhadzic377-netizen/TokiRecur/master/install.ps1") | iex
+          iex $script
       - name: Verify artifacts
         shell: pwsh
         run: |
