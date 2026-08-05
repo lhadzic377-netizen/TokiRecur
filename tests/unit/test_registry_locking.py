@@ -15,6 +15,11 @@ import yaml
 
 from tokirecur import ctl
 
+# _flock is an fcntl-based lock that is a documented no-op on platforms
+# without fcntl (Windows relies on atomic-rename alone); the blocking
+# semantics these tests assert only exist where fcntl does.
+pytest.importorskip("fcntl")
+
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):

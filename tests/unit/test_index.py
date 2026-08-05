@@ -27,13 +27,17 @@ def _orthogonal(dim: int = 4, axis: int = 0) -> list[float]:
 
 class TestBruteForceIndex:
     def test_empty_search(self):
-        with tempfile.NamedTemporaryFile(suffix=".sqlite") as f:
-            idx = BruteForceIndex(f.name)
+        # NamedTemporaryFile keeps an open handle that Windows won't share
+        # with sqlite; use a real path in a temp dir instead.
+        with tempfile.TemporaryDirectory() as d:
+            idx = BruteForceIndex(Path(d) / "idx.sqlite")
             assert idx.search([0.1, 0.2, 0.3]) is None
 
     def test_insert_and_find(self):
-        with tempfile.NamedTemporaryFile(suffix=".sqlite") as f:
-            idx = BruteForceIndex(f.name)
+        # NamedTemporaryFile keeps an open handle that Windows won't share
+        # with sqlite; use a real path in a temp dir instead.
+        with tempfile.TemporaryDirectory() as d:
+            idx = BruteForceIndex(Path(d) / "idx.sqlite")
             e = _make_entry("a", "prompt A", [1.0, 0.0, 0.0, 0.0])
             idx.insert(e)
             m = idx.search([0.9, 0.1, 0.0, 0.0])
@@ -42,16 +46,20 @@ class TestBruteForceIndex:
             assert m.similarity > 0.9
 
     def test_best_match_wins(self):
-        with tempfile.NamedTemporaryFile(suffix=".sqlite") as f:
-            idx = BruteForceIndex(f.name)
+        # NamedTemporaryFile keeps an open handle that Windows won't share
+        # with sqlite; use a real path in a temp dir instead.
+        with tempfile.TemporaryDirectory() as d:
+            idx = BruteForceIndex(Path(d) / "idx.sqlite")
             idx.insert(_make_entry("x", "x axis", _orthogonal(4, 0)))
             idx.insert(_make_entry("y", "y axis", _orthogonal(4, 1)))
             m = idx.search([0.99, 0.01, 0.0, 0.0])
             assert m.cache_id == "x"
 
     def test_touch_updates_last_used(self):
-        with tempfile.NamedTemporaryFile(suffix=".sqlite") as f:
-            idx = BruteForceIndex(f.name)
+        # NamedTemporaryFile keeps an open handle that Windows won't share
+        # with sqlite; use a real path in a temp dir instead.
+        with tempfile.TemporaryDirectory() as d:
+            idx = BruteForceIndex(Path(d) / "idx.sqlite")
             e = _make_entry("a", "p", [1.0, 0.0])
             idx.insert(e)
             idx.touch("a")
@@ -59,8 +67,10 @@ class TestBruteForceIndex:
             assert idx.search([1.0, 0.0]).cache_id == "a"
 
     def test_evict_lru(self):
-        with tempfile.NamedTemporaryFile(suffix=".sqlite") as f:
-            idx = BruteForceIndex(f.name)
+        # NamedTemporaryFile keeps an open handle that Windows won't share
+        # with sqlite; use a real path in a temp dir instead.
+        with tempfile.TemporaryDirectory() as d:
+            idx = BruteForceIndex(Path(d) / "idx.sqlite")
             for i in range(5):
                 idx.insert(_make_entry(f"k{i}", f"p{i}", [float(i), 1.0], n_past=10))
             n = idx.evict_lru(target_bytes=2000)
@@ -70,8 +80,10 @@ class TestBruteForceIndex:
             assert stats["entries"] < 5
 
     def test_stats(self):
-        with tempfile.NamedTemporaryFile(suffix=".sqlite") as f:
-            idx = BruteForceIndex(f.name)
+        # NamedTemporaryFile keeps an open handle that Windows won't share
+        # with sqlite; use a real path in a temp dir instead.
+        with tempfile.TemporaryDirectory() as d:
+            idx = BruteForceIndex(Path(d) / "idx.sqlite")
             for i in range(3):
                 idx.insert(_make_entry(f"k{i}", f"p{i}", [1.0, 0.0], n_past=10))
             s = idx.stats()
