@@ -82,13 +82,16 @@ fi
 mkdir -p /etc/toki-recur
 mkdir -p /var/lib/toki-recur
 mkdir -p /var/log/toki-recur
-chown -R toki:toki /var/lib/toki-recur /var/log/toki-recur
+# Numeric GID: macOS's sysadminctl creates no user-private group (unlike
+# Linux useradd), so the name would be an "illegal group name" there.
+TOKI_GID="$(id -g toki)"
+chown -R "toki:$TOKI_GID" /var/lib/toki-recur /var/log/toki-recur
 
 # ---- Install env file (shared by both platforms) ----
 
 if [[ ! -f /etc/toki-recur/toki.env ]]; then
     echo "[+] creating env file /etc/toki-recur/toki.env"
-    install -m 0600 -o root -g toki "$ENV_SRC" /etc/toki-recur/toki.env
+    install -m 0600 -o root -g "$TOKI_GID" "$ENV_SRC" /etc/toki-recur/toki.env
 fi
 
 # If caller passed TOKI_AUTH_TOKEN, write it to the env file.
