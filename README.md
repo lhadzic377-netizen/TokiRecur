@@ -51,7 +51,7 @@ Toki Recur is pure Python over the llama-server HTTP API — it runs on **any x8
 | macOS | x86_64, aarch64 (Apple Silicon) | Metal |
 | Windows | x86_64, aarch64 | ROCm, CUDA, Vulkan, CPU |
 
-CI runs the test suite on all three OSes (x86_64 + aarch64) and executes the Linux and macOS system installers end-to-end; Windows has no shell service manager, so it uses the pip package + `toki model install-llama` + a plain `toki serve` (or NSSM/scheduled task). The GPU backends are provided by the llama-server binary itself — Toki Recur talks to it over HTTP and is backend-agnostic.
+CI runs the test suite on all three OSes (x86_64 + aarch64), executes the Linux and macOS system installers end-to-end, and runs `toki model install-llama` on all four platform legs (Linux x86_64/ARM, macOS Apple Silicon, Windows) then executes the downloaded llama-server binary. Windows has no shell service manager, so it uses the pip package + `toki model install-llama` + a plain `toki serve` (or NSSM/scheduled task). The GPU backends are provided by the llama-server binary itself — Toki Recur talks to it over HTTP and is backend-agnostic.
 
 One command installs the matching official build:
 

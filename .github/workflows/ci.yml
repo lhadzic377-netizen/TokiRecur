@@ -89,6 +89,44 @@ jobs:
       - name: Unload (no toki binary on runner PATH)
         run: sudo launchctl bootout system/com.tokirecur || true
 
+  install-llama:
+    name: install-llama (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-14, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install package
+        run: pip install -e .
+      - name: Fetch llama-server binary for this OS/arch
+        run: toki model install-llama
+      - name: Verify binary runs
+        shell: bash
+        run: |
+          set -e
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            BIN="$HOME/.local/state/tokirecur/bin/llama-server.exe"
+          else
+            BIN="$HOME/.local/state/tokirecur/bin/llama-server"
+          fi
+          test -f "$BIN"
+          "$BIN" --version
+      - name: Service manager refusal on Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set +e
+          OUT=$(toki service install 2>&1)
+          RC=$?
+          set -e
+          test "$RC" -ne 0
+          echo "$OUT" | grep -qi "systemd"
+
   wheel:
     name: Build universal wheel
     runs-on: ubuntu-latest
