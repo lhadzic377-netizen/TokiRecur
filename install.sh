@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # Toki Recur one-shot bootstrap installer (Linux systemd / macOS launchd).
 #
+# The primary install path is pip (see README "Quick start": pipx install
+# from the private git URL, then `toki model install-llama`). This script
+# is the optional system-daemon setup: it bootstraps its own full stack —
+# Python 3.10+ check, source at /opt/toki-recur/src, venv + package,
+# llama-server binary, dedicated user, env file, service unit.
+#
 # Full install from zero to a running daemon:
 #   1. require Python 3.10+
 #   2. materialise the app source at /opt/toki-recur/src

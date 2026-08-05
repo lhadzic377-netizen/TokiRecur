@@ -1,5 +1,10 @@
 # Toki Recur bootstrap installer (Windows).
 #
+# The primary install path is pip (see README "Quick start": pipx install
+# from the private git URL, then `toki model install-llama`). This script
+# is the optional standalone bootstrap: source under %LOCALAPPDATA%,
+# venv + package, llama-server binary, user-PATH hook.
+#
 # Full install from zero to a working CLI + llama-server:
 #   1. require Python 3.10+
 #   2. materialise the app source under %LOCALAPPDATA%\tokirecur\src

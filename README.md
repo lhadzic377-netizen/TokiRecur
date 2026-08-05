@@ -29,32 +29,27 @@ The total wall-clock latency improves only 5% because generation (predict) domin
 
 ## Quick start
 
-One command, on any supported OS. While the repo is private the one-liners need a read-only token (a fine-grained PAT with **Contents: read** on `lhadzic377-netizen/TokiRecur` only — create/revoke at https://github.com/settings/personal-access-tokens); once the repo is public they work token-free.
-
-Linux / macOS:
+Toki Recur is a Python app, so install it like one — with pip. While the repo is private, the install URL carries a read-only token (a fine-grained PAT with **Contents: read** on `lhadzic377-netizen/TokiRecur` only — create/revoke at https://github.com/settings/personal-access-tokens). The token appears in your shell history; that's the private-repo tax.
 
 ```bash
-TOKI_INSTALL_TOKEN=<PAT> bash -c 'curl -fsSL -H "Accept: application/vnd.github.raw" -H "Authorization: Bearer $TOKI_INSTALL_TOKEN" "https://api.github.com/repos/lhadzic377-netizen/TokiRecur/contents/install.sh?ref=master" | sudo TOKI_INSTALL_TOKEN=$TOKI_INSTALL_TOKEN bash'
+# 1. Install the CLI (pipx isolates it in its own venv and puts toki on PATH)
+#    (one-time: sudo apt install pipx   or   python3 -m pip install --user pipx)
+pipx install "git+https://x-access-token:<PAT>@github.com/lhadzic377-netizen/TokiRecur.git[embeddings]"
+
+# 2. Fetch the llama-server binary matching your OS/arch
+toki model install-llama
+
+# 3. Run it
+toki serve
 ```
 
-Windows (PowerShell):
+`toki serve` is the API daemon (default 127.0.0.1:8787) that proxies to llama-server. Other ways in: bare `toki` opens the full-screen launcher, `toki chat` is the TUI chat, and `toki up` starts the whole stack.
 
-```powershell
-$env:TOKI_INSTALL_TOKEN='<PAT>'; $j=irm -Headers @{Authorization='Bearer '+$env:TOKI_INSTALL_TOKEN} 'https://api.github.com/repos/lhadzic377-netizen/TokiRecur/contents/install.ps1?ref=master'; iex ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($j.content)))
-```
-
-The bootstrap installs everything: a Python 3.10+ venv, the package (with embeddings extras), the matching llama-server binary (`toki model install-llama`), and on Linux/macOS the service manager unit (systemd / launchd) — then leaves you with a running-service summary. Re-running it updates in place. CI executes these exact one-liners on Ubuntu, macOS, and Windows and starts the installed daemon.
-
-Manual install (alternative):
+Without pipx, install into your own venv instead:
 
 ```bash
-# 1. Create venv and install (recommended — keeps deps isolated)
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e .[embeddings,dev]
-
-# 2. Drop into the interactive shell
-toki
+python3 -m venv .venv && source .venv/bin/activate
+pip install "git+https://x-access-token:<PAT>@github.com/lhadzic377-netizen/TokiRecur.git[embeddings]"
 ```
 
 If `toki` is not found after install, your shell's PATH may not include the venv's bin directory. Either activate the venv (`source .venv/bin/activate`) or use the full path (`./.venv/bin/toki`). On systems where `pip install -e` writes a shim to `~/.local/bin` that points at system Python (and thus misses venv-only deps like `textual`), delete that shim and re-run `pip install -e .` from inside the activated venv so the shim is regenerated with the correct shebang.
@@ -79,14 +74,17 @@ toki model install-llama --tag b6400
 toki model install-llama --name 35b # ...and point a registry model at it
 ```
 
-System-wide daemon installs (dedicated user + service manager unit + log rotation) are included in the one-liner above, or run directly from a checkout:
+Optional — run as a system daemon (dedicated user + service manager unit + log rotation, auto-start at boot). `install.sh`/`install.ps1` bootstrap the full stack themselves (own venv at `/opt/toki-recur`, package + llama-server + service unit), so they work standalone — they don't need the pipx install above:
 
 ```bash
-sudo ./install.sh                   # Linux  -> systemd + logrotate
-sudo ./install.sh                   # macOS  -> launchd (LaunchDaemon)
-# Windows: install.ps1 (see the one-liner above); run `toki serve` yourself
-#          or wrap it in NSSM / a scheduled task.
+# Linux  -> systemd + logrotate   (macOS -> launchd LaunchDaemon)
+sudo ./install.sh
+
+# Windows (PowerShell): install.ps1; then `toki serve` yourself or wrap
+# it in NSSM / a scheduled task.
 ```
+
+CI executes both installers end-to-end on fresh runners and starts the installed daemon under systemd.
 
 Or point `binary:` at any llama-server on PATH in the registry (`~/.config/tokirecur/models.yaml`). Override locations per-machine with `TOKI_MODEL_REGISTRY` (config) and `TOKI_STATE_DIR` (logs/pid/bin). On Windows the systemd service commands are unavailable (reported cleanly); the RAM guard uses GlobalMemoryStatusEx, and on macOS the UMA/RAM guard uses `sysctl hw.memsize`.
 
