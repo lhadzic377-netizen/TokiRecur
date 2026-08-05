@@ -14,7 +14,7 @@
 #   nssm install TokiRecur "<venv>\Scripts\toki.exe" serve
 #
 # One-liner (private repo - token required):
-#   $env:TOKI_INSTALL_TOKEN='<PAT>'; $wc=New-Object System.Net.WebClient; $wc.Headers.Add('Accept','application/vnd.github.raw'); $wc.Headers.Add('Authorization','Bearer '+$env:TOKI_INSTALL_TOKEN); iex ($wc.DownloadString('https://api.github.com/repos/lhadzic377-netizen/TokiRecur/contents/install.ps1?ref=master'))
+#   $env:TOKI_INSTALL_TOKEN='<PAT>'; $j=irm -Headers @{Authorization='Bearer '+$env:TOKI_INSTALL_TOKEN} 'https://api.github.com/repos/lhadzic377-netizen/TokiRecur/contents/install.ps1?ref=master'; iex ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($j.content)))
 #
 # Re-runnable: re-runs re-fetch the source, reinstall the package, and
 # re-download the binary.
@@ -101,6 +101,10 @@ if ($LASTEXITCODE -ne 0) {
 
 # ---- llama-server binary ----
 
+# Reuse the install token as GITHUB_TOKEN so the GitHub API lookup in
+# install-llama is authenticated (unauthenticated lookups can hit the
+# shared-IP rate limit when several machines install concurrently).
+$env:GITHUB_TOKEN = $env:TOKI_INSTALL_TOKEN
 Write-Host "[+] fetching llama-server for this OS/arch (toki model install-llama)"
 & $Toki model install-llama
 if ($LASTEXITCODE -ne 0) {

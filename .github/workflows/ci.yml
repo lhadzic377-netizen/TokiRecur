@@ -124,19 +124,17 @@ jobs:
     name: Installer (Windows)
     runs-on: windows-latest
     steps:
-      # The exact one-liner from the README, in PowerShell: WebClient with
-      # explicit basic-auth Credentials (URL userinfo auth is unreliable
-      # in .NET) piped into iex. The contents API with the raw accept
-      # header is used instead of raw.githubusercontent.com — the raw CDN
-      # can serve stale content or 404 new file paths for a long time
-      # after a push.
-      - name: One-liner install (WebClient | iex)
+      # The exact one-liner from the README: irm fetches the contents API
+      # JSON, the base64 payload is decoded and piped into iex. No raw
+      # accept header, no redirects — WebClient/raw-fetch paths proved
+      # unreliable against the raw CDN and .NET redirects.
+      - name: One-liner install (irm | iex)
         env:
           INSTALL_TOKEN: ${{ github.token }}
         shell: pwsh
         run: |
           $env:TOKI_INSTALL_TOKEN = "$env:INSTALL_TOKEN"
-          $wc=New-Object System.Net.WebClient; $wc.Headers.Add('Accept','application/vnd.github.raw'); $wc.Headers.Add('Authorization','Bearer '+$env:INSTALL_TOKEN); iex ($wc.DownloadString('https://api.github.com/repos/lhadzic377-netizen/TokiRecur/contents/install.ps1?ref=master'))
+          $j=irm -Headers @{Authorization='Bearer '+$env:INSTALL_TOKEN} 'https://api.github.com/repos/lhadzic377-netizen/TokiRecur/contents/install.ps1?ref=master'; iex ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($j.content)))
       - name: Verify artifacts
         shell: pwsh
         run: |

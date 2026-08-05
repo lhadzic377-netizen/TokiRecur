@@ -24,7 +24,7 @@
 # and update all files in place.
 #
 # Windows: use the PowerShell one-liner instead (install.ps1):
-#   $env:TOKI_INSTALL_TOKEN='<PAT>'; $wc=New-Object System.Net.WebClient; $wc.Headers.Add('Accept','application/vnd.github.raw'); $wc.Headers.Add('Authorization','Bearer '+$env:TOKI_INSTALL_TOKEN); iex ($wc.DownloadString('https://api.github.com/repos/lhadzic377-netizen/TokiRecur/contents/install.ps1?ref=master'))
+#   $env:TOKI_INSTALL_TOKEN='<PAT>'; $j=irm -Headers @{Authorization='Bearer '+$env:TOKI_INSTALL_TOKEN} 'https://api.github.com/repos/lhadzic377-netizen/TokiRecur/contents/install.ps1?ref=master'; iex ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($j.content)))
 
 set -euo pipefail
 

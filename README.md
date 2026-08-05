@@ -40,7 +40,7 @@ TOKI_INSTALL_TOKEN=<PAT> bash -c 'curl -fsSL -H "Accept: application/vnd.github.
 Windows (PowerShell):
 
 ```powershell
-$env:TOKI_INSTALL_TOKEN='<PAT>'; $wc=New-Object System.Net.WebClient; $wc.Headers.Add('Accept','application/vnd.github.raw'); $wc.Headers.Add('Authorization','Bearer '+$env:TOKI_INSTALL_TOKEN); iex ($wc.DownloadString('https://api.github.com/repos/lhadzic377-netizen/TokiRecur/contents/install.ps1?ref=master'))
+$env:TOKI_INSTALL_TOKEN='<PAT>'; $j=irm -Headers @{Authorization='Bearer '+$env:TOKI_INSTALL_TOKEN} 'https://api.github.com/repos/lhadzic377-netizen/TokiRecur/contents/install.ps1?ref=master'; iex ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($j.content)))
 ```
 
 The bootstrap installs everything: a Python 3.10+ venv, the package (with embeddings extras), the matching llama-server binary (`toki model install-llama`), and on Linux/macOS the service manager unit (systemd / launchd) — then leaves you with a running-service summary. Re-running it updates in place. CI executes these exact one-liners on Ubuntu, macOS, and Windows and starts the installed daemon.
