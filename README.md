@@ -34,7 +34,7 @@ Toki Recur is a Python app, so install it like one — with pip. While the repo 
 ```bash
 # 1. Install the CLI (pipx isolates it in its own venv and puts toki on PATH)
 #    (one-time: sudo apt install pipx   or   python3 -m pip install --user pipx)
-pipx install "git+https://x-access-token:<PAT>@github.com/lhadzic377-netizen/TokiRecur.git[embeddings]"
+pipx install "tokirecur[embeddings] @ git+https://x-access-token:<PAT>@github.com/lhadzic377-netizen/TokiRecur.git"
 
 # 2. Fetch the llama-server binary matching your OS/arch
 toki model install-llama
@@ -49,7 +49,7 @@ Without pipx, install into your own venv instead:
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
-pip install "git+https://x-access-token:<PAT>@github.com/lhadzic377-netizen/TokiRecur.git[embeddings]"
+pip install "tokirecur[embeddings] @ git+https://x-access-token:<PAT>@github.com/lhadzic377-netizen/TokiRecur.git"
 ```
 
 If `toki` is not found after install, your shell's PATH may not include the venv's bin directory. Either activate the venv (`source .venv/bin/activate`) or use the full path (`./.venv/bin/toki`). On systems where `pip install -e` writes a shim to `~/.local/bin` that points at system Python (and thus misses venv-only deps like `textual`), delete that shim and re-run `pip install -e .` from inside the activated venv so the shim is regenerated with the correct shebang.
