@@ -15,7 +15,7 @@
 #
 # Usage:
 #   One-liner (private repo — token required):
-#     TOKI_INSTALL_TOKEN=<PAT> bash -c 'curl -fsSL -H "Accept: application/vnd.github.raw" "https://api.github.com/repos/lhadzic377-netizen/TokiRecur/contents/install.sh?ref=master" -u "x-access-token:$TOKI_INSTALL_TOKEN" | sudo TOKI_INSTALL_TOKEN=$TOKI_INSTALL_TOKEN bash'
+#     TOKI_INSTALL_TOKEN=<PAT> bash -c 'curl -fsSL -H "Accept: application/vnd.github.raw" -H "Authorization: Bearer $TOKI_INSTALL_TOKEN" "https://api.github.com/repos/lhadzic377-netizen/TokiRecur/contents/install.sh?ref=master" | sudo TOKI_INSTALL_TOKEN=$TOKI_INSTALL_TOKEN bash'
 #   From a checkout:
 #     sudo ./install.sh
 #     sudo TOKI_AUTH_TOKEN=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))') ./install.sh
@@ -24,7 +24,7 @@
 # and update all files in place.
 #
 # Windows: use the PowerShell one-liner instead (install.ps1):
-#   $env:TOKI_INSTALL_TOKEN='<PAT>'; $wc=New-Object System.Net.WebClient; $wc.Headers.Add('Accept','application/vnd.github.raw'); $wc.Credentials=New-Object System.Net.NetworkCredential($env:TOKI_INSTALL_TOKEN,''); iex ($wc.DownloadString('https://api.github.com/repos/lhadzic377-netizen/TokiRecur/contents/install.ps1?ref=master'))
+#   $env:TOKI_INSTALL_TOKEN='<PAT>'; $wc=New-Object System.Net.WebClient; $wc.Headers.Add('Accept','application/vnd.github.raw'); $wc.Headers.Add('Authorization','Bearer '+$env:TOKI_INSTALL_TOKEN); iex ($wc.DownloadString('https://api.github.com/repos/lhadzic377-netizen/TokiRecur/contents/install.ps1?ref=master'))
 
 set -euo pipefail
 

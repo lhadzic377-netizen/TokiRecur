@@ -34,13 +34,13 @@ One command, on any supported OS. While the repo is private the one-liners need 
 Linux / macOS:
 
 ```bash
-TOKI_INSTALL_TOKEN=<PAT> bash -c 'curl -fsSL -H "Accept: application/vnd.github.raw" "https://api.github.com/repos/lhadzic377-netizen/TokiRecur/contents/install.sh?ref=master" -u "x-access-token:$TOKI_INSTALL_TOKEN" | sudo TOKI_INSTALL_TOKEN=$TOKI_INSTALL_TOKEN bash'
+TOKI_INSTALL_TOKEN=<PAT> bash -c 'curl -fsSL -H "Accept: application/vnd.github.raw" -H "Authorization: Bearer $TOKI_INSTALL_TOKEN" "https://api.github.com/repos/lhadzic377-netizen/TokiRecur/contents/install.sh?ref=master" | sudo TOKI_INSTALL_TOKEN=$TOKI_INSTALL_TOKEN bash'
 ```
 
 Windows (PowerShell):
 
 ```powershell
-$env:TOKI_INSTALL_TOKEN='<PAT>'; $wc=New-Object System.Net.WebClient; $wc.Headers.Add('Accept','application/vnd.github.raw'); $wc.Credentials=New-Object System.Net.NetworkCredential($env:TOKI_INSTALL_TOKEN,''); iex ($wc.DownloadString('https://api.github.com/repos/lhadzic377-netizen/TokiRecur/contents/install.ps1?ref=master'))
+$env:TOKI_INSTALL_TOKEN='<PAT>'; $wc=New-Object System.Net.WebClient; $wc.Headers.Add('Accept','application/vnd.github.raw'); $wc.Headers.Add('Authorization','Bearer '+$env:TOKI_INSTALL_TOKEN); iex ($wc.DownloadString('https://api.github.com/repos/lhadzic377-netizen/TokiRecur/contents/install.ps1?ref=master'))
 ```
 
 The bootstrap installs everything: a Python 3.10+ venv, the package (with embeddings extras), the matching llama-server binary (`toki model install-llama`), and on Linux/macOS the service manager unit (systemd / launchd) — then leaves you with a running-service summary. Re-running it updates in place. CI executes these exact one-liners on Ubuntu, macOS, and Windows and starts the installed daemon.

@@ -14,7 +14,7 @@
 #   nssm install TokiRecur "<venv>\Scripts\toki.exe" serve
 #
 # One-liner (private repo - token required):
-#   $env:TOKI_INSTALL_TOKEN='<PAT>'; $wc=New-Object System.Net.WebClient; $wc.Headers.Add('Accept','application/vnd.github.raw'); $wc.Credentials=New-Object System.Net.NetworkCredential($env:TOKI_INSTALL_TOKEN,''); iex ($wc.DownloadString('https://api.github.com/repos/lhadzic377-netizen/TokiRecur/contents/install.ps1?ref=master'))
+#   $env:TOKI_INSTALL_TOKEN='<PAT>'; $wc=New-Object System.Net.WebClient; $wc.Headers.Add('Accept','application/vnd.github.raw'); $wc.Headers.Add('Authorization','Bearer '+$env:TOKI_INSTALL_TOKEN); iex ($wc.DownloadString('https://api.github.com/repos/lhadzic377-netizen/TokiRecur/contents/install.ps1?ref=master'))
 #
 # Re-runnable: re-runs re-fetch the source, reinstall the package, and
 # re-download the binary.
@@ -54,9 +54,9 @@ New-Item -ItemType Directory -Force -Path $Base | Out-Null
 Write-Host "[+] fetching TokiRecur source from GitHub"
 $Zip = Join-Path $Base 'src.zip'
 $wc = New-Object System.Net.WebClient
-# URL userinfo auth is unreliable in .NET — set explicit basic-auth
-# Credentials (token as username) for the codeload download.
-$wc.Credentials = New-Object System.Net.NetworkCredential($env:TOKI_INSTALL_TOKEN, '')
+# codeload uses git-style basic auth: username x-access-token, PAT as
+# password (URL userinfo auth is unreliable in .NET).
+$wc.Credentials = New-Object System.Net.NetworkCredential('x-access-token', $env:TOKI_INSTALL_TOKEN)
 $wc.DownloadFile(
     "https://codeload.github.com/lhadzic377-netizen/TokiRecur/zip/refs/heads/master",
     $Zip

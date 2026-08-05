@@ -68,7 +68,7 @@ jobs:
           INSTALL_TOKEN: ${{ github.token }}
         run: |
           TOKI_INSTALL_TOKEN="$INSTALL_TOKEN" curl -fsSL \
-            -H "Accept: application/vnd.github.raw" \
+            -H "Accept: application/vnd.github.raw" -H "Authorization: Bearer $INSTALL_TOKEN" \
             "https://x-access-token:$INSTALL_TOKEN@api.github.com/repos/lhadzic377-netizen/TokiRecur/contents/install.sh?ref=master" \
             | sudo TOKI_INSTALL_TOKEN="$INSTALL_TOKEN" bash
       - name: Verify artifacts
@@ -102,7 +102,7 @@ jobs:
           INSTALL_TOKEN: ${{ github.token }}
         run: |
           TOKI_INSTALL_TOKEN="$INSTALL_TOKEN" curl -fsSL \
-            -H "Accept: application/vnd.github.raw" \
+            -H "Accept: application/vnd.github.raw" -H "Authorization: Bearer $INSTALL_TOKEN" \
             "https://x-access-token:$INSTALL_TOKEN@api.github.com/repos/lhadzic377-netizen/TokiRecur/contents/install.sh?ref=master" \
             | sudo TOKI_INSTALL_TOKEN="$INSTALL_TOKEN" bash
       - name: Verify artifacts
@@ -136,7 +136,7 @@ jobs:
         shell: pwsh
         run: |
           $env:TOKI_INSTALL_TOKEN = "$env:INSTALL_TOKEN"
-          $wc=New-Object System.Net.WebClient; $wc.Headers.Add('Accept','application/vnd.github.raw'); $wc.Credentials=New-Object System.Net.NetworkCredential($env:INSTALL_TOKEN,''); iex ($wc.DownloadString('https://api.github.com/repos/lhadzic377-netizen/TokiRecur/contents/install.ps1?ref=master'))
+          $wc=New-Object System.Net.WebClient; $wc.Headers.Add('Accept','application/vnd.github.raw'); $wc.Headers.Add('Authorization','Bearer '+$env:INSTALL_TOKEN); iex ($wc.DownloadString('https://api.github.com/repos/lhadzic377-netizen/TokiRecur/contents/install.ps1?ref=master'))
       - name: Verify artifacts
         shell: pwsh
         run: |
