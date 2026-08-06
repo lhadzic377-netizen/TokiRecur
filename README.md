@@ -123,7 +123,12 @@ recycled-prefill LLM stack · AMD Ryzen AI
 | `→` / `Tab` | flip to the model picker (per-model health dots + ctx) |
 | `←` | back to the app list |
 | `Space` | pin the highlighted model in the picker |
+| `s` | open the settings pane (edit any registry field) |
 | `Esc` / `q` | quit |
+
+In the settings pane, `Enter` opens an edit modal with **Save** / **Cancel**
+buttons: `Save` (or `Enter` in the input) writes the field to the registry
+(`~/.config/tokirecur/models.yaml`) immediately; `Cancel` (or `Esc`) discards.
 
 The chat TUI and `toki status` share the same wordmark header and black + yellow palette.
 ```

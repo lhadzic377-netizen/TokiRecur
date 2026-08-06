@@ -19,10 +19,10 @@ from typing import Any
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical
+from textual.containers import Horizontal, Vertical
 from textual.reactive import reactive
 from textual.screen import ModalScreen
-from textual.widgets import Input, Label, Static
+from textual.widgets import Button, Input, Label, Static
 
 from ..ctl import load_registry, model_status
 from . import art
@@ -580,6 +580,15 @@ class SettingsEditScreen(ModalScreen[str | None]):
     #settings-input {
         margin-top: 1;
     }
+    #settings-buttons {
+        width: 100%;
+        height: auto;
+        margin-top: 1;
+        align: right middle;
+    }
+    #settings-buttons Button {
+        margin-left: 1;
+    }
     """
 
     def __init__(self, model_name: str, field: str, current: str) -> None:
@@ -595,12 +604,21 @@ class SettingsEditScreen(ModalScreen[str | None]):
             )
             yield Label(f"current: {self._current}", id="settings-current")
             yield Input(value=self._current, id="settings-input")
+            with Horizontal(id="settings-buttons"):
+                yield Button("Cancel", id="settings-cancel")
+                yield Button("Save", id="settings-save", variant="primary")
 
     def on_mount(self) -> None:
         self.query_one("#settings-input", Input).focus()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         self.dismiss(event.value)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "settings-save":
+            self.dismiss(self.query_one("#settings-input", Input).value)
+        else:
+            self.dismiss(None)
 
     def action_cancel(self) -> None:
         self.dismiss(None)

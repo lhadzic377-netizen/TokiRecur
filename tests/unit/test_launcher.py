@@ -228,6 +228,42 @@ def test_settings_edit_modal_rejects_bad_value():
     assert original == 8088
 
 
+def test_settings_edit_modal_has_save_button():
+    """The edit modal shows Cancel + Save buttons and Save commits the
+    typed value through the same callback Enter uses."""
+    from textual.widgets import Button
+
+    async def run_app():
+        app = LauncherApp()
+        async with app.run_test(size=(100, 34)) as pilot:
+            await pilot.pause()
+            await pilot.press("s")
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            screen = app.screen
+            buttons = {
+                b.id: b
+                for b in screen.query(Button)
+            }
+            assert "settings-save" in buttons
+            assert "settings-cancel" in buttons
+            assert buttons["settings-save"].label == "Save"
+            # Pressing Save dismisses with the current input value.
+            buttons["settings-save"].press()
+            await pilot.pause()
+            committed = app.specs[0].gguf
+        return committed
+
+    committed = asyncio.run(run_app())
+    assert committed == app_specs_first_gguf()
+
+
+def app_specs_first_gguf():
+    from tokirecur import ctl
+    return ctl.load_registry()[0].gguf
+
+
 def test_status_line_shows_pinned_model():
     async def run_app():
         app = LauncherApp()
