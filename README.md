@@ -126,9 +126,14 @@ recycled-prefill LLM stack · AMD Ryzen AI
 | `s` | open the settings pane (edit any registry field) |
 | `Esc` / `q` | quit |
 
-In the settings pane, `Enter` opens an edit modal with **Save** / **Cancel**
-buttons: `Save` (or `Enter` in the input) writes the field to the registry
-(`~/.config/tokirecur/models.yaml`) immediately; `Cancel` (or `Esc`) discards.
+In the settings pane, `Enter` opens an editor for the highlighted field.
+Sizing and enum fields (`ctx_size`, `max_tokens`, `parallel`, `kv`,
+`reasoning`, `always_on`, `boot`) open a **dropdown** of presets with a
+`custom…` option that falls back to the free-text editor; paths, ports
+and ids stay plain text. Both editors have **Save** / **Cancel**
+buttons: `Save` (or `Enter` in the input) writes the field to the
+registry (`~/.config/tokirecur/models.yaml`) immediately; `Cancel` (or
+`Esc`) discards.
 
 The chat TUI and `toki status` share the same wordmark header and black + yellow palette.
 ```

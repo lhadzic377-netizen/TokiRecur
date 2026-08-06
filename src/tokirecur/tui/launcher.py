@@ -22,7 +22,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.reactive import reactive
 from textual.screen import ModalScreen
-from textual.widgets import Button, Input, Label, Static
+from textual.widgets import Button, Input, Label, Select, Static
 
 from ..ctl import load_registry, model_status
 from . import art
@@ -249,15 +249,38 @@ class LauncherApp(App[dict | None]):
         return rows[idx]
 
     def action_edit_setting(self) -> None:
-        """Enter in settings: open the edit modal for the highlighted field."""
+        """Enter in settings: open the edit modal (dropdown or text) for
+        the highlighted field."""
         if self.focus_pane != "settings":
             return
         current = self._current_setting()
         if current is None:
             return
         name, field, value = current
-        screen = SettingsEditScreen(name, field, value)
-        self.push_screen(screen, self._on_edit_dismissed)
+        choices = _SETTINGS_CHOICES.get(field)
+        if choices is not None:
+            screen = SettingsChoiceScreen(name, field, value, choices)
+            self.push_screen(screen, self._on_choice_dismissed)
+        else:
+            screen = SettingsEditScreen(name, field, value)
+            self.push_screen(screen, self._on_edit_dismissed)
+
+    def _on_choice_dismissed(self, result: str | None) -> None:
+        """Commit a dropdown pick, or chain into the text modal for the
+        ``custom…`` option."""
+        if result is None:
+            self.notify("edit cancelled", timeout=2)
+            return
+        if result == _CUSTOM_VALUE:
+            current = self._current_setting()
+            if current is None:
+                return
+            name, field, value = current
+            self.push_screen(
+                SettingsEditScreen(name, field, value), self._on_edit_dismissed
+            )
+            return
+        self._on_edit_dismissed(result)
 
     def _on_edit_dismissed(self, new_value: str | None) -> None:
         """Commit the edit (or no-op on cancel). Called by the modal."""
@@ -485,6 +508,7 @@ class LauncherApp(App[dict | None]):
                 last_name = name
             indent = self._GUT + "    "
             line = Text(indent, end="")
+            dropdown = field in _SETTINGS_CHOICES
             if i == idx:
                 line.append("▌ ", style=f"bold {art.YELLOW}")
                 line.append(f"{field:<14}", style=f"bold {art.YELLOW}")
@@ -492,6 +516,8 @@ class LauncherApp(App[dict | None]):
             else:
                 line.append(f"{field:<14}", style=art.MUTED)
                 line.append(value, style="dim")
+            if dropdown:
+                line.append("  ▾", style="dim")
             out.append(line)
         return out
 
@@ -548,6 +574,65 @@ _SETTINGS_FIELDS: tuple[str, ...] = (
     "boot",
     "reasoning",
 )
+
+
+# Sentinel carried by the ``custom…`` dropdown option; the launcher
+# chains into the free-text editor when a user picks it.
+_CUSTOM_VALUE = "__custom__"
+
+# Fields that edit through a dropdown of presets instead of raw text.
+# Maps field -> {option label: value}. The ``custom…`` option opens the
+# text editor. Fields absent here keep the plain text modal.
+_SETTINGS_CHOICES: dict[str, dict[str, str]] = {
+    "ctx_size": {
+        "2048": "2048",
+        "4096": "4096",
+        "8192": "8192",
+        "16384": "16384",
+        "32768": "32768",
+        "65536": "65536",
+        "131072": "131072",
+        "custom…": _CUSTOM_VALUE,
+    },
+    "max_tokens": {
+        "256": "256",
+        "512": "512",
+        "1024": "1024",
+        "2048": "2048",
+        "4096": "4096",
+        "8192": "8192",
+        "custom…": _CUSTOM_VALUE,
+    },
+    "parallel": {
+        "1": "1",
+        "2": "2",
+        "4": "4",
+        "8": "8",
+        "custom…": _CUSTOM_VALUE,
+    },
+    "kv": {
+        "f16": "f16",
+        "f8": "f8",
+        "q8_0": "q8_0",
+        "q4_0": "q4_0",
+        "i8": "i8",
+        "i4": "i4",
+        "custom…": _CUSTOM_VALUE,
+    },
+    "reasoning": {
+        "auto": "auto",
+        "on": "on",
+        "off": "off",
+    },
+    "always_on": {
+        "true": "true",
+        "false": "false",
+    },
+    "boot": {
+        "true": "true",
+        "false": "false",
+    },
+}
 
 
 class SettingsEditScreen(ModalScreen[str | None]):
@@ -617,6 +702,102 @@ class SettingsEditScreen(ModalScreen[str | None]):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "settings-save":
             self.dismiss(self.query_one("#settings-input", Input).value)
+        else:
+            self.dismiss(None)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class SettingsChoiceScreen(ModalScreen[str | None]):
+    """Modal that asks for a new value from preset choices.
+
+    Dismisses with the selected value on Save (or the ``custom…``
+    sentinel when the user wants to type their own value), or ``None``
+    on Cancel / Escape. The launcher commits the value via
+    ``update_spec_field`` after dismiss.
+    """
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel", show=False, priority=True),
+    ]
+
+    DEFAULT_CSS = """
+    SettingsChoiceScreen {
+        align: center middle;
+    }
+    #settings-choice-dialog {
+        width: 70;
+        height: auto;
+        padding: 1 2;
+        background: $boost;
+        border: round $primary;
+    }
+    #settings-choice-dialog Label {
+        width: 100%;
+        content-align: center middle;
+    }
+    #settings-choice-select {
+        margin-top: 1;
+    }
+    #settings-buttons {
+        width: 100%;
+        height: auto;
+        margin-top: 1;
+        align: right middle;
+    }
+    #settings-buttons Button {
+        margin-left: 1;
+    }
+    """
+
+    def __init__(
+        self,
+        model_name: str,
+        field: str,
+        current: str,
+        choices: dict[str, str],
+    ) -> None:
+        super().__init__()
+        self._model_name = model_name
+        self._field = field
+        self._current = current
+        self._choices = choices
+
+    def compose(self) -> ComposeResult:
+        options = list(self._choices.items())
+        # Preselect the current value; if it is not one of the presets
+        # (case-insensitive), surface it as its own option so the user
+        # can keep it without touching anything.
+        selected = self._current
+        for _label, value in self._choices.items():
+            if value.lower() == self._current.lower():
+                selected = value
+                break
+        else:
+            options.insert(0, (self._current, self._current))
+        with Vertical(id="settings-choice-dialog"):
+            yield Label(
+                f"Edit  [b]{self._model_name}[/b]  ·  [b]{self._field}[/b]"
+            )
+            yield Label(f"current: {self._current}", id="settings-choice-current")
+            yield Select(
+                options,
+                value=selected,
+                id="settings-choice-select",
+                allow_blank=False,
+            )
+            with Horizontal(id="settings-buttons"):
+                yield Button("Cancel", id="settings-cancel")
+                yield Button("Save", id="settings-save", variant="primary")
+
+    def on_mount(self) -> None:
+        self.query_one("#settings-choice-select", Select).focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "settings-save":
+            selected = self.query_one("#settings-choice-select", Select).value
+            self.dismiss(None if selected is Select.BLANK else str(selected))
         else:
             self.dismiss(None)
 

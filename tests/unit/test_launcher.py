@@ -2,7 +2,23 @@
 
 import asyncio
 
+import pytest
+
+from tokirecur import ctl
 from tokirecur.tui.launcher import LAUNCH_APPS, LauncherApp
+
+
+@pytest.fixture(autouse=True)
+def isolated_registry(tmp_path, monkeypatch):
+    """Point every launcher test at a throwaway registry + active-marker
+    so running the suite never mutates the user's real config."""
+    reg = tmp_path / "models.yaml"
+    marker = tmp_path / "active-model"
+    monkeypatch.setattr(ctl, "DEFAULT_REGISTRY", reg)
+    monkeypatch.setattr(ctl, "ACTIVE_MARKER", marker)
+    monkeypatch.setenv("TOKI_MODEL_REGISTRY", str(reg))
+    monkeypatch.setenv("TOKI_ACTIVE_MODEL", str(marker))
+    return reg
 
 
 def test_apps_bind_to_pinned_model():
@@ -307,3 +323,112 @@ def test_right_opens_model_pane_and_enter_pins():
 
     app = asyncio.run(run_app())
     assert app.focus_pane == "launchers"
+
+
+# ── Settings dropdowns ─────────────────────────────────────────────────
+
+
+def test_settings_choices_map_covers_expected_fields():
+    """Preset dropdowns exist for sizing/enum fields, with ``custom…``
+    for the free-form ones and pure toggles for booleans."""
+    from tokirecur.tui.launcher import _CUSTOM_VALUE, _SETTINGS_CHOICES
+
+    assert "ctx_size" in _SETTINGS_CHOICES
+    assert "max_tokens" in _SETTINGS_CHOICES
+    assert "parallel" in _SETTINGS_CHOICES
+    assert "kv" in _SETTINGS_CHOICES
+    assert "reasoning" in _SETTINGS_CHOICES
+    assert "always_on" in _SETTINGS_CHOICES
+    assert "boot" in _SETTINGS_CHOICES
+    # Paths/ids stay free text.
+    for field in ("gguf", "llama_port", "daemon_port", "model_id", "binary"):
+        assert field not in _SETTINGS_CHOICES
+    # Int/enum fields offer a custom escape hatch.
+    assert _CUSTOM_VALUE in _SETTINGS_CHOICES["ctx_size"].values()
+    assert _CUSTOM_VALUE in _SETTINGS_CHOICES["kv"].values()
+    # Booleans are pure toggles.
+    assert set(_SETTINGS_CHOICES["always_on"].values()) == {"true", "false"}
+    assert set(_SETTINGS_CHOICES["boot"].values()) == {"true", "false"}
+    # Sensible presets.
+    assert _SETTINGS_CHOICES["kv"]["f16"] == "f16"
+    assert _SETTINGS_CHOICES["kv"]["q8_0"] == "q8_0"
+    assert _SETTINGS_CHOICES["reasoning"]["auto"] == "auto"
+
+
+def _setting_row_index(app, field: str) -> int:
+    """Index of the first settings row for `field` across all models."""
+    from tokirecur.tui.launcher import _settings_rows
+
+    rows = _settings_rows(app.specs)
+    for i, (_name, f, _value) in enumerate(rows):
+        if f == field:
+            return i
+    raise AssertionError(f"no settings row for field {field!r}")
+
+
+def test_settings_dropdown_save_commits_preset():
+    """Enter on a dropdown field opens a choice modal; picking a preset
+    and pressing Save writes it to the registry."""
+    from textual.widgets import Select
+
+    async def run_app():
+        app = LauncherApp()
+        async with app.run_test(size=(100, 34)) as pilot:
+            await pilot.pause()
+            await pilot.press("s")
+            await pilot.pause()
+            app.settings_idx = _setting_row_index(app, "kv")
+            await pilot.press("enter")
+            await pilot.pause()
+            assert app.screen.__class__.__name__ == "SettingsChoiceScreen"
+            select = app.screen.query_one("#settings-choice-select", Select)
+            select.value = "q8_0"
+            await pilot.click("#settings-save")
+            await pilot.pause()
+            return app.specs[0].kv
+
+    assert asyncio.run(run_app()) == "q8_0"
+
+
+def test_settings_dropdown_preselects_unlisted_current_value():
+    """A registry value outside the presets (9b defaults to ctx 200000)
+    is surfaced as its own option so Save is a no-op-safe commit."""
+    from textual.widgets import Select
+
+    async def run_app():
+        app = LauncherApp()
+        async with app.run_test(size=(100, 34)) as pilot:
+            await pilot.pause()
+            await pilot.press("s")
+            await pilot.pause()
+            app.settings_idx = _setting_row_index(app, "ctx_size")
+            await pilot.press("enter")
+            await pilot.pause()
+            select = app.screen.query_one("#settings-choice-select", Select)
+            return select.value
+
+    assert asyncio.run(run_app()) == "200000"
+
+
+def test_settings_dropdown_custom_chains_to_text_modal():
+    """Picking ``custom…`` dismisses the choice modal and opens the
+    free-text editor for the same row."""
+    from tokirecur.tui.launcher import _CUSTOM_VALUE
+
+    async def run_app():
+        app = LauncherApp()
+        async with app.run_test(size=(100, 34)) as pilot:
+            await pilot.pause()
+            await pilot.press("s")
+            await pilot.pause()
+            app.settings_idx = _setting_row_index(app, "ctx_size")
+            await pilot.press("enter")
+            await pilot.pause()
+            select = app.screen.query_one("#settings-choice-select")
+            select.value = _CUSTOM_VALUE
+            await pilot.click("#settings-save")
+            await pilot.pause()
+            return app.screen.__class__.__name__
+
+    assert asyncio.run(run_app()) == "SettingsEditScreen"
+
