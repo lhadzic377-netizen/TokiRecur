@@ -763,13 +763,21 @@ def test_use_model_syncs_cli_configs(env, hf, monkeypatch):
 
 
 def test_resolve_max_tokens_floors_small_requests():
-    from tokirecur.api.app import MAX_TOKENS_FLOOR, _resolve_max_tokens
+    from tokirecur.api.app import (
+        MAX_TOKENS_FLOOR,
+        THINKING_TOKENS_FLOOR,
+        _resolve_max_tokens,
+    )
 
-    assert _resolve_max_tokens(8) == MAX_TOKENS_FLOOR
-    assert _resolve_max_tokens(0) == MAX_TOKENS_FLOOR
+    # Thinking is enabled by default (auto) → the higher floor so
+    # verbose reasoning leaves room for content.
+    assert _resolve_max_tokens(8) == THINKING_TOKENS_FLOOR
+    assert _resolve_max_tokens(0) == THINKING_TOKENS_FLOOR
+    # reasoning=off keeps the small floor.
+    assert _resolve_max_tokens(8, reasoning="off") == MAX_TOKENS_FLOOR
     # Larger requests are respected (never capped down).
     assert _resolve_max_tokens(2048) == 2048
-    assert _resolve_max_tokens(MAX_TOKENS_FLOOR) == MAX_TOKENS_FLOOR
+    assert _resolve_max_tokens(MAX_TOKENS_FLOOR, reasoning="off") == MAX_TOKENS_FLOOR
 
 
 def test_chat_completion_includes_reasoning_content(tmp_path, monkeypatch):
@@ -778,7 +786,7 @@ def test_chat_completion_includes_reasoning_content(tmp_path, monkeypatch):
     the request's small ``max_tokens`` is floored to the daemon's floor."""
     from fastapi.testclient import TestClient
 
-    from tokirecur.api.app import MAX_TOKENS_FLOOR, create_app
+    from tokirecur.api.app import THINKING_TOKENS_FLOOR, create_app
     from tokirecur.backend import LlamaServerBackend
     from tokirecur.core.recycling import RecyclingEngine, RecyclingResult
     from tokirecur.index import Index
@@ -816,7 +824,7 @@ def test_chat_completion_includes_reasoning_content(tmp_path, monkeypatch):
     assert msg["content"] == "Hello!"
     assert msg["reasoning_content"] == "thinking happened…"
     # The engine saw the floored budget, not the client's 8.
-    assert observed_max_tokens["v"] == MAX_TOKENS_FLOOR
+    assert observed_max_tokens["v"] == THINKING_TOKENS_FLOOR
 
 
 def test_chat_completion_stream_emits_reasoning_sse(tmp_path, monkeypatch):

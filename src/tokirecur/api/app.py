@@ -48,9 +48,12 @@ logger = logging.getLogger(__name__)
 # tokens on reasoning before producing visible content. If the client
 # sends a small `max_tokens`, llama-server cuts the model off inside
 # reasoning and returns `content: ""`. The daemon therefore floors the
-# budget at MAX_TOKENS_FLOOR so thinking models always answer; non-
-# thinking models stop on EOS regardless.
+# budget so thinking models always answer; non-thinking models stop on
+# EOS regardless. Verbose thinking models (e.g. Qwen3.5-35B-A3B reasons
+# ~570 tokens for a trivial prompt) need a much higher floor than the
+# 512 used when thinking is disabled.
 MAX_TOKENS_FLOOR = 512
+THINKING_TOKENS_FLOOR = 2048
 
 _FLOOR_WARNED = False
 
@@ -65,21 +68,22 @@ def _default_chat_template_kwargs(reasoning: str) -> dict:
     return {"enable_thinking": reasoning != "off"}
 
 
-def _resolve_max_tokens(requested: int) -> int:
-    """Floor at MAX_TOKENS_FLOOR without capping larger client requests.
-
-    Logs a one-time warning when a client's budget is silently raised.
+def _resolve_max_tokens(requested: int, reasoning: str = "auto") -> int:
+    """Floor at the thinking/non-thinking budget without capping larger
+    client requests. Logs a one-time warning when a client's budget is
+    silently raised.
     """
     global _FLOOR_WARNED
     requested = int(requested)
-    if requested < MAX_TOKENS_FLOOR and not _FLOOR_WARNED:
+    floor = THINKING_TOKENS_FLOOR if reasoning != "off" else MAX_TOKENS_FLOOR
+    if requested < floor and not _FLOOR_WARNED:
         _FLOOR_WARNED = True
         logger.warning(
             "client requested max_tokens=%d below the %d floor; "
             "budget raised so thinking models can finish reasoning",
             requested, MAX_TOKENS_FLOOR,
         )
-    return max(requested, MAX_TOKENS_FLOOR)
+    return max(requested, floor)
 
 
 class CompletionRequest(BaseModel):
@@ -511,8 +515,11 @@ def create_app(
         object_type = "chat.completion.chunk" if is_chat else "text_completion"
         # Thinking-mode headroom: never let llama-server cut a model off
         # inside its reasoning tokens. Cheap for non-thinking models
-        # (they stop on EOS).
-        max_tokens = _resolve_max_tokens(max_tokens)
+        # (they stop on EOS). Native completions can't think, so they
+        # get the non-thinking floor.
+        max_tokens = _resolve_max_tokens(
+            max_tokens, reasoning=default_reasoning if is_chat else "off"
+        )
 
         def chunk_with(
             delta: dict,
@@ -673,7 +680,7 @@ def create_app(
             result = await _run_engine(
                 engine.serve_native,
                 req.prompt,
-                max_tokens=_resolve_max_tokens(req.max_tokens),
+                max_tokens=_resolve_max_tokens(req.max_tokens, reasoning="off"),
                 temperature=req.temperature,
                 max_slots=req.max_slots,
                 session_id=req.session_id,
@@ -761,7 +768,7 @@ def create_app(
             result = await _run_engine(
                 engine.serve_chat,
                 messages,
-                max_tokens=_resolve_max_tokens(req.max_tokens),
+                max_tokens=_resolve_max_tokens(req.max_tokens, reasoning=default_reasoning),
                 temperature=req.temperature,
                 max_slots=req.max_slots,
                 session_id=req.session_id,
