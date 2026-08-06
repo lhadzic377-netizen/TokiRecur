@@ -550,7 +550,7 @@ Run on AMD Ryzen AI MAX+ 395, Qwen3.5-9B-Q4_K_M, max-tokens=32:
 
 ### realistic_mixed (216 prompts, 5 categories)
 
-**Composite: 92.0 / 100 (A+)**
+**Composite: 82.4 / 100 (A)**
 
 | Category | N | Hit rate | Avg reuse | TTFT Δ | Prefill skip |
 |---|---|---|---|---|---|
@@ -572,7 +572,7 @@ Output divergence: 46.8% byte-identical, median first-diff at char 15 (tail-end 
 
 ### stress_adversarial (301 prompts, 5 patterns)
 
-**Composite: 62.0 / 100 (C)**
+**Composite: 39.2 / 100 (F)**
 
 | Category | N | Hit rate | Avg reuse | TTFT Δ | Prefill skip |
 |---|---|---|---|---|---|
