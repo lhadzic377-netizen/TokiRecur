@@ -172,6 +172,7 @@ def start_daemon(
     backend_url: str = "http://127.0.0.1:8088",
     similarity_threshold: float = 0.85,
     memory_budget_mb: int = 8192,
+    reasoning: str = "auto",
     wait: bool = True,
 ) -> int:
     """Start the Toki Recur daemon (uvicorn). Returns the PID."""
@@ -199,7 +200,8 @@ def start_daemon(
         stdin=subprocess.DEVNULL,
         env={**os.environ, "TOKI_BACKEND_URL": backend_url,
              "TOKI_SIMILARITY_THRESHOLD": str(similarity_threshold),
-             "TOKI_MEMORY_BUDGET_MB": str(memory_budget_mb)},
+             "TOKI_MEMORY_BUDGET_MB": str(memory_budget_mb),
+             "TOKI_REASONING": reasoning},
         start_new_session=_DETACH,
     )
     DAEMON_PID.write_text(str(proc.pid))

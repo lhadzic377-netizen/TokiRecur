@@ -358,14 +358,13 @@ class TestChatStreamRouting:
         assert payload["messages"][-1]["content"] == "hi"
 
     @pytest.mark.asyncio
-    async def test_both_modes_pass_chat_template_kwargs_to_disable_thinking(
+    async def test_neither_mode_overrides_thinking_mode(
         self, monkeypatch, tmp_path,
     ):
-        """Regression: Qwen3.5-9B's thinking mode is on by default,
-        burning every available token on internal reasoning and
-        returning empty `content`. Both raw and cached payloads must
-        include `chat_template_kwargs: {enable_thinking: False}` so
-        the model produces visible output.
+        """The client must not force `enable_thinking` in either mode:
+        thinking is decided by the backend (daemon `reasoning` setting
+        in raw->llama-server and cached->daemon paths), so reasoning
+        deltas flow through to the TUI's thinking renderer.
         """
         monkeypatch.setattr(
             "tokirecur.tui.client.Path.home", lambda: tmp_path,
@@ -414,14 +413,10 @@ class TestChatStreamRouting:
 
             assert len(captured_payloads) == 1
             payload = captured_payloads[0]
-            assert "chat_template_kwargs" in payload, (
-                f"{mode} mode must include chat_template_kwargs to "
-                f"disable Qwen3.5 thinking mode; got keys: "
+            assert "chat_template_kwargs" not in payload, (
+                f"{mode} mode must not pin enable_thinking (the daemon "
+                f"decides from the model's reasoning setting); got keys: "
                 f"{list(payload.keys())}"
-            )
-            assert payload["chat_template_kwargs"].get("enable_thinking") is False, (
-                f"{mode} mode chat_template_kwargs should set "
-                f"enable_thinking=False; got {payload['chat_template_kwargs']!r}"
             )
 
     @pytest.mark.asyncio

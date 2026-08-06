@@ -148,7 +148,9 @@ class TestCompletionPayload:
         )
         assert endpoint == "http://raw:8088/v1/chat/completions"
         assert payload["cache_prompt"] is True
-        assert payload["chat_template_kwargs"] == {"enable_thinking": False}
+        # Thinking mode is decided by the backend (daemon / llama-server
+        # template default), not the web client.
+        assert "chat_template_kwargs" not in payload
         assert "session_id" not in payload
         assert payload["messages"] == [{"role": "user", "content": "hi"}]
 
@@ -165,7 +167,7 @@ class TestCompletionPayload:
         assert endpoint == "http://daemon:8787/v1/chat/completions"
         assert payload["session_id"] == "s1"
         assert payload["max_slots"] == 4
-        assert payload["chat_template_kwargs"] == {"enable_thinking": False}
+        assert "chat_template_kwargs" not in payload
         assert "cache_prompt" not in payload
 
 
@@ -354,7 +356,7 @@ class TestWsChat:
         assert stream_calls[0][2] == "http://daemon:8787/v1/chat/completions"
         sent = stream_calls[0][3]["json"]
         assert sent["session_id"] == "s1"
-        assert sent["chat_template_kwargs"] == {"enable_thinking": False}
+        assert "chat_template_kwargs" not in sent
 
     def test_raw_uses_llama_server_openai_with_cache_prompt(self, fake_async_client):
         fake = FakeHttpx(
@@ -382,7 +384,7 @@ class TestWsChat:
         assert stream_calls[0][2] == "http://raw:8088/v1/chat/completions"
         sent = stream_calls[0][3]["json"]
         assert sent["cache_prompt"] is True
-        assert sent["chat_template_kwargs"] == {"enable_thinking": False}
+        assert "chat_template_kwargs" not in sent
         assert "session_id" not in sent
 
     def test_abort_stops_stream_and_reports_partial(self, fake_async_client):

@@ -203,6 +203,13 @@ def _stream_openai(
                 if not choices:
                     continue
                 delta = choices[0].get("delta") or {}
+                # Thinking-mode deltas: render dimmed so the user sees
+                # the model's reasoning (clients that don't want it can
+                # ignore the field entirely).
+                reasoning = delta.get("reasoning_content") or ""
+                if reasoning:
+                    sys.stdout.write(f"\x1b[2m{reasoning}\x1b[0m")
+                    sys.stdout.flush()
                 tok = delta.get("content", "") or ""
                 if tok:
                     if first_token_time is None:

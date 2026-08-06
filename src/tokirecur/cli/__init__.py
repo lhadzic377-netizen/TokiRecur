@@ -840,10 +840,11 @@ def repair() -> None:
 @click.option("--use", "use_it", is_flag=True,
               help="Start the model stack and select it everywhere.")
 @click.option("--reasoning", "reasoning", default="auto",
-              type=click.Choice(["auto", "off"]),
+              type=click.Choice(["auto", "on", "off"]),
               help="How to handle thinking-mode models: 'auto' streams "
-                   "reasoning with headroom (default); 'off' passes "
-                   "--reasoning off to llama-server at launch.")
+                   "reasoning with headroom (default); 'on' forces "
+                   "thinking on; 'off' passes --reasoning off to "
+                   "llama-server at launch.")
 def pull(repo: str, name: str | None, gguf_file: str | None, ctx_size: int,
          kv: str, endpoint: str | None, use_it: bool,
          reasoning: str) -> None:

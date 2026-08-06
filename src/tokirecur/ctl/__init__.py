@@ -845,6 +845,8 @@ def _llama_args(spec: ModelSpec) -> list[str]:
         args += ["--cache-type-k", spec.kv, "--cache-type-v", spec.kv]
     if spec.reasoning == "off":
         args += ["--reasoning", "off"]
+    elif spec.reasoning == "on":
+        args += ["--reasoning", "on"]
     args += spec.extra_args
     return args
 
@@ -889,6 +891,7 @@ def start_model(spec: ModelSpec, wait: bool = True) -> None:
             **os.environ,
             "TOKI_BACKEND_URL": spec.llama_url,
             "TOKI_MAX_CONTEXT_TOKENS": str(spec.max_tokens),
+            "TOKI_REASONING": spec.reasoning,
         }
         proc = subprocess.Popen(
             [

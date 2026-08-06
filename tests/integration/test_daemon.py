@@ -70,13 +70,15 @@ def auth_client(auth_daemon_app):
 
 class TestDaemonChatStreaming:
     """The stream path must behave like the non-stream path: default
-    chat_template_kwargs (thinking mode off → visible content) and real
-    token-by-token streaming."""
+    thinking mode from the model's reasoning setting (enabled → visible
+    content + reasoning deltas) and real token-by-token streaming."""
 
     def test_stream_chat_defaults_ctk_and_streams_content(self, client):
         """Regression: the streaming chat path previously called
         serve_chat WITHOUT chat_template_kwargs, so Qwen3.5 burned all
-        tokens on reasoning and the TUI showed an empty answer."""
+        tokens on reasoning and the TUI showed an empty answer. The
+        default now enables thinking (from the reasoning setting) with
+        the max-token floor reserving headroom so content still lands."""
         r = client.post("/v1/chat/completions", json={
             "messages": [{"role": "user", "content": "Count from 1 to 5."}],
             "max_tokens": 64,
@@ -247,11 +249,11 @@ class TestDaemonCompletion:
         slot2 = r2.json()["cache"]["slot_id"]
         assert slot1 == slot2  # Session pinned
 
-    def test_daemon_defaults_chat_template_kwargs(self, client):
-        """Regression: the daemon must default `chat_template_kwargs` to
-        `{enable_thinking: False}` when the client doesn't specify it.
-        Without this default, Qwen3.5-9B burns every available token
-        on internal reasoning and returns empty `content`.
+    def test_daemon_defaults_thinking_enabled_and_content_nonempty(self, client):
+        """The daemon defaults `chat_template_kwargs` from the model's
+        `reasoning` setting: auto/on → `{enable_thinking: True}` so the
+        model emits reasoning, and the max-token floor reserves enough
+        budget that the response still contains visible content.
         """
         # Send a chat completion without chat_template_kwargs.
         r = client.post("/v1/chat/completions", json={
@@ -263,12 +265,18 @@ class TestDaemonCompletion:
         assert r.status_code == 200
         body = r.json()
         text = body["choices"][0]["message"]["content"]
-        # With thinking disabled, the model should produce visible
+        # With thinking enabled the model may emit reasoning first, but
+        # the max-token floor guarantees it still produces visible
         # content. The 0.8B test model answers "2" in a few tokens.
         assert text, (
-            f"daemon default must disable thinking mode so response is "
-            f"non-empty; got {text!r}"
+            f"daemon default must leave room for content after reasoning; "
+            f"got {text!r}"
         )
+        # Thinking is enabled but not forced: for a trivial prompt the
+        # model may emit an empty thinking block (surfaced as no
+        # reasoning_content) and go straight to the answer. The
+        # streaming test verifies reasoning deltas do flow when the
+        # model actually thinks.
 
 
 class TestDaemonSlotState:

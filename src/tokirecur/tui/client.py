@@ -253,12 +253,6 @@ class DaemonClient:
                 # consecutive messages in a session share a prefix, so
                 # multi-turn requests skip re-prefilling the history.
                 "cache_prompt": True,
-                # Disable Qwen3.5's thinking mode by default. Without
-                # this, the model burns every available token on internal
-                # reasoning and returns empty `content`. Other models
-                # ignore the field. Users who want thinking-mode can
-                # override via the daemon's /v1/chat/completions.
-                "chat_template_kwargs": {"enable_thinking": False},
             }
             target_label = "raw"
         elif mode == "cached":
@@ -271,8 +265,6 @@ class DaemonClient:
                 "stream": True,
                 "session_id": session_id,
                 "max_slots": 4,
-                # Disable Qwen3.5's thinking mode by default.
-                "chat_template_kwargs": {"enable_thinking": False},
             }
             target_label = "cached"
         else:

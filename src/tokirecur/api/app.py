@@ -55,6 +55,16 @@ MAX_TOKENS_FLOOR = 512
 _FLOOR_WARNED = False
 
 
+def _default_chat_template_kwargs(reasoning: str) -> dict:
+    """Qwen-style chat templates need an explicit ``enable_thinking``
+    kwarg. ``off`` disables thinking so the response contains only
+    visible content; anything else (``auto``/``on``) enables it so the
+    model emits reasoning the clients can render. Other templates
+    ignore the field.
+    """
+    return {"enable_thinking": reasoning != "off"}
+
+
 def _resolve_max_tokens(requested: int) -> int:
     """Floor at MAX_TOKENS_FLOOR without capping larger client requests.
 
@@ -209,6 +219,7 @@ def create_app(
     enable_auth: bool = True,
     enable_rate_limit: bool = True,
     max_context_tokens: int | None = None,
+    default_reasoning: str = "auto",
 ) -> FastAPI:
     started_at = time.time()
     rate_limiter = RateLimiter() if enable_rate_limit else None
@@ -528,10 +539,12 @@ def create_app(
         finish_reason: str | None = None
 
         if messages is not None and is_chat:
-            # Default: disable Qwen3.5's thinking mode so the response
-            # contains visible content (matches the non-stream path).
+            # Default thinking mode comes from the model's registry
+            # `reasoning` setting (threaded via TOKI_REASONING): 'off'
+            # disables Qwen-style thinking, anything else enables it so
+            # the response includes reasoning_content deltas.
             if chat_template_kwargs is None:
-                chat_template_kwargs = {"enable_thinking": False}
+                chat_template_kwargs = _default_chat_template_kwargs(default_reasoning)
             try:
                 result = None
                 async for item in engine.serve_chat_stream(
@@ -740,11 +753,11 @@ def create_app(
                     ),
                     media_type="text/event-stream",
                 )
-            # Default: disable Qwen3.5's thinking mode. The client
-            # can override by passing an explicit chat_template_kwargs.
+            # Default thinking mode from the model's `reasoning` setting;
+            # the client can override with explicit chat_template_kwargs.
             ctk = req.chat_template_kwargs
             if ctk is None:
-                ctk = {"enable_thinking": False}
+                ctk = _default_chat_template_kwargs(default_reasoning)
             result = await _run_engine(
                 engine.serve_chat,
                 messages,
@@ -855,6 +868,9 @@ def create_app_from_env() -> FastAPI:
                                 (llama-server n_ctx - max response tokens).
                                 Default 6144 (for -c 8192).
       TOKI_AUTH_TOKEN           optional; required for non-loopback binding
+      TOKI_REASONING            the model's `reasoning` registry setting
+                                (auto|on|off); decides whether the daemon
+                                defaults to enabling thinking mode.
     """
     from ..backend import LlamaServerBackend
     from ..index import BruteForceIndex
@@ -873,6 +889,7 @@ def create_app_from_env() -> FastAPI:
         similarity_threshold=float(os.environ.get("TOKI_SIMILARITY_THRESHOLD", "0.85")),
         memory_budget_mb=int(os.environ.get("TOKI_MEMORY_BUDGET_MB", "8192")),
         max_context_tokens=_env_int("TOKI_MAX_CONTEXT_TOKENS"),
+        default_reasoning=os.environ.get("TOKI_REASONING", "auto"),
     )
 
 

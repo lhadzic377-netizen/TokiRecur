@@ -507,6 +507,18 @@ def test_llama_args_appends_reasoning_off_for_off_spec(env):
     assert "off" in ctl._llama_args(spec_off)
 
 
+def test_llama_args_appends_reasoning_on_for_on_spec(env):
+    gguf = env / "9b.gguf"
+    gguf.write_bytes(b"dummy")
+    raw = dict(ctl.load_registry()[0].raw)
+    raw["gguf"] = str(gguf)
+    spec = ctl.ModelSpec(raw=raw, **raw)
+    spec.reasoning = "on"
+    args = ctl._llama_args(spec)
+    assert "--reasoning" in args
+    assert args[args.index("--reasoning") + 1] == "on"
+
+
 # ── Registry repair (legacy pulled entries) ────────────────────────
 
 

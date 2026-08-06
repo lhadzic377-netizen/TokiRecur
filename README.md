@@ -135,6 +135,11 @@ buttons: `Save` (or `Enter` in the input) writes the field to the
 registry (`~/.config/tokirecur/models.yaml`) immediately; `Cancel` (or
 `Esc`) discards.
 
+The `reasoning` field controls thinking mode: `auto`/`on` enable it —
+the model's reasoning is streamed (dimmed in `toki chat`, rendered as a
+separate block in the TUI chat), `off` passes `--reasoning off` to
+llama-server at launch. Changes take effect on the model's next start.
+
 The chat TUI and `toki status` share the same wordmark header and black + yellow palette.
 ```
 

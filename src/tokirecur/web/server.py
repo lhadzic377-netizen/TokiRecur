@@ -572,9 +572,6 @@ def _completion_payload(
         "max_tokens": max_tokens,
         "temperature": temperature,
         "stream": True,
-        # Disable Qwen3.5's thinking mode by default. Without this the
-        # model burns every token on reasoning and returns empty content.
-        "chat_template_kwargs": {"enable_thinking": False},
     }
     if mode == "raw":
         base["cache_prompt"] = True
