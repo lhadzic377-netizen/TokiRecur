@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from tomllib import load as toml_load
 
 from tokirecur import ctl
 
@@ -158,10 +159,11 @@ def test_hermes_config_writer(env, with_pulled_model):
     assert cfg_path.with_suffix(".yaml.bak-model").exists()
 
 
-def test_sync_cli_configs_writes_all(env, with_pulled_model):
+def test_sync_cli_configs_writes_all(env, with_pulled_model, monkeypatch):
     spec = with_pulled_model["laguna"]
+    monkeypatch.setenv("CODEX_HOME", str(env / "codex-home"))
     paths = ctl.sync_cli_configs(spec)
-    assert len(paths) == 3
+    assert len(paths) == 4
     for p in paths.values():
         assert Path(p).exists()
     # And every CLI config picked up the pulled provider.
@@ -172,6 +174,9 @@ def test_sync_cli_configs_writes_all(env, with_pulled_model):
     assert f"tokirecur-{pulled_name}" in cla["models"]["providers"]
     h = yaml.safe_load(paths["hermes"].read_text())
     assert f"tokirecur-{pulled_name}" in h["providers"]
+    with paths["codex"].open("rb") as fh:
+        codex = toml_load(fh)
+    assert f"tokirecur-{pulled_name}" in codex["model_providers"]
 
 
 def test_model_status_down(env):

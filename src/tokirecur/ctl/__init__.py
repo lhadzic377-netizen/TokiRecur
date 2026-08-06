@@ -32,6 +32,13 @@ from typing import Any
 import httpx
 import yaml
 
+try:  # Python 3.11+
+    import tomllib
+except ImportError:  # pragma: no cover - Python 3.10
+    import tomli as tomllib  # type: ignore[no-redef]
+
+import tomli_w
+
 from ..ggufmeta import read_gguf_meta
 
 logger = logging.getLogger(__name__)
@@ -1372,8 +1379,52 @@ def write_hermes_config(
     return cfg_path
 
 
+def write_codex_config(
+    spec: ModelSpec, specs: list[ModelSpec] | None = None,
+    path: Path | None = None,
+) -> Path:
+    """Write a provider entry for every registry spec + set the active.
+
+    Codex CLI reads ``~/.codex/config.toml`` (or ``$CODEX_HOME``):
+    ``model_provider`` + ``model`` select the stack at the top level,
+    and each registry spec gets a ``[model_providers.tokirecur-<name>]``
+    entry pointing at the toki daemon's OpenAI-compatible API.
+    Existing keys are preserved (scalar keys are re-emitted before the
+    table sections, as TOML requires).
+    """
+    cfg_path = path or Path(os.environ.get(
+        "CODEX_HOME", str(Path.home() / ".codex"))) / "config.toml"
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg: dict[str, Any] = {}
+    if cfg_path.exists():
+        with cfg_path.open("rb") as fh:
+            cfg = tomllib.load(fh)
+
+    top = {k: v for k, v in cfg.items() if not isinstance(v, dict)}
+    tables = {k: v for k, v in cfg.items() if isinstance(v, dict)}
+    providers = tables.setdefault("model_providers", {})
+    all_specs = specs if specs is not None else load_registry()
+    for s in all_specs:
+        providers[f"tokirecur-{s.name}"] = {
+            "name": f"Toki Recur ({s.label})",
+            "base_url": f"{s.daemon_url}/v1",
+            # Codex ≥ v0.146 removed `wire_api = "chat"`; the daemon's
+            # /v1/responses shim maps the Responses API onto the chat
+            # pipeline.
+            "wire_api": "responses",
+            "env": {"TOKI_AUTH_TOKEN": DEFAULT_AUTH},
+        }
+
+    top["model_provider"] = f"tokirecur-{spec.name}"
+    top["model"] = spec.model_id
+
+    _backup(cfg_path)
+    _atomic_write_text(cfg_path, tomli_w.dumps({**top, **tables}))
+    return cfg_path
+
+
 def sync_cli_configs(spec: ModelSpec) -> dict[str, Path]:
-    """Write the active model into all three CLI configs.
+    """Write the active model into all four CLI configs.
 
     Reads the registry once and threads the loaded specs through each
     writer — the previous version re-parsed the YAML four times per
@@ -1385,4 +1436,5 @@ def sync_cli_configs(spec: ModelSpec) -> dict[str, Path]:
         "opencode": write_opencode_config(spec, specs),
         "openclaw": write_openclaw_config(spec, specs),
         "hermes": write_hermes_config(spec, specs),
+        "codex": write_codex_config(spec, specs),
     }

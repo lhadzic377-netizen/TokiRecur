@@ -3,6 +3,7 @@
 OpenAI-compatible endpoints:
     POST /v1/completions
     POST /v1/chat/completions
+    POST /v1/responses   (OpenAI Responses API shim → chat completions)
 
 Admin endpoints:
     GET  /cache/stats
@@ -21,6 +22,7 @@ requests/minute.
 from __future__ import annotations
 
 import asyncio
+import json as _json
 import logging
 import os
 import time
@@ -164,6 +166,45 @@ class ChatCompletionRequest(BaseModel):
     # contains visible content instead of internal reasoning tokens.
     # Other models ignore this field.
     chat_template_kwargs: dict | None = None
+
+
+class ResponsesItem(BaseModel):
+    """One entry of the Responses API ``input`` array. The fields are
+    intentionally loose: the OpenAI SDKs evolve item shapes faster than
+    this shim, and unknown/extra fields should pass through untouched.
+    """
+
+    type: str
+    role: str | None = None
+    content: Any = None  # str | list of input_text/input_image parts
+    call_id: str | None = None
+    output: Any = None  # function_call_output payload (any JSON)
+    name: str | None = None
+    arguments: str | None = None
+
+
+class ResponsesReasoning(BaseModel):
+    effort: str = "auto"
+
+
+class ResponsesRequest(BaseModel):
+    model: str = "default"
+    input: str | list[ResponsesItem]
+    instructions: str | None = None  # mapped to a system message
+    max_output_tokens: int | None = Field(None, ge=1, le=65536)
+    temperature: float = Field(1.0, ge=0.0, le=2.0)
+    top_p: float | None = Field(None, ge=0.0, le=1.0)
+    stream: bool = False
+    tools: list | None = None
+    tool_choice: str | dict | None = None
+    reasoning: ResponsesReasoning | None = None
+    stream_options: dict | None = None
+    store: bool = False
+    previous_response_id: str | None = None
+    metadata: dict | None = None
+    # toki extensions (same knobs as /v1/chat/completions)
+    max_slots: int = Field(4, ge=1, le=32)
+    session_id: str | None = None
 
 
 class CacheLookupRequest(BaseModel):
@@ -675,6 +716,386 @@ def create_app(
             spilled=result.spilled,
         )
 
+    def _normalize_responses_tools(tools: list | None) -> list | None:
+        """Normalize Responses-API tools to llama-server's chat shape.
+
+        - flat function tools (``{"type": "function", "name": ...}``)
+          are rewrapped with the function fields nested under
+          ``function``, which llama-server's OpenAI parser requires;
+        - ``namespace`` tools (codex multi-agent) are flattened into
+          their nested function tools;
+        - non-function tool types (``web_search``, ...) are dropped —
+          llama-server cannot parse them and they carry no model
+          decision for the local stack anyway.
+        """
+        if not tools:
+            return tools
+        out: list[dict] = []
+        for tool in tools:
+            if not isinstance(tool, dict) or tool.get("type") != "function":
+                nested = tool.get("tools") if isinstance(tool, dict) else None
+                if isinstance(nested, list):
+                    out.extend(_normalize_responses_tools(nested) or [])
+                continue
+            if "function" in tool:
+                out.append(tool)
+                continue
+            if not tool.get("name"):
+                continue
+            fn = {k: tool[k] for k in (
+                "name", "description", "parameters", "strict")
+                if tool.get(k) is not None}
+            fn.setdefault("parameters", {})
+            out.append({"type": "function", "function": fn})
+        return out or None
+
+    def _normalize_responses_tool_choice(tool_choice: Any) -> Any:
+        if (isinstance(tool_choice, dict)
+                and tool_choice.get("type") == "function"
+                and tool_choice.get("name")
+                and "function" not in tool_choice):
+            return {"type": "function",
+                    "function": {"name": tool_choice["name"]}}
+        return tool_choice
+
+    def _responses_messages(req: ResponsesRequest) -> list[dict]:
+        """Map a Responses API request to OpenAI chat messages.
+
+        ``input`` may be a plain string or a list of items:
+        messages (role + content parts), function_call_output (→ tool
+        message) and function_call (→ assistant tool_calls; consecutive
+        items are merged into one assistant message so llama-server's
+        tool template sees a valid turn).
+        """
+        messages: list[dict] = []
+        if req.instructions:
+            messages.append({"role": "system", "content": req.instructions})
+
+        if isinstance(req.input, str):
+            messages.append({"role": "user", "content": req.input})
+            return messages
+
+        pending_tool_calls: list[dict] = []
+
+        def flush_tool_calls() -> None:
+            nonlocal pending_tool_calls
+            if pending_tool_calls:
+                messages.append({
+                    "role": "assistant", "content": None,
+                    "tool_calls": pending_tool_calls,
+                })
+                pending_tool_calls = []
+
+        for item in req.input:
+            if item.type == "message":
+                flush_tool_calls()
+                parts = item.content if isinstance(item.content, list) else []
+                text = "".join(
+                    p["text"] for p in parts
+                    if isinstance(p, dict) and isinstance(p.get("text"), str)
+                )
+                role = item.role or "user"
+                if role == "developer":
+                    # llama-server maps developer → system internally,
+                    # which breaks Qwen3.5's "system first" template
+                    # when instructions already produced a system
+                    # message. Fold it into the leading system message.
+                    role = "system"
+                if (role == "system" and messages
+                        and messages[-1]["role"] == "system" and text):
+                    messages[-1]["content"] = (
+                        messages[-1]["content"] + "\n\n" + text
+                    )
+                else:
+                    messages.append({"role": role, "content": text})
+            elif item.type == "function_call_output":
+                flush_tool_calls()
+                output = item.output
+                if not isinstance(output, str):
+                    output = _json.dumps(output)
+                messages.append({
+                    "role": "tool", "tool_call_id": item.call_id or "",
+                    "content": output,
+                })
+            elif item.type == "function_call":
+                pending_tool_calls.append({
+                    "id": item.call_id or "", "type": "function",
+                    "function": {"name": item.name or "",
+                                 "arguments": item.arguments or ""},
+                })
+        flush_tool_calls()
+        return messages
+
+    def _responses_output_items(result: Any, ts: int) -> list[dict]:
+        """Responses-format output items for a finished completion.
+
+        Tool mode emits only function_call items (the Responses API has
+        no message item when the model asks for tools); text mode emits
+        one completed message item.
+        """
+        output: list[dict] = []
+        if result.reasoning:
+            output.append({
+                "id": f"rs-{ts}", "type": "reasoning", "status": "completed",
+                "summary": [{"type": "summary_text", "text": result.reasoning}],
+            })
+        if result.tool_calls:
+            for i, tc in enumerate(result.tool_calls):
+                function = tc.get("function") or {}
+                output.append({
+                    "id": f"fc-{i}-{ts}", "type": "function_call",
+                    "status": "completed",
+                    "call_id": tc.get("id") or f"call_{i}_{ts}",
+                    "name": function.get("name") or "",
+                    "arguments": function.get("arguments") or "",
+                })
+            return output
+        output.append({
+            "id": f"msg-{ts}", "type": "message", "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": result.output_text,
+                         "annotations": []}],
+        })
+        return output
+
+    async def _stream_responses(req: ResponsesRequest) -> Any:
+        """Responses-API SSE event stream over the chat pipeline.
+
+        Codex requires ``wire_api = "responses"`` since v0.146; this
+        shim translates the Responses request into chat messages, feeds
+        them through the same cache-aware engine path, and re-emits the
+        result as Responses events (response.created → output_text
+        deltas → function_call_arguments deltas → response.completed).
+        """
+        messages = _responses_messages(req)
+        max_tokens = req.max_output_tokens or 256
+        reasoning_mode = (
+            "off"
+            if req.reasoning and req.reasoning.effort == "none"
+            else default_reasoning
+        )
+        ctk = _default_chat_template_kwargs(reasoning_mode)
+        resp_id = f"resp-{int(time.time() * 1000)}"
+        msg_id = f"msg-{resp_id}"
+        created = int(time.time())
+
+        def event(name: str, payload: dict) -> str:
+            # Codex's SSE parser (rust) requires a top-level "type"
+            # matching the event name on every event; the real OpenAI
+            # Responses stream includes it too.
+            payload.setdefault("type", name)
+            return f"event: {name}\ndata: {_json.dumps(payload)}\n\n"
+
+        yield event("response.created", {
+            "id": resp_id, "object": "response", "created_at": created,
+            "status": "in_progress", "model": req.model,
+        })
+        yield event("response.in_progress", {
+            "id": resp_id, "object": "response", "created_at": created,
+            "status": "in_progress", "model": req.model,
+        })
+        yield event("response.output_item.added", {
+            "id": resp_id, "object": "response", "created_at": created,
+            "output_index": 0,
+            "item": {"id": msg_id, "type": "message", "role": "assistant",
+                     "status": "in_progress", "content": []},
+        })
+        yield event("response.content_part.added", {
+            "id": resp_id, "object": "response", "created_at": created,
+            "item_id": msg_id, "output_index": 0, "content_index": 0,
+            "part": {"type": "output_text", "text": "", "annotations": []},
+        })
+
+        finish_reason: str | None = None
+        result: Any = None
+        text_parts: list[str] = []
+        reasoning_parts: list[str] = []
+        tool_state: dict[int, dict] = {}  # index → accumulated tool call
+        try:
+            async for item in engine.serve_chat_stream(
+                messages,
+                max_tokens=_resolve_max_tokens(max_tokens,
+                                               reasoning=reasoning_mode),
+                temperature=req.temperature,
+                max_slots=req.max_slots,
+                session_id=req.session_id,
+                chat_template_kwargs=ctk,
+                tools=_normalize_responses_tools(req.tools),
+                tool_choice=_normalize_responses_tool_choice(req.tool_choice),
+            ):
+                kind = item["kind"]
+                if kind == "delta":
+                    text_parts.append(item["delta"])
+                    yield event("response.output_text.delta", {
+                        "id": resp_id, "object": "response",
+                        "created_at": created,
+                        "item_id": msg_id, "output_index": 0,
+                        "content_index": 0, "delta": item["delta"],
+                    })
+                elif kind == "reasoning":
+                    reasoning_parts.append(item["delta"])
+                    yield event("response.reasoning_summary_text.delta", {
+                        "id": resp_id, "object": "response",
+                        "created_at": created,
+                        "item_id": msg_id, "output_index": 0,
+                        "summary": [{"type": "summary_text",
+                                     "text": item["delta"]}],
+                    })
+                elif kind == "tool_calls":
+                    for chunk in item["tool_calls"]:
+                        idx = chunk.get("index", 0)
+                        state = tool_state.setdefault(idx, {
+                            "call_id": chunk.get("id"),
+                            "name": (chunk.get("function") or {}).get("name"),
+                            "args": "",
+                        })
+                        if chunk.get("id") and not state["call_id"]:
+                            state["call_id"] = chunk["id"]
+                        name = (chunk.get("function") or {}).get("name")
+                        if name and not state["name"]:
+                            state["name"] = name
+                            fc_id = f"fc-{idx}-{resp_id}"
+                            yield event("response.output_item.added", {
+                                "id": resp_id, "object": "response",
+                                "created_at": created, "output_index": idx,
+                                "item": {"id": fc_id, "type": "function_call",
+                                         "call_id": state["call_id"]
+                                         or f"call_{idx}_{resp_id}",
+                                         "name": state["name"],
+                                         "arguments": "",
+                                         "status": "in_progress"},
+                            })
+                        args = (chunk.get("function") or {}).get("arguments")
+                        if args:
+                            state["args"] += args
+                            yield event("response.function_call_arguments.delta", {
+                                "id": resp_id, "object": "response",
+                                "created_at": created,
+                                "item_id": f"fc-{idx}-{resp_id}",
+                                "output_index": idx, "delta": args,
+                            })
+                elif kind == "finish":
+                    if item.get("finish_reason"):
+                        finish_reason = item["finish_reason"]
+                else:  # result
+                    result = item["result"]
+        except Exception as e:
+            logger.exception(
+                "responses streaming failed; messages=%s", messages)
+            yield event("response.failed", {
+                "id": resp_id, "object": "response", "created_at": created,
+                "status": "failed",
+                "error": {"code": "server_error", "message": str(e)},
+            })
+            return
+        if result is None:
+            yield event("response.failed", {
+                "id": resp_id, "object": "response", "created_at": created,
+                "status": "failed",
+                "error": {"code": "server_error", "message": "no result"},
+            })
+            return
+
+        text = "".join(text_parts)
+        reasoning = "".join(reasoning_parts)
+        yield event("response.output_text.done", {
+            "id": resp_id, "object": "response", "created_at": created,
+            "item_id": msg_id, "output_index": 0, "content_index": 0,
+            "text": text,
+        })
+        yield event("response.content_part.done", {
+            "id": resp_id, "object": "response", "created_at": created,
+            "item_id": msg_id, "output_index": 0, "content_index": 0,
+            "part": {"type": "output_text", "text": text, "annotations": []},
+        })
+        yield event("response.output_item.done", {
+            "id": resp_id, "object": "response", "created_at": created,
+            "output_index": 0,
+            "item": {"id": msg_id, "type": "message",
+                     "status": "completed", "role": "assistant",
+                     "content": [{"type": "output_text", "text": text,
+                                  "annotations": []}]},
+        })
+
+        tool_calls = result.tool_calls or []
+        for idx, tc in enumerate(tool_calls):
+            state = tool_state.get(idx, {})
+            function = tc.get("function") or {}
+            fc_id = f"fc-{idx}-{resp_id}"
+            yield event("response.function_call_arguments.done", {
+                "id": resp_id, "object": "response", "created_at": created,
+                "item_id": fc_id, "output_index": idx,
+                "arguments": state.get("args") or "",
+            })
+            yield event("response.output_item.done", {
+                "id": resp_id, "object": "response", "created_at": created,
+                "output_index": idx,
+                "item": {"id": fc_id, "type": "function_call",
+                         "status": "completed",
+                         "call_id": state.get("call_id") or tc.get("id")
+                         or f"call_{idx}_{resp_id}",
+                         "name": function.get("name") or "",
+                         "arguments": function.get("arguments") or ""},
+            })
+
+        if reasoning:
+            yield event("response.reasoning_summary_text.done", {
+                "id": resp_id, "object": "response", "created_at": created,
+                "item_id": msg_id, "output_index": 0,
+                "summary": [{"type": "summary_text", "text": reasoning}],
+            })
+
+        usage = {
+            "input_tokens": result.prefilled_tokens,
+            "output_tokens": result.generated_tokens,
+            "total_tokens": result.prefilled_tokens + result.generated_tokens,
+        }
+        cache = {
+            "hit": result.hit, "soft_hit": result.soft_hit,
+            "cache_id": result.cache_id, "reuse_depth": result.reuse_depth,
+            "embedding_similarity": result.embedding_similarity,
+            "skipped_tokens": result.skipped_tokens,
+            "ttft_ms": result.ttft_ms, "total_ms": result.total_ms,
+            "slot_id": result.slot_id, "spilled": result.spilled,
+        }
+        # codex parses the terminal event's payload from the nested
+        # `response` key (see codex-rs codex-api/src/sse/responses.rs
+        # ResponseCompleted); top-level fields are ignored, which made
+        # codex treat the stream as closed before response.completed.
+        yield event("response.completed", {
+            "response": {
+                "id": resp_id, "object": "response", "created_at": created,
+                "status": "completed", "model": req.model,
+                "incomplete_details": (
+                    {"reason": "max_output_tokens"}
+                    if finish_reason == "length" else None
+                ),
+                "output": _responses_output_items(result, int(time.time() * 1000)),
+                "usage": usage, "token_details": None, "metadata": {},
+                "cache": cache,
+            },
+        })
+        # Note: no `data: [DONE]` terminator here — the Responses SSE
+        # format ends with response.completed; codex's parser rejects
+        # the chat-format [DONE] marker as an unparseable event.
+        state = engine.slot_state()
+        slot_ctx = next(
+            (s["context_tokens"] for s in state["slots"]
+             if s["slot_id"] == result.slot_id),
+            0,
+        )
+        METRICS.observe_completion(
+            ttft_ms=result.ttft_ms,
+            prefill_tokens=result.prefilled_tokens,
+            generated_tokens=result.generated_tokens,
+            skipped_tokens=result.skipped_tokens,
+            hit=result.hit,
+            soft_hit=result.soft_hit,
+            slot_id=result.slot_id,
+            context_tokens=slot_ctx,
+            spilled=result.spilled,
+        )
+
     @app.post("/v1/completions")
     async def completions(req: CompletionRequest) -> Response:
         try:
@@ -852,6 +1273,102 @@ def create_app(
             )
         except Exception as e:
             logger.exception("chat completion failed")
+            raise HTTPException(status_code=500, detail=str(e)) from e
+
+    @app.post("/v1/responses")
+    async def responses(req: ResponsesRequest) -> Response:
+        """OpenAI Responses API shim (Codex and other 2025-era clients).
+
+        Codex ≥ v0.146 refuses ``wire_api = "chat"``, so this endpoint
+        maps a Responses request onto the chat-completions pipeline —
+        same cache lookup, thinking mode, tool relay and rate limiting —
+        and speaks the Responses wire format (non-streaming JSON body or
+        SSE events with ``event:`` lines). ``previous_response_id`` and
+        ``store`` are ignored: toki is stateless, like the other
+        OpenAI-compatible endpoints.
+        """
+        try:
+            if req.stream:
+                return StreamingResponse(
+                    _stream_responses(req),
+                    media_type="text/event-stream",
+                )
+            messages = _responses_messages(req)
+            max_tokens = req.max_output_tokens or 256
+            reasoning_mode = (
+                "off"
+                if req.reasoning and req.reasoning.effort == "none"
+                else default_reasoning
+            )
+            ctk = _default_chat_template_kwargs(reasoning_mode)
+            result = await _run_engine(
+                engine.serve_chat,
+                messages,
+                max_tokens=_resolve_max_tokens(max_tokens,
+                                               reasoning=reasoning_mode),
+                temperature=req.temperature,
+                max_slots=req.max_slots,
+                session_id=req.session_id,
+                chat_template_kwargs=ctk,
+                tools=_normalize_responses_tools(req.tools),
+                tool_choice=_normalize_responses_tool_choice(req.tool_choice),
+            )
+            state = engine.slot_state()
+            slot_ctx = next(
+                (s["context_tokens"] for s in state["slots"]
+                 if s["slot_id"] == result.slot_id),
+                0,
+            )
+            METRICS.observe_completion(
+                ttft_ms=result.ttft_ms,
+                prefill_tokens=result.prefilled_tokens,
+                generated_tokens=result.generated_tokens,
+                skipped_tokens=result.skipped_tokens,
+                hit=result.hit,
+                soft_hit=result.soft_hit,
+                slot_id=result.slot_id,
+                context_tokens=slot_ctx,
+                spilled=result.spilled,
+            )
+            created = int(time.time())
+            ts = int(time.time() * 1000)
+            return Response(
+                content=_json.dumps({
+                    "id": f"resp-{ts}", "object": "response",
+                    "created_at": created, "status": "completed",
+                    "error": None,
+                    "incomplete_details": (
+                        {"reason": "max_output_tokens"}
+                        if result.finish_reason == "length" else None
+                    ),
+                    "model": req.model,
+                    "output": _responses_output_items(result, ts),
+                    "output_text": result.output_text,
+                    "usage": {
+                        "input_tokens": result.prefilled_tokens,
+                        "output_tokens": result.generated_tokens,
+                        "total_tokens": (
+                            result.prefilled_tokens + result.generated_tokens
+                        ),
+                    },
+                    "token_details": None,
+                    "metadata": {},
+                    "cache": {
+                        "hit": result.hit,
+                        "cache_id": result.cache_id,
+                        "reuse_depth": result.reuse_depth,
+                        "embedding_similarity": result.embedding_similarity,
+                        "skipped_tokens": result.skipped_tokens,
+                        "ttft_ms": result.ttft_ms,
+                        "total_ms": result.total_ms,
+                        "slot_id": result.slot_id,
+                        "spilled": result.spilled,
+                    },
+                }),
+                media_type="application/json",
+            )
+        except Exception as e:
+            logger.exception("responses completion failed")
             raise HTTPException(status_code=500, detail=str(e)) from e
 
     @app.get("/cache/list")

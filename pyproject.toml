@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,9 +8,16 @@ version = "0.2.0"
 description = "Toki Recur — KV cache reuse for LLM inference. Drop-in prefix caching across CUDA, ROCm, and Vulkan."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = "MIT"
 authors = [{ name = "Toki Recur" }]
 keywords = ["llm", "inference", "kv-cache", "prefix-cache", "rocm", "llama.cpp", "toki-recur"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.27",
@@ -24,12 +31,18 @@ dependencies = [
     "pyyaml>=6.0",
     "huggingface_hub>=0.24",
     "pyfiglet>=0.8",
+    "tomli-w>=1.0",
+    "tomli>=2.0; python_version < '3.11'",
 ]
 
 [project.optional-dependencies]
-embeddings = ["sentence-transformers>=2.6", "torch>=2.2"]
+embeddings = ["sentence-transformers>=2.6,<6", "torch>=2.2"]
 index = ["hnswlib>=0.7"]
 dev = ["pytest>=8.0", "pytest-asyncio>=1.0", "ruff>=0.4", "build>=1.0"]
+
+[project.urls]
+Homepage = "https://github.com/lhadzic377-netizen/TokiRecur"
+Repository = "https://github.com/lhadzic377-netizen/TokiRecur"
 
 [project.scripts]
 toki = "tokirecur.cli:main"

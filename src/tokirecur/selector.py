@@ -25,7 +25,7 @@ from .ctl import model_status, read_active
 console = Console()
 
 INTERFACES = ["chat", "tui", "web"]
-CLIENTS = ["toki", "opencode", "openclaw", "hermes"]
+CLIENTS = ["toki", "opencode", "openclaw", "hermes", "codex"]
 
 INTERFACE_HINTS = {
     "chat": "open the client's interactive UI / TUI",
@@ -37,12 +37,14 @@ CLIENT_HINTS = {
     "opencode": "opencode",
     "openclaw": "openclaw",
     "hermes": "hermes",
+    "codex": "codex (OpenAI CLI)",
 }
 
 WEB_HINTS = {
     "toki": "http://127.0.0.1:7777  (toki web UI)",
     "openclaw": "http://127.0.0.1:18789  (OpenClaw Control)",
     "hermes": "http://127.0.0.1:9119  (hermes dashboard)",
+    "codex": "codex app-server (experimental)",
 }
 
 
@@ -81,6 +83,10 @@ def launch_cmd(interface: str, client: str, spec: Any) -> dict:
             return {"argv": ["hermes", "chat", "--tui", "--provider", provider,
                              "-m", spec.model_id],
                     "detach": False, "url": None, "env": env}
+        if client == "codex":
+            # Bare `codex` is the interactive TUI; model/provider come
+            # from ~/.codex/config.toml (written by `toki model use`).
+            return {"argv": ["codex"], "detach": False, "url": None, "env": env}
     elif interface == "tui":
         if client == "toki":
             argv = ["toki", "tui", "--raw-url", llama_url, "--daemon-url", daemon_url]
@@ -97,6 +103,8 @@ def launch_cmd(interface: str, client: str, spec: Any) -> dict:
             return {"argv": ["hermes", "--tui", "chat", "--provider", provider,
                              "-m", spec.model_id],
                     "detach": False, "url": None, "env": env}
+        if client == "codex":
+            return {"argv": ["codex"], "detach": False, "url": None, "env": env}
     elif interface == "web":
         if client == "toki":
             return {"argv": ["toki", "web", "--detach",
@@ -110,6 +118,10 @@ def launch_cmd(interface: str, client: str, spec: Any) -> dict:
             return {"argv": ["hermes", "dashboard", "--port", "9119"],
                     "detach": True, "url": "http://127.0.0.1:9119",
                     "env": env}
+        if client == "codex":
+            # Experimental app server (no web URL yet).
+            return {"argv": ["codex", "app-server"], "detach": True,
+                    "url": None, "env": env}
     raise ValueError(f"unsupported combo: {interface} + {client}")
 
 
