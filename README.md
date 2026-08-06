@@ -55,11 +55,11 @@ toki model install-llama --backend rocm --name qwen3-4b
 #    opencode/openclaw/hermes at it):
 toki model use qwen3-4b
 
-# 6. Talk to it
-toki chat
+# 6. Talk to it — the full-screen TUI chat (or open the web UI with `toki web`)
+toki tui
 ```
 
-No models are installed or started at install time — `toki model use <name>` is the explicit, documented way to bring one up (it starts llama-server + the toki daemon, stops competing big-model stacks, and wires opencode/openclaw/hermes at it). `toki up --model <path>` is the single-model equivalent for a raw GGUF without a registry entry. `toki serve` is **only** the API daemon (default 127.0.0.1:8787) that proxies to an already-running llama-server; it warns loudly if the backend isn't reachable instead of failing silently. Bare `toki` opens the full-screen launcher, `toki chat` is the TUI chat.
+No models are installed or started at install time — `toki model use <name>` is the explicit, documented way to bring one up (it starts llama-server + the toki daemon, stops competing big-model stacks, and wires opencode/openclaw/hermes at it). `toki up --model <path>` is the single-model equivalent for a raw GGUF without a registry entry. `toki serve` is **only** the API daemon (default 127.0.0.1:8787) that proxies to an already-running llama-server; it warns loudly if the backend isn't reachable instead of failing silently. Two chat frontends ship with toki: bare `toki` opens the full-screen launcher, `toki tui` is the full-screen TUI chat, and `toki web` is the browser chat UI.
 
 Without pipx, install into your own venv instead:
 
@@ -146,8 +146,8 @@ registry (`~/.config/tokirecur/models.yaml`) immediately; `Cancel` (or
 `Esc`) discards.
 
 The `reasoning` field controls thinking mode: `auto`/`on` enable it —
-the model's reasoning is streamed (dimmed in `toki chat`, rendered as a
-separate block in the TUI chat), `off` passes `--reasoning off` to
+the model's reasoning is streamed (dimmed in the TUI chat, rendered as
+a separate block in the web UI), `off` passes `--reasoning off` to
 llama-server at launch. Changes take effect on the model's next start.
 
 The chat TUI and `toki status` share the same wordmark header and black + yellow palette.
@@ -228,11 +228,10 @@ The Debian-packaged `llama-server 9413` already has these. `LlamaServerBackend` 
 toki                                                  # run benchmark (default)
 toki interactive                                      # enter interactive REPL
 
-# ── chat interface (NEW) ───────────────────────────────────────────────────
-toki run                                              # raw chat (direct to llama-server)
-toki run --mode cached                                # via cache daemon
-toki run --mode compare                               # A/B compare each prompt
-toki chat                                             # alias for `toki run`
+# ── chat interface ─────────────────────────────────────────────────
+toki tui                                              # full-screen TUI chat (terminal)
+toki tui --auth-token <token>                         # if daemon requires auth
+toki tui --daemon-url http://other:8787               # custom daemon URL
 toki diff --system "<long>" "<user prompt>"           # one-shot A/B comparison
 
 # Web UI on http://127.0.0.1:7777 (production-ready single-page chat)
@@ -241,12 +240,7 @@ toki web --detach                                     # background, log → /tmp
 toki web --tls-cert cert.pem --tls-key key.pem        # HTTPS + wss, Secure cookies
 toki web --port 8888 --daemon-url http://other:8787   # custom endpoint
 
-# Terminal UI (NEW) — runs in your terminal, no browser needed
-toki tui                                              # connects to localhost daemon + llama-server
-toki tui --auth-token <token>                         # if daemon requires auth
-toki tui --daemon-url http://other:8787               # custom daemon URL
-
-# In-chat slash commands:
+# In-chat slash commands (TUI chat):
 #   /mode raw|cached|compare   /system <text>   /clear   /metrics
 #   /max <n>   /temp <f>   /raw <msg>   /cached <msg>   /compare <msg>   /quit
 
@@ -420,9 +414,9 @@ toki llama:· daemon:· ❯
 
 The prompt has a live status indicator — `llama:✓ daemon:✓` means both are reachable. Tab completion and command history are enabled if `prompt_toolkit` is installed (installed by default).
 
-## Chat interface (`toki run` / `toki chat`)
+## TUI chat (`toki tui`)
 
-Interactive REPL for talking to the model. Three modes:
+The full-screen terminal chat client. Three modes, switched with `Ctrl+1/2/3` (or in-chat slash commands):
 
 | Mode | What it does |
 |---|---|
@@ -430,25 +424,15 @@ Interactive REPL for talking to the model. Three modes:
 | `cached` | Sends through the toki daemon (recycling engine) |
 | `compare` | Runs each prompt both ways, shows side-by-side diff |
 
-```
-$ toki run --mode compare --system "You are a math tutor."
-╭─────────────────────────────── Toki Recur chat ───────────────────────────────╮
-│ mode = compare                                                                │
-│ raw   = http://127.0.0.1:8088                                                │
-│ daemon= http://127.0.0.1:8787                                                │
-╰──────────────────────────────────────────────────────────────────────────────╯
-
-you ❯ What is the integral of x^2 from 0 to 1?
-[compare] running raw...   ttft=412ms  total=2031ms
-[compare] running cached... ttft=187ms  total=1543ms
-                    speedup: 1.317x
-                    prefill tokens saved: 312
-                    outputs byte-identical: yes
+```bash
+toki tui                                   # chat against localhost daemon + llama-server
+toki tui --auth-token <token>              # if the daemon requires auth
+toki tui --daemon-url http://other:8787    # custom daemon
 ```
 
-In-session slash commands: `/mode raw|cached|compare`, `/system <text>`, `/clear`, `/metrics`, `/max <n>`, `/temp <f>`, `/raw <msg>`, `/cached <msg>`, `/compare <msg>`, `/quit`.
+In-session slash commands: `/mode raw|cached|compare`, `/system <text>`, `/clear`, `/metrics`, `/max <n>`, `/temp <f>`, `/raw <msg>`, `/cached <msg>`, `/compare <msg>`, `/quit`. `Ctrl+C` quits.
 
-`toki diff --system "<long system>" "<prompt>"` does the same A/B comparison as a one-shot.
+`toki diff --system "<long system>" "<prompt>"` does the same raw/cached A/B comparison as a one-shot (no REPL):
 
 ## Web chat UI (`toki web`)
 

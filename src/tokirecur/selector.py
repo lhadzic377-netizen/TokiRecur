@@ -66,7 +66,7 @@ def launch_cmd(interface: str, client: str, spec: Any) -> dict:
     if interface == "chat":
         if client == "toki":
             # The launcher's Chat entry opens the production TUI chat
-            # client (`toki tui`), not the plain-text REPL.
+            # client (`toki tui`).
             argv = ["toki", "tui", "--raw-url", llama_url, "--daemon-url", daemon_url]
             if env.get("TOKI_AUTH_TOKEN"):
                 argv += ["--auth-token", env["TOKI_AUTH_TOKEN"]]

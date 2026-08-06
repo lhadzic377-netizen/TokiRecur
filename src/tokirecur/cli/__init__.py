@@ -162,85 +162,6 @@ def bench(ctx: click.Context) -> None:
     raise SystemExit(bench_main(ctx.args))
 
 
-@cli.command(
-    "run",
-    context_settings={
-        "ignore_unknown_options": True,
-        "allow_extra_args": True,
-        "help_option_names": [],
-    },
-)
-@click.option("--raw-url", default="http://127.0.0.1:8088",
-              help="llama-server URL (default: http://127.0.0.1:8088)")
-@click.option("--daemon-url", default="http://127.0.0.1:8787",
-              help="toki daemon URL (default: http://127.0.0.1:8787)")
-@click.option("--mode", default="raw", type=click.Choice(["raw", "cached", "compare"]),
-              help="Inference path (default: raw)")
-@click.option("--system", default=None, help="System prompt")
-@click.option("--model", default="default", help="Model name (informational)")
-@click.option("--max-tokens", "-m", default=256, type=int)
-@click.option("--temperature", "-t", default=0.0, type=float)
-@click.pass_context
-def run(ctx: click.Context, raw_url: str, daemon_url: str, mode: str, system: str | None,
-        model: str, max_tokens: int, temperature: float) -> None:
-    """Start an interactive chat session against the model.
-
-    With --mode raw, sends directly to llama-server (bypasses cache).
-    With --mode cached, sends through the toki daemon (recycling engine).
-    With --mode compare, runs both ways and shows side-by-side diff.
-
-    In-session slash commands:
-      /mode raw|cached|compare   /system <text>   /clear
-      /metrics   /max <n>   /temp <f>   /raw <msg>   /cached <msg>
-      /compare <msg>   /quit
-    """
-    if "--help" in ctx.args or "-h" in ctx.args:
-        click.echo(
-            "Usage: toki run [OPTIONS]\n\n"
-            "Interactive chat REPL. Type /help inside for slash commands.\n\n"
-            "  --raw-url TEXT         llama-server URL (default: http://127.0.0.1:8088)\n"
-            "  --daemon-url TEXT      toki daemon URL (default: http://127.0.0.1:8787)\n"
-            "  --mode [raw|cached|compare]   inference path (default: raw)\n"
-            "  --system TEXT          system prompt\n"
-            "  --max-tokens INT       max tokens to generate (default: 256)\n"
-            "  --temperature FLOAT    sampling temperature (default: 0.0)\n"
-        )
-        return
-    from .chat import main as chat_main
-    raise SystemExit(
-        chat_main(
-            raw_url=raw_url,
-            daemon_url=daemon_url,
-            mode=mode,
-            system=system,
-            model=model,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
-    )
-
-
-@cli.command("chat")
-@click.option("--raw-url", default="http://127.0.0.1:8088")
-@click.option("--daemon-url", default="http://127.0.0.1:8787")
-@click.option("--mode", default="raw", type=click.Choice(["raw", "cached", "compare"]))
-@click.option("--system", default=None)
-@click.option("--max-tokens", "-m", default=256, type=int)
-@click.option("--temperature", "-t", default=0.0, type=float)
-def chat_cmd(raw_url: str, daemon_url: str, mode: str, system: str | None,
-             max_tokens: int, temperature: float) -> None:
-    """Start an interactive chat session (alias for `toki run`)."""
-    from .chat import main as chat_main
-    raise SystemExit(
-        chat_main(
-            raw_url=raw_url,
-            daemon_url=daemon_url,
-            mode=mode,
-            system=system,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
-    )
 
 
 @cli.command("dashboard")
@@ -298,7 +219,7 @@ def tui(daemon_url: str, raw_url: str, auth_token: str | None) -> None:
     import sys
     if not sys.stdout.isatty():
         click.echo("error: toki tui requires an interactive terminal (TTY).", err=True)
-        click.echo("hint: run from your terminal, or use `toki run` for non-interactive chat.", err=True)
+        click.echo("hint: run from an interactive terminal.", err=True)
         raise SystemExit(2)
     try:
         from ..tui.app import run as tui_run
@@ -322,7 +243,7 @@ def diff(raw_url: str, daemon_url: str, system: str | None, max_tokens: int,
 
     Usage: toki diff --system "<long system>" "<user prompt>"
     """
-    from .chat import completion_once
+    from .completions import completion_once
     con = Console()
     if not prompt:
         con.print("[red]usage: toki diff [OPTIONS] PROMPT[/red]")
@@ -1339,9 +1260,9 @@ def main() -> int:
 
 
 _SUBCOMMANDS = {
-    "bench", "doctor", "down", "evict", "interactive", "run",
+    "bench", "doctor", "down", "evict", "interactive",
     "serve", "stats", "status", "up", "shell",
-    "chat", "diff", "web", "dashboard", "tui", "model", "service",
+    "diff", "web", "dashboard", "tui", "model", "service",
 }
 
 

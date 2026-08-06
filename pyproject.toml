@@ -54,10 +54,10 @@ select = ["E", "F", "I", "W", "B", "UP"]
 # and table-rendering code. The strings are intentional and rewrapping
 # them risks altering prompt semantics.
 "src/tokirecur/bench/cli.py" = ["E501"]
-# cli/__init__.py and cli/chat.py contain click help/epilog strings that
-# read better as one line each.
+# cli/__init__.py and cli/completions.py contain click help/epilog strings
+# that read better as one line each.
 "src/tokirecur/cli/__init__.py" = ["E501"]
-"src/tokirecur/cli/chat.py" = ["E501"]
+"src/tokirecur/cli/completions.py" = ["E501"]
 # ctl/__init__.py embeds provider-config dicts whose keys are intentionally
 # long (OpenClaw/OpenCode schema field names).
 "src/tokirecur/ctl/__init__.py" = ["E501"]
