@@ -225,10 +225,17 @@ jobs:
             *any.whl) echo "ok: platform-agnostic" ;;
             *) echo "error: platform-specific wheel" >&2; exit 1 ;;
           esac
+      - name: Assert runtime assets ship in the wheel
+        run: |
+          WHEEL=$(ls dist/*.whl)
+          unzip -l "$WHEEL" | grep -q "tokirecur/tui/theme.tcss" || { echo "missing tui/theme.tcss" >&2; exit 1; }
+          unzip -l "$WHEEL" | grep -q "tokirecur/web/static/style.css" || { echo "missing web/static/style.css" >&2; exit 1; }
+          unzip -l "$WHEEL" | grep -q "tokirecur/dashboard/static/style.css" || { echo "missing dashboard/static/style.css" >&2; exit 1; }
+          echo "ok: runtime assets present in wheel"
       - name: Install wheel in clean venv and smoke test
         run: |
           python -m venv /tmp/wheelvenv
           /tmp/wheelvenv/bin/pip install "$(ls dist/*.whl)"
           /tmp/wheelvenv/bin/pip install pytest pytest-asyncio
           /tmp/wheelvenv/bin/python -c "import tokirecur; print('ok')"
-          /tmp/wheelvenv/bin/pytest -q tests/unit/test_tree_cache_wiring.py
+          /tmp/wheelvenv/bin/pytest -q tests/unit/test_tree_cache_wiring.py tests/unit/test_packaging.py

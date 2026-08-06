@@ -68,9 +68,22 @@ def _default_chat_template_kwargs(reasoning: str) -> dict:
     return {"enable_thinking": reasoning != "off"}
 
 
+def _max_context_ceiling() -> int | None:
+    """Upper bound for max_tokens: the real slot context, passed by the
+    stack as TOKI_MAX_CONTEXT_TOKENS. Keeps clients from requesting
+    more output tokens than the slot has room for (which llama-server
+    rejects with 400 "not enough tokens")."""
+    try:
+        value = int(os.environ.get("TOKI_MAX_CONTEXT_TOKENS", ""))
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
 def _resolve_max_tokens(requested: int, reasoning: str = "auto") -> int:
     """Floor at the thinking/non-thinking budget without capping larger
-    client requests. Logs a one-time warning when a client's budget is
+    client requests, then clamp to the real slot context when the stack
+    provides one. Logs a one-time warning when a client's budget is
     silently raised.
     """
     global _FLOOR_WARNED
@@ -83,7 +96,11 @@ def _resolve_max_tokens(requested: int, reasoning: str = "auto") -> int:
             "budget raised so thinking models can finish reasoning",
             requested, MAX_TOKENS_FLOOR,
         )
-    return max(requested, floor)
+    resolved = max(requested, floor)
+    ceiling = _max_context_ceiling()
+    if ceiling:
+        resolved = min(resolved, ceiling)
+    return resolved
 
 
 class CompletionRequest(BaseModel):

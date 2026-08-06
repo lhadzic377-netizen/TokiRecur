@@ -676,13 +676,19 @@ def status() -> None:  # noqa: F811
 )
 def use(name: str, keep_others: bool, wait: bool) -> None:
     """Start the model stack and select it in opencode/openclaw/hermes."""
-    from ..ctl import sync_cli_configs, use_model
+    from ..ctl import _effective_ctx, sync_cli_configs, use_model
     try:
         spec = use_model(name, stop_others=not keep_others)
     except (KeyError, FileNotFoundError, RuntimeError) as e:
         click.echo(f"error: {e}", err=True)
         raise SystemExit(1) from None
     paths = sync_cli_configs(spec)
+    effective = _effective_ctx(spec)
+    if effective < spec.ctx_size:
+        click.echo(
+            f"note: context clamped to {effective} tokens (fits this "
+            f"machine's RAM; configured {spec.ctx_size})"
+        )
     click.echo(f"model '{name}' is up: llama :{spec.llama_port}  daemon :{spec.daemon_port}")
     for tool, path in paths.items():
         click.echo(f"  {tool:9s} -> {path}")

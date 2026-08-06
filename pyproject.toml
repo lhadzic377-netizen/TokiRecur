@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tokirecur"
-version = "0.1.0"
+version = "0.2.0"
 description = "Toki Recur — KV cache reuse for LLM inference. Drop-in prefix caching across CUDA, ROCm, and Vulkan."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -40,7 +40,14 @@ tokirecur-bench = "tokirecur.bench.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-"tokirecur" = ["py.typed", "bench/corpus/*.json"]
+# Runtime assets must ship in the wheel: the TUI stylesheet and the
+# web + dashboard single-page UIs. Without these, pipx installs fail
+# with "missing css file or variables" (TUI) or 404 on /static (web).
+"tokirecur" = [
+    "tui/*.tcss",
+    "web/static/*",
+    "dashboard/static/*",
+]
 
 [tool.ruff]
 line-length = 100

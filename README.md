@@ -61,6 +61,10 @@ toki tui
 
 No models are installed or started at install time — `toki model use <name>` is the explicit, documented way to bring one up (it starts llama-server + the toki daemon, stops competing big-model stacks, and wires opencode/openclaw/hermes at it). `toki up --model <path>` is the single-model equivalent for a raw GGUF without a registry entry. `toki serve` is **only** the API daemon (default 127.0.0.1:8787) that proxies to an already-running llama-server; it warns loudly if the backend isn't reachable instead of failing silently. Two chat frontends ship with toki: bare `toki` opens the full-screen launcher, `toki tui` is the full-screen TUI chat, and `toki web` is the browser chat UI.
 
+### Small-RAM machines
+
+On machines with limited RAM (8–16 GB), `toki model use` automatically reduces the requested context so the KV cache fits in memory alongside the model weights (it reads the GGUF header to compute KV usage per token, and the running server's real slot size after boot). The effective context — the smaller of your configured `ctx_size` and what the machine can actually hold — is written to the model's state dir and becomes the single source of truth: the OpenAI-compatible API advertises exactly that context, clamps `max_tokens` to it, and refuses to over-allocate when llama-server could not honor the requested context (which previously surfaced as confusing `400 not enough tokens` errors). Failed startups no longer hang on a spinning `starting/selecting model` — llama-server's log tail is surfaced and the launcher returns an error. If the server still can't start, pick a smaller/quantized model (`toki model pull`) or lower the model's `ctx_size` in the registry; the context floor is 512 tokens, so the server always gets a workable value.
+
 Without pipx, install into your own venv instead:
 
 ```bash

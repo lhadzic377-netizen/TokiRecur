@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -30,6 +31,8 @@ from typing import Any
 
 import httpx
 import yaml
+
+from ..ggufmeta import read_gguf_meta
 
 logger = logging.getLogger(__name__)
 
@@ -136,8 +139,8 @@ class ModelSpec:
     def daemon_url(self) -> str:
         return f"http://127.0.0.1:{self.daemon_port}"
 
-    def state_dir(self, root: Path = STATE_ROOT) -> Path:
-        return root / "model" / self.name
+    def state_dir(self, root: Path | None = None) -> Path:
+        return (root or STATE_ROOT) / "model" / self.name
 
 
 def _ensure_registry() -> Path:
@@ -208,6 +211,60 @@ def _available_gb() -> float:
         except Exception:
             return float("inf")
     return float("inf")
+
+
+_KV_BYTES_PER_ELEM = {"f16": 2.0, "q8_0": 1.0625, "q4_0": 0.5625,
+                      "q4_1": 0.6875, "q5_0": 0.6875, "q5_1": 0.8125}
+_CTX_FLOOR = 512
+
+
+def _kv_bytes_per_token(spec: ModelSpec) -> float | None:
+    """llama.cpp KV cache bytes per token across all layers/slots.
+
+    Exact math: per layer, k+v each hold ``head_dim * n_head_kv``
+    values, with ``head_dim = n_embd / n_head``. Requires the model's
+    GGUF metadata; ``None`` when unreadable (caller skips clamping).
+    """
+    meta = read_gguf_meta(spec.gguf)
+    if not meta.complete or meta.n_head == 0:
+        return None
+    head_dim = meta.n_embd / meta.n_head
+    per_layer = head_dim * meta.n_head_kv * 2.0 * _KV_BYTES_PER_ELEM.get(spec.kv, 2.0)
+    return per_layer * meta.n_layer * spec.parallel
+
+
+def _clamp_ctx(spec: ModelSpec, avail_gb: float | None = None,
+               weight_gb: float | None = None) -> int:
+    """Largest context (>= ``_CTX_FLOOR``) whose KV cache fits in RAM.
+
+    Uses the same headroom budget as ``_estimate_need``: weights * 1.2
+    + 4 GB. When the GGUF metadata is unavailable (or the machine's
+    RAM can't be measured) the configured ``ctx_size`` is returned
+    untouched and llama-server's own auto-reduction applies.
+    """
+    kv_per_token = _kv_bytes_per_token(spec)
+    if kv_per_token is None:
+        return spec.ctx_size
+    if avail_gb is None:
+        avail_gb = _available_gb()
+    if weight_gb is None:
+        weight_gb = Path(spec.gguf).stat().st_size / 1e9 if Path(spec.gguf).exists() else 0.0
+    budget = avail_gb - weight_gb * 1.2 - 4.0
+    if budget <= 0 or not math.isfinite(budget):
+        return spec.ctx_size  # unknown RAM or weights alone don't fit
+    max_fit = int(budget * 1e9 / kv_per_token)
+    return max(_CTX_FLOOR, min(spec.ctx_size, max_fit))
+
+
+def _effective_ctx(spec: ModelSpec) -> int:
+    """The context llama-server actually runs with (clamped, then
+    corrected to the real slot size after start). Falls back to the
+    configured ``ctx_size`` before the first start."""
+    state = spec.state_dir() / "effective_ctx.txt"
+    try:
+        return int(state.read_text().strip())
+    except (OSError, ValueError):
+        return spec.ctx_size
 
 
 def _check_ram(spec: ModelSpec) -> None:
@@ -844,15 +901,16 @@ def model_status(spec: ModelSpec) -> dict[str, Any]:
 # ── Start / stop ───────────────────────────────────────────────────────
 
 
-def _llama_args(spec: ModelSpec) -> list[str]:
+def _llama_args(spec: ModelSpec, ctx_override: int | None = None) -> list[str]:
     if not Path(spec.gguf).exists():
         raise FileNotFoundError(f"model file not found: {spec.gguf}")
+    ctx = spec.ctx_size if ctx_override is None else ctx_override
     args = [
         spec.binary,
         "-m", spec.gguf,
         "--host", "127.0.0.1",
         "--port", str(spec.llama_port),
-        "-c", str(spec.ctx_size),
+        "-c", str(ctx),
         "--parallel", str(spec.parallel),
         "-lv", "3",
     ]
@@ -877,6 +935,60 @@ _UNDER_SYSTEMD = bool(os.environ.get("INVOCATION_ID"))
 _DETACH = not _UNDER_SYSTEMD
 
 
+def _log_tail(path: Path, n: int = 40) -> str:
+    """Last ``n`` lines of a log file, for surfacing start failures."""
+    try:
+        lines = path.read_text(errors="replace").splitlines()
+        return "\n".join(lines[-n:])
+    except OSError:
+        return "(log unavailable)"
+
+
+def _wait_healthy(url: str, proc: subprocess.Popen | None, log_path: Path,
+                  timeout: float, service: str) -> None:
+    """Wait for a service's health endpoint, failing fast if the child
+    process dies instead of spinning until ``timeout``.
+
+    Raises RuntimeError with the log tail on child death, so "starting
+    model" can never hang silently behind a crashed llama-server.
+    """
+    started = time.time()
+    while time.time() - started < timeout:
+        if proc is not None and proc.poll() is not None:
+            raise RuntimeError(
+                f"{service} exited during startup (exit code {proc.returncode}); "
+                f"last lines of {log_path}:\n{_log_tail(log_path)}"
+            )
+        try:
+            r = httpx.get(url, timeout=2.0)
+            if r.status_code < 500:
+                return
+        except Exception:
+            pass
+        time.sleep(0.5)
+    raise RuntimeError(
+        f"{service} did not become healthy within {timeout:.0f}s; "
+        f"last lines of {log_path}:\n{_log_tail(log_path)}"
+    )
+
+
+def _real_slot_ctx(url: str) -> int | None:
+    """The context the running llama-server actually gave its slots.
+
+    llama.cpp auto-reduces the requested ``-c`` when the KV cache
+    can't fit memory, so the configured ctx_size can lie. Reading the
+    live slot size gives providers (opencode configs, daemon budget)
+    the single source of truth.
+    """
+    try:
+        r = httpx.get(f"{url}/slots", timeout=3.0)
+        r.raise_for_status()
+        ctxs = [int(s.get("n_ctx", 0)) for s in r.json() if s.get("n_ctx")]
+        return min(ctxs) if ctxs else None
+    except Exception:
+        return None
+
+
 def start_model(spec: ModelSpec, wait: bool = True) -> None:
     """Bring up the model's llama-server + daemon (idempotent)."""
     state = spec.state_dir()
@@ -886,9 +998,15 @@ def start_model(spec: ModelSpec, wait: bool = True) -> None:
         if not Path(spec.gguf).exists():
             raise FileNotFoundError(f"model file not found: {spec.gguf}")
         _check_ram(spec)
+        ctx = _clamp_ctx(spec)
+        if ctx < spec.ctx_size:
+            logger.warning(
+                "%s: context clamped %d -> %d (KV cache must fit in RAM)",
+                spec.name, spec.ctx_size, ctx,
+            )
         log = open(state / "llama.log", "ab")
         proc = subprocess.Popen(
-            _llama_args(spec),
+            _llama_args(spec, ctx_override=ctx),
             stdout=log,
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
@@ -897,15 +1015,24 @@ def start_model(spec: ModelSpec, wait: bool = True) -> None:
         )
         (state / "llama.pid").write_text(str(proc.pid))
         logger.info("%s: llama-server started (pid=%d)", spec.name, proc.pid)
-        if wait and not _wait_for(f"{spec.llama_url}/health", timeout=1800.0):
-            raise RuntimeError(f"llama-server for {spec.name} failed to start; see {state / 'llama.log'}")
+        if wait:
+            _wait_healthy(
+                f"{spec.llama_url}/health", proc, state / "llama.log",
+                timeout=1800.0, service=f"llama-server ({spec.name})",
+            )
+        # llama.cpp may have reduced the requested context further to
+        # fit memory; the real slot size is the truth clients must use.
+        real_ctx = _real_slot_ctx(spec.llama_url)
+        effective = min(real_ctx, ctx) if real_ctx else ctx
+        (state / "effective_ctx.txt").write_text(str(max(_CTX_FLOOR, effective)))
 
     if not daemon_reachable(spec):
+        effective = _effective_ctx(spec)
         log = open(state / "daemon.log", "ab")
         env = {
             **os.environ,
             "TOKI_BACKEND_URL": spec.llama_url,
-            "TOKI_MAX_CONTEXT_TOKENS": str(spec.max_tokens),
+            "TOKI_MAX_CONTEXT_TOKENS": str(effective),
             "TOKI_REASONING": spec.reasoning,
         }
         proc = subprocess.Popen(
@@ -925,8 +1052,11 @@ def start_model(spec: ModelSpec, wait: bool = True) -> None:
         )
         (state / "daemon.pid").write_text(str(proc.pid))
         logger.info("%s: daemon started (pid=%d)", spec.name, proc.pid)
-        if wait and not _wait_for(f"{spec.daemon_url}/healthz", timeout=60.0):
-            raise RuntimeError(f"daemon for {spec.name} failed to start; see {state / 'daemon.log'}")
+        if wait:
+            _wait_healthy(
+                f"{spec.daemon_url}/healthz", proc, state / "daemon.log",
+                timeout=60.0, service=f"toki daemon ({spec.name})",
+            )
 
 
 def _stop_pidfile(path: Path, grace: float = 8.0) -> bool:
@@ -1103,6 +1233,12 @@ def _backup(path: Path) -> None:
 
 
 def _provider_entry(spec: ModelSpec) -> dict[str, Any]:
+    # Advertise the context the model ACTUALLY runs with (clamped to
+    # fit RAM, corrected to the live slot size after start) — never the
+    # registry max_tokens. Advertising a bigger window than the slot
+    # exists makes opencode overfill the context and hit llama-server's
+    # 400 "not enough tokens".
+    ctx = _effective_ctx(spec)
     return {
         "name": f"Toki Recur ({spec.label})",
         "npm": "@ai-sdk/openai-compatible",
@@ -1113,8 +1249,8 @@ def _provider_entry(spec: ModelSpec) -> dict[str, Any]:
         "models": {
             spec.model_id: {
                 "name": f"{spec.label} (Toki Recur)",
-                "contextWindow": spec.max_tokens,
-                "limit": {"context": spec.max_tokens, "output": 8192},
+                "contextWindow": ctx,
+                "limit": {"context": ctx, "output": min(8192, max(1, ctx // 2))},
             }
         },
     }
