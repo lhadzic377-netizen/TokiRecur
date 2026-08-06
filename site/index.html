@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Toki Recur — KV cache reuse for LLM inference</title>
+<meta name="description" content="Toki Recur is drop-in prefix caching for local LLM inference. Reuse the KV cache across agents, shells, and services on llama.cpp — no patches, no vendor lock-in.">
+<meta property="og:title" content="Toki Recur — KV cache reuse for LLM inference">
+<meta property="og:description" content="Drop-in prefix caching across CUDA, ROCm, Vulkan, Metal, and CPU. Reuse the KV cache between agents and services on llama.cpp.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://tokirecur.com/">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="topbar">
+  <nav>
+    <a class="brand" href="#top"><svg class="logo" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="14" fill="none" stroke="#ffd60a" stroke-width="4"/><g class="l-slice" fill="#ffd60a"><rect x="11" y="12" width="42" height="9" rx="4.5"/><rect x="24" y="24" width="16" height="9" rx="4.5"/></g><rect class="l-slice" x="24" y="36" width="16" height="9" rx="4.5" fill="none" stroke="#ffd60a" stroke-width="4"/><rect class="l-slice" x="24" y="48" width="16" height="9" rx="4.5" fill="none" stroke="#ffd60a" stroke-width="4"/></svg> Toki Recur</a>
+    <div class="links">
+      <a href="#how">How it works</a>
+      <a href="#benchmarks">Benchmarks</a>
+      <a href="#quickstart">Quick start</a>
+      <a href="#architecture">Architecture</a>
+      <a href="https://github.com/lhadzic377-netizen/TokiRecur" target="_blank" rel="noopener">GitHub</a>
+      <a href="/docs/">Docs</a>
+    </div>
+  </nav>
+</header>
+
+<main id="top">
+  <section class="hero">
+    <p class="kicker reveal">Local LLM inference · llama.cpp</p>
+    <h1 class="reveal">Reuse the KV cache.<br><span class="accent">Never regenerate the same context twice.</span></h1>
+    <p class="lede reveal">
+      Toki Recur is drop-in prefix caching for local inference. Agents, shells, and services
+      running against the same llama-server share one living KV cache — so a long system
+      prompt, tool corpus, or project context is computed once and replayed from memory.
+      No patches. No vendor lock-in. Just an OpenAI-compatible daemon in front of your model.
+    </p>
+    <div class="cta reveal">
+      <a class="btn" href="#quickstart">Install in 3 commands</a>
+      <a class="btn ghost" href="#benchmarks">See measured results</a>
+    </div>
+  </section>
+
+  <section class="cards" id="what">
+    <div class="card reveal">
+      <h3>⚡ Drop-in cache</h3>
+      <p>Point any OpenAI-compatible client (opencode, OpenClaw, Hermes, your own) at the toki
+      daemon. Prompts that start with a cached prefix return instantly.</p>
+    </div>
+    <div class="card reveal">
+      <h3>🔄 Live reuse</h3>
+      <p>Multiple agents and shells share one server's KV cache. Context written by one session
+      is replayed by the next — no duplicate compute, no duplicate memory.</p>
+    </div>
+    <div class="card reveal">
+      <h3>📦 Save &amp; restore</h3>
+      <p>Persist whole caches to disk and restore them later: cold-start a service with its
+      long system prompt already cached, or hand a session to another machine.</p>
+    </div>
+    <div class="card reveal">
+      <h3>🛡️ RAM-aware by default</h3>
+      <p>The daemon reads the GGUF header, fits the KV cache into your machine's memory, and
+      advertises the <em>real</em> context to clients — no more “not enough tokens” 400s on
+      small boxes.</p>
+    </div>
+    <div class="card reveal">
+      <h3>🧪 Benchmark harness</h3>
+      <p>A self-contained bench runs real workloads (agent loops, RAG chunks, adversarial
+      prompts) and reports cache-hit rates and end-to-end latency vs. a fresh cache.</p>
+    </div>
+    <div class="card reveal">
+      <h3>🖥️ TUI + web chat</h3>
+      <p>Full-screen terminal chat and a production-ready single-page web UI ship with the
+      package — one command each.</p>
+    </div>
+  </section>
+
+  <section id="how">
+    <h2>How it works</h2>
+    <ol class="steps">
+      <li class="reveal"><strong>Boot</strong> — <code>toki model use</code> starts llama-server plus the toki
+        daemon, wires your CLI tools at it, and writes the effective context it can actually hold.</li>
+      <li class="reveal"><strong>Stream</strong> — clients call the daemon's OpenAI-compatible API. Shared
+        prefixes hit the cached KV blocks instead of re-running the model.</li>
+      <li class="reveal"><strong>Persist</strong> — <code>toki cache save</code> / <code>toki cache restore</code>
+        snapshot caches to disk; <code>toki cache stats</code> shows hits, misses, and savings.</li>
+    </ol>
+  </section>
+
+  <section id="benchmarks">
+    <h2 class="reveal">Benchmarks <span class="sub">cache-hit efficiency &amp; throughput</span></h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Workload</th><th>Score</th><th>Grade</th><th>What it measures</th></tr>
+        </thead>
+        <tbody>
+          <tr class="reveal">
+            <td><code>realistic_mixed</code></td>
+            <td>82.4 / 100</td><td><span class="grade">A</span></td>
+            <td>216 prompts across 5 real-world categories — agent sessions, chat, code, docs, RAG</td>
+          </tr>
+          <tr class="reveal">
+            <td><code>stress_adversarial</code></td>
+            <td>39.2 / 100</td><td><span class="grade bad">F</span></td>
+            <td>301 prompts with overlapping-but-adversarial patterns (worst case for prefix caching)</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note reveal">These are the most realistic scores — cache performance varies with the
+      environment, so the benchmark may score better or worse on other hardware, models, or workloads.</p>
+  </section>
+
+  <section id="quickstart">
+    <h2 class="reveal">Quick start</h2>
+    <p class="reveal">Nothing is preinstalled — you pull exactly what you want. Three commands to first chat:</p>
+    <pre class="code reveal" data-copy><code>pipx install tokirecur
+toki model install-llama                          # auto-detects ROCm/CUDA/Vulkan/Metal/CPU
+toki model pull Qwen/Qwen3-8B-GGUF --name qwen3-8b   # fetch a GGUF, register as "qwen3-8b"
+toki model use qwen3-8b                           # boot llama-server + daemon, wire your CLIs
+toki tui                                          # full-screen chat — or: toki web</code></pre>
+    <p class="note">Runs on any x86_64 or arm64 Linux, macOS, or Windows box — with whatever GPU
+      backend your llama-server build has. Optional systemd/launchd daemon mode included.</p>
+  </section>
+
+  <section id="architecture">
+    <h2 class="reveal">Architecture</h2>
+    <div class="arch">
+      <div class="node reveal">Your agents<br><small>opencode · OpenClaw · Hermes · any OpenAI client</small></div>
+      <div class="arrow">↓ ↑</div>
+      <div class="node accent reveal">toki daemon<br><small>OpenAI-compatible API · cache save/restore · metrics</small></div>
+      <div class="arrow">↓ ↑</div>
+      <div class="node reveal">llama-server<br><small>one living KV cache shared by every client</small></div>
+    </div>
+  </section>
+
+  <section class="cta-final">
+    <h2 class="reveal">Your server, your cache, your tokens.</h2>
+    <a class="btn" href="https://github.com/lhadzic377-netizen/TokiRecur" target="_blank" rel="noopener">Get it on GitHub</a>
+  </section>
+</main>
+
+<footer>
+  <p>Toki Recur — KV cache reuse for LLM inference · MIT licensed</p>
+  <p class="dim">Site serving via <span class="accent">tokirecur.com</span> · <span class="accent">chat.tokirecur.com</span> for the live web chat</p>
+</footer>
+
+<script src="/app.js" defer></script>
+</body>
+</html>

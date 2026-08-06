@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Benchmark — Toki Recur Docs</title>
+<meta name="description" content="The toki bench workloads, composite scoring weights, and measured results on this hardware.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/docs/docs.css">
+</head>
+<body>
+<header class="topbar">
+  <nav>
+    <a class="brand" href="/"><svg class="logo" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="14" fill="none" stroke="#ffd60a" stroke-width="4"/><g class="l-slice" fill="#ffd60a"><rect x="11" y="12" width="42" height="9" rx="4.5"/><rect x="24" y="24" width="16" height="9" rx="4.5"/></g><rect class="l-slice" x="24" y="36" width="16" height="9" rx="4.5" fill="none" stroke="#ffd60a" stroke-width="4"/><rect class="l-slice" x="24" y="48" width="16" height="9" rx="4.5" fill="none" stroke="#ffd60a" stroke-width="4"/></svg> Toki Recur</a>
+    <div class="links">
+      <a href="/">Home</a>
+      <a href="/docs/" class="active">Docs</a>
+      <a href="https://github.com/lhadzic377-netizen/TokiRecur" target="_blank" rel="noopener">GitHub</a>
+    </div>
+  </nav>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <div class="doc-title">Documentation</div>
+    <a href="/docs/">Overview</a>
+    <a href="/docs/install.html">Install</a>
+    <a href="/docs/quickstart.html">Quick start</a>
+    <a href="/docs/commands.html">Command reference</a>
+    <a href="/docs/interfaces.html">Launcher &amp; shells</a>
+    <a href="/docs/architecture.html">Architecture</a>
+    <a href="/docs/api.html">API reference</a>
+    <a href="/docs/benchmark.html" class="active">Benchmark</a>
+    <a href="/docs/deploy.html">Production deploy</a>
+    <a href="/docs/development.html">Development</a>
+  </aside>
+
+  <main class="doc">
+    <h1 class="reveal">Benchmark</h1>
+
+    <p class="reveal">The benchmark compares baseline (no cache) vs recycled (cache enabled) runs across TTFT, prefill throughput, end-to-end latency, cache hit rate, and output equivalence, then prints a composite score (0–100) with a letter grade.</p>
+
+    <pre class="reveal"><code>toki bench   # interactive: pick a model from the registry + a workload from a menu
+
+# Fully scripted (registry name or path):
+toki bench --model 9b --workload agent_long_context \
+           --max-tokens 64 --output-json report.json
+
+# Self-contained: spin up llama-server + bench together (auto-stop)
+toki bench --model ~/Downloads/Qwen3.5-9B-Q4_K_M.gguf \
+           --self-contained --ctx-size 8192 --n-gpu-layers 99</code></pre>
+
+    <h2>Workloads</h2>
+    <table>
+      <thead><tr><th>Workload</th><th>Expected hit rate</th><th>Best for</th></tr></thead>
+      <tbody>
+        <tr><td><code>agent_long_context</code></td><td>~90%</td><td>Agent systems with long fixed prompts</td></tr>
+        <tr><td><code>agent_25 / 50 / 100</code></td><td>~99%</td><td>Same pattern, 25 / 50 / 100 prompts</td></tr>
+        <tr><td><code>rag_chunks</code></td><td>~90%</td><td>RAG with shared document prefixes</td></tr>
+        <tr><td><code>mixed</code></td><td>~50%</td><td>Mixed chat traffic</td></tr>
+        <tr><td><code>no_overlap</code></td><td>0%</td><td>Baseline / worst-case validation</td></tr>
+        <tr><td><code>realistic_mixed</code></td><td>~95%</td><td>216 prompts across 5 real-world categories (RAG, tool-using, multi-turn, support, one-off)</td></tr>
+        <tr><td><code>stress_adversarial</code></td><td>varies</td><td>301 prompts with adversarial patterns (burst, near-miss, sequential, tiny, novel)</td></tr>
+      </tbody>
+    </table>
+
+    <h2>Scoring</h2>
+    <p>The composite score (0–100) is derived from weights that reflect production importance rather than end-to-end wall-clock:</p>
+    <table>
+      <thead><tr><th>Component</th><th>Weight</th><th>What it measures</th></tr></thead>
+      <tbody>
+        <tr><td>Prefill skip</td><td>30%</td><td>% of prefill tokens served from cache</td></tr>
+        <tr><td>TTFT improvement</td><td>25%</td><td>Reduction in time to first token</td></tr>
+        <tr><td>Throughput gain</td><td>20%</td><td>Prefill tokens/sec improvement</td></tr>
+        <tr><td>Cache hit rate</td><td>15%</td><td>Hit rate</td></tr>
+        <tr><td>Output equivalence</td><td>10%</td><td>Semantic similarity of outputs</td></tr>
+        <tr><td>Wall-clock gain</td><td>5%</td><td>Total latency reduction</td></tr>
+      </tbody>
+    </table>
+    <p>Letter grades: A+ ≥ 90, A ≥ 80, B ≥ 70, C ≥ 60, D ≥ 50, F &lt; 50.</p>
+
+    <h2>Measured results (this hardware)</h2>
+    <p>Run on AMD Ryzen AI MAX+ 395, Qwen3.5-9B-Q4_K_M, max-tokens=32. Cache performance varies with the environment — the benchmark may score better or worse on other hardware, models, or workloads.</p>
+
+    <h3>realistic_mixed (216 prompts, 5 categories) — 82.4 / 100 (A)</h3>
+    <table>
+      <thead><tr><th>Category</th><th>N</th><th>Hit rate</th><th>Avg reuse</th><th>TTFT Δ</th><th>Prefill skip</th></tr></thead>
+      <tbody>
+        <tr><td>rag</td><td>60</td><td>98%</td><td>573 tok</td><td>+61.9%</td><td>48.5%</td></tr>
+        <tr><td>tool</td><td>51</td><td>98%</td><td>443 tok</td><td>+33.2%</td><td>48.0%</td></tr>
+        <tr><td>multiturn</td><td>40</td><td>100%</td><td>1 tok</td><td>+23.6%</td><td>0.3%</td></tr>
+        <tr><td>support</td><td>30</td><td>100%</td><td>1 tok</td><td>+25.6%</td><td>0.4%</td></tr>
+        <tr><td>oneoff</td><td>20</td><td>60%</td><td>1 tok</td><td>+12.2%</td><td>4.5%</td></tr>
+      </tbody>
+    </table>
+    <table>
+      <thead><tr><th>Metric</th><th>Baseline</th><th>Recycled</th><th>Δ</th></tr></thead>
+      <tbody>
+        <tr><td>Total latency</td><td>1370 ms</td><td>1221 ms</td><td>+12.2%</td></tr>
+        <tr><td>TTFT</td><td>435 ms</td><td>251 ms</td><td>+42.4%</td></tr>
+        <tr><td>Prefill throughput</td><td>808 tok/s</td><td>3880 tok/s</td><td>+380%</td></tr>
+        <tr><td>Tokens skipped</td><td>0</td><td>57,058</td><td>—</td></tr>
+        <tr><td>Cache hit rate</td><td>0%</td><td>95.0%</td><td>—</td></tr>
+      </tbody>
+    </table>
+    <p>Output divergence: 46.8% byte-identical, median first-diff at char 15 (tail-end divergence, not prefix-level).</p>
+
+    <h3>stress_adversarial (301 prompts, 5 patterns) — 39.2 / 100 (F)</h3>
+    <table>
+      <thead><tr><th>Category</th><th>N</th><th>Hit rate</th><th>Avg reuse</th><th>TTFT Δ</th><th>Prefill skip</th></tr></thead>
+      <tbody>
+        <tr><td>burst</td><td>60</td><td>98%</td><td>55 tok</td><td>+5.7%</td><td>42.9%</td></tr>
+        <tr><td>novel</td><td>90</td><td>93%</td><td>3 tok</td><td>+24.6%</td><td>18.0%</td></tr>
+        <tr><td>near_miss</td><td>50</td><td>98%</td><td>48 tok</td><td>+14.9%</td><td>40.9%</td></tr>
+        <tr><td>sequential</td><td>50</td><td>98%</td><td>14 tok</td><td>-12.3%</td><td>2.8%</td></tr>
+        <tr><td>tiny</td><td>51</td><td>98%</td><td>2 tok</td><td>+1.5%</td><td>9.3%</td></tr>
+      </tbody>
+    </table>
+    <p>The stress workload surfaces edge cases: many <code>novel</code> prompts get classified as hits (false positives from cosine similarity), short prompts have minimal savings, sequential growth underperforms vs single-shot reuse. That diagnostic value is exactly what a hard test should provide.</p>
+
+    <p class="callout">Next: <a href="/docs/deploy.html">Production deploy</a> — systemd, auth, and TLS.</p>
+  </main>
+</div>
+
+<footer>Toki Recur — KV cache reuse for LLM inference · MIT licensed</footer>
+<script src="/docs/docs.js" defer></script>
+</body>
+</html>

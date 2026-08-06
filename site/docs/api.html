@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>API reference — Toki Recur Docs</title>
+<meta name="description" content="The OpenAI-compatible daemon API: completions, chat completions, cache admin endpoints, auth, and client wiring.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/docs/docs.css">
+</head>
+<body>
+<header class="topbar">
+  <nav>
+    <a class="brand" href="/"><svg class="logo" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="14" fill="none" stroke="#ffd60a" stroke-width="4"/><g class="l-slice" fill="#ffd60a"><rect x="11" y="12" width="42" height="9" rx="4.5"/><rect x="24" y="24" width="16" height="9" rx="4.5"/></g><rect class="l-slice" x="24" y="36" width="16" height="9" rx="4.5" fill="none" stroke="#ffd60a" stroke-width="4"/><rect class="l-slice" x="24" y="48" width="16" height="9" rx="4.5" fill="none" stroke="#ffd60a" stroke-width="4"/></svg> Toki Recur</a>
+    <div class="links">
+      <a href="/">Home</a>
+      <a href="/docs/" class="active">Docs</a>
+      <a href="https://github.com/lhadzic377-netizen/TokiRecur" target="_blank" rel="noopener">GitHub</a>
+    </div>
+  </nav>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <div class="doc-title">Documentation</div>
+    <a href="/docs/">Overview</a>
+    <a href="/docs/install.html">Install</a>
+    <a href="/docs/quickstart.html">Quick start</a>
+    <a href="/docs/commands.html">Command reference</a>
+    <a href="/docs/interfaces.html">Launcher &amp; shells</a>
+    <a href="/docs/architecture.html">Architecture</a>
+    <a href="/docs/api.html" class="active">API reference</a>
+    <a href="/docs/benchmark.html">Benchmark</a>
+    <a href="/docs/deploy.html">Production deploy</a>
+    <a href="/docs/development.html">Development</a>
+  </aside>
+
+  <main class="doc">
+    <h1 class="reveal">API reference</h1>
+
+    <p class="reveal">The daemon (default <code>127.0.0.1:8787</code>) is OpenAI-compatible, so any OpenAI client — opencode, OpenClaw, Hermes, Codex, or your own — can point at it. Requests are also <strong>tool-calling capable</strong>: tool calls stream through verbatim (<code>delta.tool_calls</code>), finish with <code>finish_reason: "tool_calls"</code>, and <code>role: "tool"</code> result messages round-trip unchanged.</p>
+
+    <h2>Completions</h2>
+    <pre><code>POST /v1/completions
+POST /v1/chat/completions</code></pre>
+    <p>Standard OpenAI request/response shapes, with streaming (SSE) support. <code>max_tokens</code> is clamped to the effective context advertised by the daemon, so clients never hit "not enough tokens" 400s on small boxes.</p>
+
+    <h2>Cache admin</h2>
+    <pre><code>POST   /cache/lookup    # look up a prompt against the cached index
+DELETE /cache/{id}      # evict a single cached prompt
+GET    /cache/stats     # hit rate, bytes, entries</code></pre>
+
+    <h2>Health</h2>
+    <pre><code>GET /healthz</code></pre>
+
+    <h2>Auth</h2>
+    <p>Set <code>TOKI_AUTH_TOKEN</code> to gate the API. Clients send it as a standard <code>Authorization: Bearer &lt;token&gt;</code> header. The same token gates the web UI login (HMAC-signed, HttpOnly session cookie) and the chat WebSocket (rejects handshakes without it, close code 4401).</p>
+
+    <h2>Client wiring</h2>
+    <p>Any OpenAI-compatible client works. Example — opencode:</p>
+    <pre><code>{
+  "provider": {
+    "tokirecur": {
+      "name": "Toki Recur (KV-cache, local)",
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "http://127.0.0.1:8787/v1",
+        "apiKey": "demo-token"
+      },
+      "models": {
+        "qwen3.5-9b": {
+          "name": "Qwen3.5 9B (Toki Recur)",
+          "contextWindow": 24000,
+          "limit": { "context": 24000, "output": 8192 }
+        }
+      }
+    }
+  },
+  "small_model": "tokirecur/qwen3.5-9b"
+}</code></pre>
+    <p>The model id is a label; the actual weights are whatever llama-server has loaded. <code>contextWindow</code> should stay under <code>TOKI_MAX_CONTEXT_TOKENS</code>.</p>
+
+    <h2>Codex (Responses API)</h2>
+    <p>Codex CLI (v0.146+) speaks the Responses API. Point it at the daemon with <code>wire_api = "responses"</code>; the daemon serves <code>/v1/responses</code> and translates between the two protocols transparently (including tool calls, reasoning summaries, and cache metrics).</p>
+    <pre><code>[model_providers.tokirecur]
+name = "Toki Recur"
+base_url = "http://127.0.0.1:8787/v1"
+wire_api = "responses"
+env_key = "TOKI_AUTH_TOKEN"
+[model_providers.tokirecur.env]
+TOKI_AUTH_TOKEN = "demo-token"</code></pre>
+
+    <p class="callout">Next: <a href="/docs/benchmark.html">Benchmark</a> — workloads, scoring, and measured results.</p>
+  </main>
+</div>
+
+<footer>Toki Recur — KV cache reuse for LLM inference · MIT licensed</footer>
+<script src="/docs/docs.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Launcher &amp; shells — Toki Recur Docs</title>
+<meta name="description" content="The full-screen launcher, the interactive toki shell, the TUI chat, and the web chat UI.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/docs/docs.css">
+</head>
+<body>
+<header class="topbar">
+  <nav>
+    <a class="brand" href="/"><svg class="logo" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="14" fill="none" stroke="#ffd60a" stroke-width="4"/><g class="l-slice" fill="#ffd60a"><rect x="11" y="12" width="42" height="9" rx="4.5"/><rect x="24" y="24" width="16" height="9" rx="4.5"/></g><rect class="l-slice" x="24" y="36" width="16" height="9" rx="4.5" fill="none" stroke="#ffd60a" stroke-width="4"/><rect class="l-slice" x="24" y="48" width="16" height="9" rx="4.5" fill="none" stroke="#ffd60a" stroke-width="4"/></svg> Toki Recur</a>
+    <div class="links">
+      <a href="/">Home</a>
+      <a href="/docs/" class="active">Docs</a>
+      <a href="https://github.com/lhadzic377-netizen/TokiRecur" target="_blank" rel="noopener">GitHub</a>
+    </div>
+  </nav>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <div class="doc-title">Documentation</div>
+    <a href="/docs/">Overview</a>
+    <a href="/docs/install.html">Install</a>
+    <a href="/docs/quickstart.html">Quick start</a>
+    <a href="/docs/commands.html">Command reference</a>
+    <a href="/docs/interfaces.html" class="active">Launcher &amp; shells</a>
+    <a href="/docs/architecture.html">Architecture</a>
+    <a href="/docs/api.html">API reference</a>
+    <a href="/docs/benchmark.html">Benchmark</a>
+    <a href="/docs/deploy.html">Production deploy</a>
+    <a href="/docs/development.html">Development</a>
+  </aside>
+
+  <main class="doc">
+    <h1 class="reveal">Launcher &amp; shells</h1>
+
+    <h2>The launcher</h2>
+    <p>Bare <code>toki</code> opens an Ollama-style full-screen launcher in a black + yellow design: a letter-spaced yellow <code>TOKI</code> wordmark with tagline and amber divider, then a vertically-centred column of app cards — toki Chat, OpenCode, Hermes, OpenClaw, web dashboards — each bound to the pinned model (shown as a right-aligned chip). The active row is highlighted with a yellow accent bar. A status line shows the pinned model, backend health dots, and key hints; keys <code>1</code>–<code>5</code> jump straight to an app (or model).</p>
+
+    <table>
+      <thead><tr><th>Key</th><th>Action</th></tr></thead>
+      <tbody>
+        <tr><td><code>↑</code> / <code>↓</code> (or <code>k</code> / <code>j</code>)</td><td>navigate apps or models</td></tr>
+        <tr><td><code>Enter</code></td><td>launch the highlighted app with the pinned model</td></tr>
+        <tr><td><code>→</code> / <code>Tab</code></td><td>flip to the model picker (per-model health dots + ctx)</td></tr>
+        <tr><td><code>←</code></td><td>back to the app list</td></tr>
+        <tr><td><code>Space</code></td><td>pin the highlighted model in the picker</td></tr>
+        <tr><td><code>s</code></td><td>open the settings pane (edit any registry field)</td></tr>
+        <tr><td><code>Esc</code> / <code>q</code></td><td>quit</td></tr>
+      </tbody>
+    </table>
+
+    <p>In the settings pane, <code>Enter</code> opens an editor for the highlighted field. Sizing and enum fields (<code>ctx_size</code>, <code>max_tokens</code>, <code>parallel</code>, <code>kv</code>, <code>reasoning</code>, <code>always_on</code>, <code>boot</code>) open a <strong>dropdown</strong> of presets with a <code>custom…</code> option that falls back to the free-text editor; paths, ports and ids stay plain text. Both editors have <strong>Save</strong> / <strong>Cancel</strong> buttons: <code>Save</code> writes the field to the registry (<code>~/.config/tokirecur/models.yaml</code>) immediately; <code>Cancel</code> (or <code>Esc</code>) discards.</p>
+
+    <p>The <code>reasoning</code> field controls thinking mode: <code>auto</code>/<code>on</code> enable it — the model's reasoning is streamed (dimmed in the TUI chat, rendered as a separate block in the web UI); <code>off</code> passes <code>--reasoning off</code> to llama-server at launch. Changes take effect on the model's next start.</p>
+
+    <h2>Interactive shell</h2>
+    <p>The shell prompt has a live status indicator — <code>llama:✓ daemon:✓</code> means both are reachable. Tab completion and command history are enabled if <code>prompt_toolkit</code> is installed (installed by default).</p>
+    <pre><code>up [--detach]                 start llama-server + daemon
+down [-y]                     stop llama-server + daemon
+status                        show stack state
+doctor                        check llama-server, ROCm, GPU
+bench [args]                  run the benchmark suite
+run "prompt"                  one-shot completion via daemon
+stats                         cache index stats
+list [n]                      list cached prompts (default 20)
+show &lt;id&gt;                     show prompt details
+evict &lt;mb&gt;                    LRU evict to target MB
+clear                         wipe cache
+model &lt;path&gt;                  set GGUF model path
+port llama &lt;n&gt; / daemon &lt;n&gt;   set ports
+ctx &lt;n&gt; / ngpu &lt;n&gt;            set context size / GPU layers
+config                        show current config
+compare &lt;a.json&gt; &lt;b.json&gt;     compare two bench reports
+help [command]                show help for a command (or all)
+exit / quit / q               exit shell</code></pre>
+
+    <h2>TUI chat (<code>toki tui</code>)</h2>
+    <p>The full-screen terminal chat client. Three modes, switched with <code>Ctrl+1/2/3</code> (or in-chat slash commands):</p>
+    <table>
+      <thead><tr><th>Mode</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr><td><code>raw</code></td><td>Sends directly to llama-server (bypasses cache)</td></tr>
+        <tr><td><code>cached</code></td><td>Sends through the toki daemon (recycling engine)</td></tr>
+        <tr><td><code>compare</code></td><td>Runs each prompt both ways, shows side-by-side diff</td></tr>
+      </tbody>
+    </table>
+
+    <pre><code>toki tui                                   # chat against localhost daemon + llama-server
+toki tui --auth-token &lt;token&gt;              # if the daemon requires auth
+toki tui --daemon-url http://other:8787    # custom daemon</code></pre>
+
+    <p>Features: live TTFT sparkline + running hit-rate counter in the right panel; per-backend connection health (green/yellow/red); a slot state panel showing which slots are in use and which session owns them; precision retention panel (<code>Ctrl+P</code>) with baseline/recycled byte-identity stats; session pinning via UUID so multi-turn chats reuse the same slot; persistent history at <code>~/.local/share/tokirecur/history.jsonl</code> (XDG); graceful degradation — if the daemon is unreachable, mode auto-switches to raw.</p>
+
+    <table>
+      <thead><tr><th>Key</th><th>Action</th></tr></thead>
+      <tbody>
+        <tr><td><code>Ctrl+1/2/3</code></td><td>Switch to raw / cached / compare</td></tr>
+        <tr><td><code>Enter</code></td><td>Send message</td></tr>
+        <tr><td><code>Ctrl+L</code></td><td>Clear chat</td></tr>
+        <tr><td><code>Ctrl+R</code></td><td>Re-probe backends</td></tr>
+        <tr><td><code>Ctrl+U</code></td><td>New session (new UUID)</td></tr>
+        <tr><td><code>Ctrl+P</code></td><td>Run precision check</td></tr>
+        <tr><td><code>Ctrl+M</code></td><td>Toggle metrics / precision panel</td></tr>
+        <tr><td><code>Ctrl+C</code></td><td>Quit</td></tr>
+      </tbody>
+    </table>
+
+    <p class="note">Requires a TTY. From a non-interactive shell you'll get: <code>error: toki tui requires an interactive terminal (TTY).</code></p>
+
+    <h2>Web chat UI (<code>toki web</code>)</h2>
+    <p>A production-ready single-page chat interface with a single-click mode toggle (Raw / Cached / Compare), streaming responses, and live per-message metrics. Default port is <strong>7777</strong> — uncommon and unlikely to clash with other localhost services.</p>
+    <pre><code>toki web                                      # foreground, http://127.0.0.1:7777
+toki web --detach                             # background, log → /tmp/toki/web.log
+toki web --port 7778 --raw-url http://...:8088  # custom port + backend</code></pre>
+    <ul>
+      <li>Three inference modes via prominent toggle: Raw, Cached, Compare (side-by-side)</li>
+      <li>Streaming responses with token-by-token display</li>
+      <li>Live metrics per message (TTFT, total time, tokens generated, prefill tokens)</li>
+      <li>Compare mode shows two side-by-side panels with a summary banner showing speedup and a divergence warning if outputs differ</li>
+      <li>System prompt input persisted in the sidebar; conversation history with multi-turn support; mobile-responsive</li>
+    </ul>
+    <p>The UI is a single static page served by a FastAPI app with WebSocket streaming (<code>/ws/chat</code>). No external frontend dependencies — vanilla HTML/CSS/JS.</p>
+
+    <p class="callout">Next: <a href="/docs/architecture.html">Architecture</a> — the 5-step recycling algorithm.</p>
+  </main>
+</div>
+
+<footer>Toki Recur — KV cache reuse for LLM inference · MIT licensed</footer>
+<script src="/docs/docs.js" defer></script>
+</body>
+</html>

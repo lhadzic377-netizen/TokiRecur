@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Development — Toki Recur Docs</title>
+<meta name="description" content="Repository layout, test suite, and license for Toki Recur.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/docs/docs.css">
+</head>
+<body>
+<header class="topbar">
+  <nav>
+    <a class="brand" href="/"><svg class="logo" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="14" fill="none" stroke="#ffd60a" stroke-width="4"/><g class="l-slice" fill="#ffd60a"><rect x="11" y="12" width="42" height="9" rx="4.5"/><rect x="24" y="24" width="16" height="9" rx="4.5"/></g><rect class="l-slice" x="24" y="36" width="16" height="9" rx="4.5" fill="none" stroke="#ffd60a" stroke-width="4"/><rect class="l-slice" x="24" y="48" width="16" height="9" rx="4.5" fill="none" stroke="#ffd60a" stroke-width="4"/></svg> Toki Recur</a>
+    <div class="links">
+      <a href="/">Home</a>
+      <a href="/docs/" class="active">Docs</a>
+      <a href="https://github.com/lhadzic377-netizen/TokiRecur" target="_blank" rel="noopener">GitHub</a>
+    </div>
+  </nav>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <div class="doc-title">Documentation</div>
+    <a href="/docs/">Overview</a>
+    <a href="/docs/install.html">Install</a>
+    <a href="/docs/quickstart.html">Quick start</a>
+    <a href="/docs/commands.html">Command reference</a>
+    <a href="/docs/interfaces.html">Launcher &amp; shells</a>
+    <a href="/docs/architecture.html">Architecture</a>
+    <a href="/docs/api.html">API reference</a>
+    <a href="/docs/benchmark.html">Benchmark</a>
+    <a href="/docs/deploy.html">Production deploy</a>
+    <a href="/docs/development.html" class="active">Development</a>
+  </aside>
+
+  <main class="doc">
+    <h1 class="reveal">Development</h1>
+
+    <h2>Repository layout</h2>
+    <pre class="reveal"><code>tokirecur/
+├── src/tokirecur/
+│   ├── core/        # The 5-step algorithm, recycling engine
+│   ├── index/       # BruteForce + HNSW index, SQLite metadata
+│   ├── backend/     # llama-server HTTP adapter (uses upstream endpoints)
+│   ├── cache/       # KV blob storage (mmap'd, header-versioned)
+│   ├── api/         # FastAPI: OpenAI-compatible + admin endpoints
+│   ├── bench/       # The benchmark CLI (toki bench)
+│   └── cli/         # `toki` admin CLI
+├── patches/         # Historical patch for older llama.cpp
+├── docker/          # ROCm Dockerfile + docker-compose
+├── scripts/         # build_llama_cpp.sh
+├── tests/           # unit, integration, benchmarks
+└── benchmark/       # configs, reports, corpus</code></pre>
+
+    <h2>Tests</h2>
+    <pre><code>pytest tests/unit/ -v        # fast (seconds)
+pytest tests/ -v             # includes integration (needs a live llama-server)</code></pre>
+    <p>375+ unit tests cover the recycling engine, the index, the rate limiter, the tree-cache wiring, the persistent-slot pool, the .trkv sidecar format, the CLI config writers, and the OpenAI-compatible API (chat, completions, and Responses). CI runs the unit-test matrix on Python 3.11 / 3.12 / 3.13 on every push and PR, and executes the Linux and macOS system installers end-to-end.</p>
+
+    <h2>Benchmark harness</h2>
+    <p>Run on AMD Ryzen AI MAX+ 395 with Qwen3.5-9B-Q4_K_M via llama-server 9413, <code>--slot-save-path /tmp/toki/slot-save</code>:</p>
+    <table>
+      <thead><tr><th>Metric</th><th>Baseline</th><th>Recycled</th><th>Δ</th></tr></thead>
+      <tbody>
+        <tr><td>Total latency (avg)</td><td>2307.8 ms</td><td>2198.1 ms</td><td>+5.0%</td></tr>
+        <tr><td>Time-to-first-token</td><td>353.4 ms</td><td>171.4 ms</td><td>+51.5%</td></tr>
+        <tr><td>Prefill latency</td><td>353.4 ms</td><td>171.4 ms</td><td>+51.5%</td></tr>
+        <tr><td>Prefill tokens/sec</td><td>731.3</td><td>2819.3</td><td>+285.5%</td></tr>
+        <tr><td>Tokens skipped via cache</td><td>0</td><td>2,241</td><td>+2,241</td></tr>
+        <tr><td>Cache hit rate</td><td>0.0%</td><td>90.0%</td><td>+90.0%</td></tr>
+      </tbody>
+    </table>
+
+    <h2>License</h2>
+    <p>MIT.</p>
+  </main>
+</div>
+
+<footer>Toki Recur — KV cache reuse for LLM inference · MIT licensed</footer>
+<script src="/docs/docs.js" defer></script>
+</body>
+</html>

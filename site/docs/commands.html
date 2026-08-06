@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Command reference — Toki Recur Docs</title>
+<meta name="description" content="Every toki command: stack lifecycle, benchmark, cache management, diagnostics, and the API daemon.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/docs/docs.css">
+</head>
+<body>
+<header class="topbar">
+  <nav>
+    <a class="brand" href="/"><svg class="logo" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="14" fill="none" stroke="#ffd60a" stroke-width="4"/><g class="l-slice" fill="#ffd60a"><rect x="11" y="12" width="42" height="9" rx="4.5"/><rect x="24" y="24" width="16" height="9" rx="4.5"/></g><rect class="l-slice" x="24" y="36" width="16" height="9" rx="4.5" fill="none" stroke="#ffd60a" stroke-width="4"/><rect class="l-slice" x="24" y="48" width="16" height="9" rx="4.5" fill="none" stroke="#ffd60a" stroke-width="4"/></svg> Toki Recur</a>
+    <div class="links">
+      <a href="/">Home</a>
+      <a href="/docs/" class="active">Docs</a>
+      <a href="https://github.com/lhadzic377-netizen/TokiRecur" target="_blank" rel="noopener">GitHub</a>
+    </div>
+  </nav>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <div class="doc-title">Documentation</div>
+    <a href="/docs/">Overview</a>
+    <a href="/docs/install.html">Install</a>
+    <a href="/docs/quickstart.html">Quick start</a>
+    <a href="/docs/commands.html" class="active">Command reference</a>
+    <a href="/docs/interfaces.html">Launcher &amp; shells</a>
+    <a href="/docs/architecture.html">Architecture</a>
+    <a href="/docs/api.html">API reference</a>
+    <a href="/docs/benchmark.html">Benchmark</a>
+    <a href="/docs/deploy.html">Production deploy</a>
+    <a href="/docs/development.html">Development</a>
+  </aside>
+
+  <main class="doc">
+    <h1 class="reveal">Command reference</h1>
+
+    <h2>Shell</h2>
+    <pre><code>toki                  # run benchmark (default)
+toki interactive      # enter interactive REPL</code></pre>
+
+    <h2>Chat interfaces</h2>
+    <pre><code>toki tui                                      # full-screen TUI chat (terminal)
+toki tui --auth-token &lt;token&gt;                 # if daemon requires auth
+toki tui --daemon-url http://other:8787       # custom daemon URL
+toki diff --system "&lt;long&gt;" "&lt;user prompt&gt;"  # one-shot A/B comparison
+
+# Web UI on http://127.0.0.1:7777 (production-ready single-page chat)
+toki web                                      # foreground
+toki web --detach                             # background, log → /tmp/toki/web.log
+toki web --tls-cert cert.pem --tls-key key.pem  # HTTPS + wss, Secure cookies
+toki web --port 8888 --daemon-url http://other:8787  # custom endpoint</code></pre>
+
+    <p>In-chat slash commands (TUI chat): <code>/mode raw|cached|compare</code> · <code>/system &lt;text&gt;</code> · <code>/clear</code> · <code>/metrics</code> · <code>/max &lt;n&gt;</code> · <code>/temp &lt;f&gt;</code> · <code>/raw &lt;msg&gt;</code> · <code>/cached &lt;msg&gt;</code> · <code>/compare &lt;msg&gt;</code> · <code>/quit</code></p>
+
+    <h2>Stack lifecycle</h2>
+    <pre><code>toki up                        # foreground (Ctrl+C stops)
+toki up --detach               # background, returns PIDs
+toki up --skip-llama           # only start the daemon
+toki up --model /path/to/other.gguf --ctx-size 16384  # custom args
+toki down                      # stop everything
+toki down -y                   # skip confirmation
+toki status                    # show stack state</code></pre>
+
+    <h2>Benchmark (the headline tool)</h2>
+    <pre><code>toki bench   # interactive: pick a model from the registry + a workload from a menu
+
+# Or fully scripted (registry name or path):
+toki bench --model 9b --workload agent_long_context \
+           --max-tokens 64 --output-json report.json
+
+# Self-contained: spin up llama-server + bench together (auto-stop)
+toki bench --model ~/Downloads/Qwen3.5-9B-Q4_K_M.gguf \
+           --self-contained --ctx-size 8192 --n-gpu-layers 99</code></pre>
+
+    <p>Available workloads:</p>
+    <table>
+      <thead><tr><th>Workload</th><th>Expected hit rate</th><th>Best for</th></tr></thead>
+      <tbody>
+        <tr><td><code>agent_long_context</code></td><td>~90%</td><td>Agent systems with long fixed prompts</td></tr>
+        <tr><td><code>agent_25 / 50 / 100</code></td><td>~99%</td><td>Same pattern, 25 / 50 / 100 prompts</td></tr>
+        <tr><td><code>rag_chunks</code></td><td>~90%</td><td>RAG with shared document prefixes</td></tr>
+        <tr><td><code>mixed</code></td><td>~50%</td><td>Mixed chat traffic</td></tr>
+        <tr><td><code>no_overlap</code></td><td>0%</td><td>Baseline / worst-case validation</td></tr>
+        <tr><td><code>realistic_mixed</code></td><td>~95%</td><td>216 prompts across 5 real-world categories</td></tr>
+        <tr><td><code>stress_adversarial</code></td><td>varies</td><td>301 prompts with adversarial patterns</td></tr>
+      </tbody>
+    </table>
+
+    <h2>Cache management</h2>
+    <pre><code>toki stats                    # hit rate, bytes, entries
+toki evict --target-mb 4096   # LRU evict to fit budget</code></pre>
+
+    <h2>Diagnostics</h2>
+    <pre><code>toki doctor                          # llama-server, ROCm, GPU
+toki compare report.json report2.json # diff two bench reports</code></pre>
+
+    <h2>OpenAI-compatible API server</h2>
+    <p>Running under <code>toki up</code> (default 127.0.0.1:8787):</p>
+    <pre><code>POST http://127.0.0.1:8787/v1/completions
+POST http://127.0.0.1:8787/v1/chat/completions
+POST http://127.0.0.1:8787/cache/lookup
+DELETE http://127.0.0.1:8787/cache/{id}
+GET  http://127.0.0.1:8787/cache/stats
+GET  http://127.0.0.1:8787/healthz</code></pre>
+
+    <p class="callout">Next: <a href="/docs/interfaces.html">Launcher &amp; shells</a> — the interactive UIs.</p>
+  </main>
+</div>
+
+<footer>Toki Recur — KV cache reuse for LLM inference · MIT licensed</footer>
+<script src="/docs/docs.js" defer></script>
+</body>
+</html>
