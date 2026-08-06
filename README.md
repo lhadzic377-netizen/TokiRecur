@@ -8,7 +8,7 @@ When a new prompt arrives at an LLM server, the KV cache is rebuilt from scratch
 
 ## Real measured results (this hardware)
 
-Run on **AMD Ryzen AI MAX+ 395 (Strix Halo, UMA, 125 GB RAM)** with **Qwen3.5-9B-Q4_K_M** via `llama-server 9413` (Debian), `--slot-save-path /tmp/toki/slot-save`:
+Run on AMD Ryzen AI MAX+ 395 (Strix Halo, UMA, 125 GB RAM)** with Qwen3.5-9B-Q4_K_M via `llama-server 9413` (Debian), `--slot-save-path /tmp/toki/slot-save`:
 
 ```
                   Performance (side-by-side)
