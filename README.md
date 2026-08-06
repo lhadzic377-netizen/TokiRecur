@@ -548,6 +548,10 @@ Letter grades: A+ ≥ 90, A ≥ 80, B ≥ 70, C ≥ 60, D ≥ 50, F < 50.
 
 Run on AMD Ryzen AI MAX+ 395, Qwen3.5-9B-Q4_K_M, max-tokens=32:
 
+These are the most realistic scores — cache performance varies with the
+environment, so the benchmark may score better or worse on other
+hardware, models, or workloads.
+
 ### realistic_mixed (216 prompts, 5 categories)
 
 **Composite: 82.4 / 100 (A)**
