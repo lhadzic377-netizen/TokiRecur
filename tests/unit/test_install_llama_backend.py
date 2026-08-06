@@ -8,6 +8,7 @@ processes are spawned.
 from pathlib import Path
 
 import pytest
+import yaml
 
 from tokirecur.cli import _asset_patterns, _pick_asset, _rocm_env
 
@@ -120,6 +121,7 @@ def test_set_binary_merges_env(tmp_path, monkeypatch):
     reg = tmp_path / "models.yaml"
     state = tmp_path / "state"
     marker = tmp_path / "active-model"
+    reg.write_text(yaml.safe_dump({"models": ctl.DEFAULT_MODELS}, sort_keys=False))
     monkeypatch.setattr(ctl, "DEFAULT_REGISTRY", reg)
     monkeypatch.setattr(ctl, "STATE_ROOT", state)
     monkeypatch.setattr(ctl, "ACTIVE_MARKER", marker)

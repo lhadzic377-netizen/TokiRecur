@@ -26,6 +26,8 @@ def env(tmp_path, monkeypatch):
     reg = tmp_path / "models.yaml"
     state = tmp_path / "state"
     marker = tmp_path / "active-model"
+    # Seed reference entries so the lock tests have specs to write.
+    reg.write_text(yaml.safe_dump({"models": ctl.DEFAULT_MODELS}, sort_keys=False))
     monkeypatch.setattr(ctl, "DEFAULT_REGISTRY", reg)
     monkeypatch.setattr(ctl, "STATE_ROOT", state)
     monkeypatch.setattr(ctl, "ACTIVE_MARKER", marker)

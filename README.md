@@ -41,15 +41,25 @@ pipx install "tokirecur[embeddings] @ git+https://x-access-token:<PAT>@github.co
 #    Vulkan, Metal (macOS), CPU. Pass --backend to override.
 toki model install-llama
 
-# 3. Start a model — nothing is preloaded; you choose. Start with a
-#    registry model (list them with `toki model list`):
-toki model use 35b
+# 3. Install a model — nothing is preloaded on a fresh install; you
+#    pull exactly what you want. Fetch a GGUF from Hugging Face and
+#    register it under a short name (find quantized Qwen3 GGUFs via
+#    huggingface.co/models?library=gguf):
+toki model pull Qwen/Qwen3-4B-GGUF --name qwen3-4b
 
-# 4. Talk to it
+# 4. Point your install-llama binary at the new entry (auto-detected
+#    ROCm/CUDA build from step 2 wins over the PATH llama-server):
+toki model install-llama --backend rocm --name qwen3-4b
+
+# 5. Start it (this boots llama-server + the toki daemon and wires
+#    opencode/openclaw/hermes at it):
+toki model use qwen3-4b
+
+# 6. Talk to it
 toki chat
 ```
 
-No models are started at install time — `toki model use <name>` is the explicit, documented way to bring one up (it starts llama-server + the toki daemon, stops competing big-model stacks, and wires opencode/openclaw/hermes at it). `toki up --model <path>` is the single-model equivalent for a raw GGUF. `toki serve` is **only** the API daemon (default 127.0.0.1:8787) that proxies to an already-running llama-server; it warns loudly if the backend isn't reachable instead of failing silently. Bare `toki` opens the full-screen launcher, `toki chat` is the TUI chat.
+No models are installed or started at install time — `toki model use <name>` is the explicit, documented way to bring one up (it starts llama-server + the toki daemon, stops competing big-model stacks, and wires opencode/openclaw/hermes at it). `toki up --model <path>` is the single-model equivalent for a raw GGUF without a registry entry. `toki serve` is **only** the API daemon (default 127.0.0.1:8787) that proxies to an already-running llama-server; it warns loudly if the backend isn't reachable instead of failing silently. Bare `toki` opens the full-screen launcher, `toki chat` is the TUI chat.
 
 Without pipx, install into your own venv instead:
 

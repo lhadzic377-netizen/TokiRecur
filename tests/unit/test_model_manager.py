@@ -27,15 +27,20 @@ def env(tmp_path, monkeypatch):
     return tmp_path
 
 
-def test_registry_defaults_created(env):
+@pytest.fixture
+def seeded_env(env):
+    """Like ``env`` but pre-seeds the reference DEFAULT_MODELS, for
+    tests that exercise behavior against existing registry entries."""
+    ctl.DEFAULT_REGISTRY.write_text(
+        yaml.safe_dump({"models": ctl.DEFAULT_MODELS}, sort_keys=False)
+    )
+    return env
+
+
+def test_registry_created_empty(env):
+    """A fresh install starts with zero preloaded models."""
     specs = ctl.load_registry()
-    assert [s.name for s in specs] == ["9b", "35b", "laguna"]
-    by_name = {s.name: s for s in specs}
-    assert by_name["9b"].llama_port == 8088 and not by_name["9b"].always_on
-    assert by_name["35b"].model_id == "qwen3.6-35b-a3b"
-    assert by_name["laguna"].ctx_size == 131072
-    assert by_name["laguna"].kv == "q8_0"
-    assert by_name["laguna"].max_tokens == 64000
+    assert specs == []
     assert ctl.DEFAULT_REGISTRY.exists()
 
 
@@ -55,7 +60,7 @@ def test_get_model_unknown(env):
         ctl.get_model("nope")
 
 
-def test_active_marker_roundtrip(env):
+def test_active_marker_roundtrip(seeded_env):
     assert ctl.read_active() is None  # no preloaded/always-on models
     ctl.set_active("laguna")
     assert ctl.read_active() == "laguna"
@@ -68,7 +73,7 @@ def _specs(env):
 
 
 @pytest.fixture
-def with_pulled_model(env, hf):
+def with_pulled_model(seeded_env, hf):
     """Register an extra pulled model alongside the 3 defaults.
 
     The pulled model has no `binary` or `env` (the broken state users
@@ -181,7 +186,7 @@ def test_model_status_down(env):
     assert s["daemon"]["reachable"] is False
 
 
-def test_use_model_tolerates_broken_always_on(env, monkeypatch):
+def test_use_model_tolerates_broken_always_on(seeded_env, monkeypatch):
     """A broken always-on spec (e.g. missing GGUF -> FileNotFoundError)
     must not abort the model switch."""
     ctl.update_spec_field("9b", "always_on", "true")
@@ -200,7 +205,7 @@ def test_use_model_tolerates_broken_always_on(env, monkeypatch):
     assert ctl.read_active() == "35b"
 
 
-def test_use_model_tolerates_broken_target(env, monkeypatch):
+def test_use_model_tolerates_broken_target(seeded_env, monkeypatch):
     """A missing-GGUF target surfaces the FileNotFoundError so the user
     sees a clean error instead of a silent no-op."""
     def fake_start_model(spec, wait=True):
@@ -220,10 +225,20 @@ def test_use_model_tolerates_broken_target(env, monkeypatch):
 
 
 def test_next_free_ports(env):
-    assert ctl.next_free_ports(ctl.load_registry()) == (8091, 8790)
+    # Empty registry → ports start at the base pair.
+    assert ctl.next_free_ports([]) == (8088, 8787)
+    raw_a = dict(ctl.DEFAULT_MODELS[0])
+    raw_a["llama_port"], raw_a["daemon_port"] = 8089, 8788
+    raw_b = dict(ctl.DEFAULT_MODELS[1])
+    raw_b["llama_port"], raw_b["daemon_port"] = 8090, 8789
+    specs = [
+        ctl.ModelSpec(raw=raw_a, **raw_a),
+        ctl.ModelSpec(raw=raw_b, **raw_b),
+    ]
+    assert ctl.next_free_ports(specs) == (8091, 8790)
 
 
-def test_save_registry_roundtrip_preserves_raw(env):
+def test_save_registry_roundtrip_preserves_raw(seeded_env):
     specs = ctl.load_registry()
     assert ctl.save_registry(specs) == ctl.DEFAULT_REGISTRY
     again = ctl.load_registry()
@@ -271,7 +286,7 @@ def test_pull_model_registers_entry(env, hf):
     spec = ctl.pull_model("acme/My-Model-GGUF", "mymodel", ctx_size=8192, kv="q8_0")
     assert spec.name == "mymodel"
     assert spec.label == "model-Q4_K_M"
-    assert spec.llama_port == 8091 and spec.daemon_port == 8790
+    assert spec.llama_port == 8088 and spec.daemon_port == 8787
     assert spec.ctx_size == 8192 and spec.kv == "q8_0"
     assert spec.max_tokens == 4096
     assert spec.model_id == "acme/My-Model-GGUF"
@@ -402,12 +417,12 @@ def test_pull_model_underivable_name(env, hf):
         ctl.pull_model("!!!")
 
 
-def test_pull_model_name_clash(env, hf):
+def test_pull_model_name_clash(seeded_env, hf):
     with pytest.raises(ValueError, match="already exists"):
         ctl.pull_model("acme/My-Model-GGUF", "9b")
 
 
-def test_pull_model_explicit_name_case_insensitive_clash(env, hf):
+def test_pull_model_explicit_name_case_insensitive_clash(seeded_env, hf):
     with pytest.raises(ValueError, match="already exists"):
         ctl.pull_model("acme/My-Model-GGUF", "9B")
 
@@ -426,7 +441,7 @@ def test_pull_model_network_error(env, hf, monkeypatch):
 # ── pull defaults (binary / env inheritance) ────────────────────────
 
 
-def test_pull_defaults_inherit_reference_spec_binary(env, monkeypatch):
+def test_pull_defaults_inherit_reference_spec_binary(seeded_env, monkeypatch):
     """The in-code default registry points laguna at the tuned llama.cpp
     build; pulled models should pick that up instead of the PATH default."""
     monkeypatch.delenv("TOKI_LLAMA_SERVER", raising=False)
@@ -476,7 +491,7 @@ def test_pull_defaults_fallback_when_no_reference(env, monkeypatch):
     assert env_vars == {}
 
 
-def test_pull_model_inherits_binary(env, hf):
+def test_pull_model_inherits_binary(seeded_env, hf):
     spec = ctl.pull_model("acme/My-Model-GGUF", "inherits")
     assert spec.binary == ctl.DEFAULT_MODELS[2]["binary"]
     # No reference env → empty.
@@ -492,10 +507,10 @@ def test_pull_model_reasoning_field_persisted(env, hf):
     assert ctl.get_model("reasonoff").reasoning == "off"
 
 
-def test_llama_args_appends_reasoning_off_for_off_spec(env):
+def test_llama_args_appends_reasoning_off_for_off_spec(seeded_env):
     # The default 9b entry points at a dev-machine path; point it at an
     # existing temp file so _llama_args' existence check passes on CI.
-    gguf = env / "9b.gguf"
+    gguf = seeded_env / "9b.gguf"
     gguf.write_bytes(b"dummy")
     raw = dict(ctl.load_registry()[0].raw)
     raw["gguf"] = str(gguf)
@@ -507,8 +522,8 @@ def test_llama_args_appends_reasoning_off_for_off_spec(env):
     assert "off" in ctl._llama_args(spec_off)
 
 
-def test_llama_args_appends_reasoning_on_for_on_spec(env):
-    gguf = env / "9b.gguf"
+def test_llama_args_appends_reasoning_on_for_on_spec(seeded_env):
+    gguf = seeded_env / "9b.gguf"
     gguf.write_bytes(b"dummy")
     raw = dict(ctl.load_registry()[0].raw)
     raw["gguf"] = str(gguf)
@@ -522,7 +537,7 @@ def test_llama_args_appends_reasoning_on_for_on_spec(env):
 # ── Registry repair (legacy pulled entries) ────────────────────────
 
 
-def test_backfill_binary_env_inherits_reference(env, hf, monkeypatch):
+def test_backfill_binary_env_inherits_reference(seeded_env, hf, monkeypatch):
     """A pulled entry missing binary/env inherits the reference spec's
     values; the repair returns the names it updated."""
     monkeypatch.delenv("TOKI_LLAMA_SERVER", raising=False)
@@ -556,7 +571,7 @@ def test_backfill_binary_env_idempotent(env, hf, monkeypatch):
     assert ctl.backfill_binary_env() == []
 
 
-def test_backfill_binary_env_skips_configured_defaults(env, monkeypatch):
+def test_backfill_binary_env_skips_configured_defaults(seeded_env, monkeypatch):
     """Configured defaults (source="default") are NEVER rewritten even
     when they look bare — they intentionally use the PATH llama-server."""
     monkeypatch.delenv("TOKI_LLAMA_SERVER", raising=False)
@@ -591,7 +606,7 @@ def test_repair_cli_noop_when_clean(env, hf, monkeypatch):
     assert "nothing to repair" in res.output
 
 
-def test_repair_cli_heals_legacy_entry(env, hf, monkeypatch):
+def test_repair_cli_heals_legacy_entry(seeded_env, hf, monkeypatch):
     from click.testing import CliRunner
 
     from tokirecur.cli import cli
@@ -616,7 +631,7 @@ def test_repair_cli_heals_legacy_entry(env, hf, monkeypatch):
 # ── Settings: update_spec_field ───────────────────────────────────
 
 
-def test_update_spec_field_changes_value_and_persists(env):
+def test_update_spec_field_changes_value_and_persists(seeded_env):
     spec = ctl.update_spec_field("9b", "ctx_size", "4096")
     assert spec.ctx_size == 4096
     assert ctl.get_model("9b").ctx_size == 4096
@@ -624,14 +639,14 @@ def test_update_spec_field_changes_value_and_persists(env):
     assert ctl.load_registry()[0].ctx_size == 4096
 
 
-def test_update_spec_field_int_validators(env):
+def test_update_spec_field_int_validators(seeded_env):
     ctl.update_spec_field("9b", "llama_port", "9999")
     assert ctl.get_model("9b").llama_port == 9999
     with pytest.raises(ValueError, match="bad value for 'llama_port'"):
         ctl.update_spec_field("9b", "llama_port", "not-a-number")
 
 
-def test_update_spec_field_bool_truthy(env):
+def test_update_spec_field_bool_truthy(seeded_env):
     ctl.update_spec_field("35b", "always_on", "true")
     assert ctl.get_model("35b").always_on is True
     ctl.update_spec_field("35b", "always_on", "off")
@@ -640,12 +655,12 @@ def test_update_spec_field_bool_truthy(env):
         ctl.update_spec_field("35b", "always_on", "maybe")
 
 
-def test_update_spec_field_unknown_field(env):
+def test_update_spec_field_unknown_field(seeded_env):
     with pytest.raises(ValueError, match="not editable"):
         ctl.update_spec_field("9b", "name", "newname")
 
 
-def test_update_spec_field_readonly_source(env):
+def test_update_spec_field_readonly_source(seeded_env):
     with pytest.raises(ValueError, match="not editable"):
         ctl.update_spec_field("9b", "source", "pulled")
 
@@ -655,11 +670,11 @@ def test_update_spec_field_unknown_model(env):
         ctl.update_spec_field("nope", "ctx_size", "100")
 
 
-def test_update_spec_field_preserves_other_fields(env):
+def test_update_spec_field_preserves_other_fields(seeded_env):
     """Editing one field doesn't blow away the spec's other keys
     (raw dict merge — only the edited field changes)."""
     # Register a spec with a non-default env so we can prove it survives.
-    reg = env / "models.yaml"
+    reg = seeded_env / "models.yaml"
     # Trigger _ensure_registry so the file exists, then mutate.
     ctl.load_registry()
     ctl.invalidate_registry_cache()

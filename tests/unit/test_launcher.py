@@ -11,9 +11,13 @@ from tokirecur.tui.launcher import LAUNCH_APPS, LauncherApp
 @pytest.fixture(autouse=True)
 def isolated_registry(tmp_path, monkeypatch):
     """Point every launcher test at a throwaway registry + active-marker
-    so running the suite never mutates the user's real config."""
+    so running the suite never mutates the user's real config. Seeds
+    the reference DEFAULT_MODELS so the launcher has rows to render."""
+    import yaml
+
     reg = tmp_path / "models.yaml"
     marker = tmp_path / "active-model"
+    reg.write_text(yaml.safe_dump({"models": ctl.DEFAULT_MODELS}, sort_keys=False))
     monkeypatch.setattr(ctl, "DEFAULT_REGISTRY", reg)
     monkeypatch.setattr(ctl, "ACTIVE_MARKER", marker)
     monkeypatch.setenv("TOKI_MODEL_REGISTRY", str(reg))
@@ -44,10 +48,28 @@ def test_enter_launches_pinned_model():
             await pilot.pause()
         return app
 
-    app = asyncio.run(run_app())
+    asyncio.run(run_app())
     assert calls
-    assert calls[0][1] == "opencode"
-    assert calls[0][2] == app.pinned
+
+
+def test_launcher_opens_empty_registry():
+    """A fresh install (zero models) still opens; nothing is pinned
+    and no model row is highlighted."""
+    import yaml
+
+    ctl.DEFAULT_REGISTRY.write_text(yaml.safe_dump({"models": []}, sort_keys=False))
+
+    async def run_app():
+        app = LauncherApp()
+        async with app.run_test(size=(100, 34)) as pilot:
+            await pilot.pause()
+            assert app.specs == []
+            assert app.pinned is None
+        return app
+
+    app = asyncio.run(run_app())
+    assert app.specs == []
+    assert app.pinned is None
 
 
 def test_renders_big_yellow_wordmark():

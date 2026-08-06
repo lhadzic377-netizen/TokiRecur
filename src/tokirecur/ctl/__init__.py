@@ -45,6 +45,10 @@ ACTIVE_MARKER = Path(
 
 DEFAULT_AUTH = os.environ.get("TOKI_AUTH_TOKEN", "demo-token")
 
+# Reference defaults: registry entries matching these names (source ==
+# "default") are treated as user-configured and never rewritten by
+# backfill_binary_env. They are NOT preloaded — a fresh install starts
+# with an empty registry.
 DEFAULT_MODELS: list[dict[str, Any]] = [
     {
         "name": "9b",
@@ -139,9 +143,11 @@ class ModelSpec:
 def _ensure_registry() -> Path:
     DEFAULT_REGISTRY.parent.mkdir(parents=True, exist_ok=True)
     if not DEFAULT_REGISTRY.exists():
+        # Fresh installs start with zero preloaded models — the user
+        # explicitly installs one via `toki model pull` / `toki up`.
         _atomic_write_text(
             DEFAULT_REGISTRY,
-            yaml.safe_dump({"models": DEFAULT_MODELS}, sort_keys=False),
+            yaml.safe_dump({"models": []}, sort_keys=False),
         )
     return DEFAULT_REGISTRY
 
@@ -278,6 +284,10 @@ def get_model(name: str, registry: Path | None = None) -> ModelSpec:
     for spec in load_registry(registry):
         if spec.name == name:
             return spec
+    if not load_registry(registry):
+        raise KeyError(
+            "no models installed — pull one first (`toki model pull <hf-repo>`)"
+        )
     raise KeyError(f"unknown model '{name}' (see `toki model list`)")
 
 
@@ -402,6 +412,11 @@ def set_binary(name: str, binary: str, path: Path | None = None,
     specs = load_registry(path)
     match = next((s for s in specs if s.name == name), None)
     if match is None:
+        if not specs:
+            raise KeyError(
+                f"no models installed — pull one first "
+                f"(`toki model pull <hf-repo> --name {name}`)"
+            )
         raise KeyError(f"model '{name}' not in registry")
     raw = dict(match.raw)
     raw["binary"] = binary
