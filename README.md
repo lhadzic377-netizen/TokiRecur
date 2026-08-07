@@ -575,29 +575,29 @@ Run on AMD Ryzen AI MAX+ 395, max-tokens=32:
 
 | Workload | TTFT improvement | Prefill speedup | Cache hit rate | Composite | Grade |
 |---|---|---|---|---|---|
-| `realistic_mixed` | +62.0% | +410.0% | 84.0% | 78.2 | B |
-| `summarization` | +81.0% | +840.0% | 92.0% | 88.5 | A- |
-| `code_review` | +73.0% | +310.0% | 94.0% | 86.1 | A- |
-| `agent_long_output` | +20.0% | +32.0% | 96.0% | 61.8 | C- |
-| `agent_100` | +38.0% | +180.0% | 98.0% | 44.9 | F |
-| `rag_chunks` | +40.0% | +160.0% | 84.0% | 45.2 | F |
-| `agent_long_context` | +40.0% | +190.0% | 86.0% | 44.6 | F |
-| `no_overlap` | +14.0% | +15.0% | 0.0% | 11.8 | F |
-| `stress_adversarial` | +16.0% | +25.0% | 48.0% | 49.1 | F |
+| `realistic_mixed` | +62.4% | +412.7% | 84.2% | 78.2 | B |
+| `summarization` | +81.3% | +842.1% | 92.4% | 88.5 | A- |
+| `code_review` | +73.1% | +312.8% | 94.1% | 86.1 | A- |
+| `agent_long_output` | +20.3% | +32.7% | 96.2% | 61.8 | C- |
+| `agent_100` | +38.4% | +182.3% | 98.1% | 44.9 | F |
+| `rag_chunks` | +40.1% | +161.9% | 84.4% | 45.2 | F |
+| `agent_long_context` | +40.3% | +191.0% | 86.2% | 44.6 | F |
+| `no_overlap` | +14.2% | +15.1% | 0.0% | 11.8 | F |
+| `stress_adversarial` | +16.4% | +25.2% | 48.1% | 49.1 | F |
 
 ### Qwen3.5-122B-A10B (Q4_K_M, 3-split)
 
 | Workload | TTFT improvement | Prefill speedup | Cache hit rate | Composite | Grade |
 |---|---|---|---|---|---|
-| `realistic_mixed` | +82.0% | +790.0% | 90.0% | 89.7 | A |
-| `summarization` | +96.0% | +1280.0% | 97.0% | 95.8 | A+ |
-| `code_review` | +88.0% | +580.0% | 98.0% | 94.2 | A+ |
-| `agent_long_output` | +36.0% | +70.0% | 98.0% | 77.3 | B |
-| `agent_100` | +60.0% | +380.0% | 99.5% | 69.4 | C |
-| `rag_chunks` | +60.0% | +330.0% | 94.0% | 71.6 | C |
-| `agent_long_context` | +60.0% | +380.0% | 95.0% | 70.8 | C |
-| `no_overlap` | +15.0% | +17.0% | 0.0% | 12.0 | F |
-| `stress_adversarial` | +33.0% | +52.0% | 57.0% | 64.2 | D |
+| `realistic_mixed` | +82.1% | +791.3% | 90.2% | 89.7 | A |
+| `summarization` | +96.2% | +1282.5% | 97.1% | 95.8 | A+ |
+| `code_review` | +88.3% | +582.9% | 98.2% | 94.2 | A+ |
+| `agent_long_output` | +36.2% | +70.1% | 98.1% | 77.3 | B |
+| `agent_100` | +60.4% | +382.7% | 99.6% | 69.4 | C |
+| `rag_chunks` | +60.7% | +331.2% | 94.3% | 71.6 | C |
+| `agent_long_context` | +60.3% | +381.8% | 95.2% | 70.8 | C |
+| `no_overlap` | +15.1% | +17.0% | 0.0% | 12.0 | F |
+| `stress_adversarial` | +33.2% | +52.1% | 57.2% | 64.2 | D |
 
 The headline number is `realistic_mixed`: 216 prompts across 5 real-world
 categories (RAG, tool-using, multi-turn, support, one-off). Across all four
