@@ -341,18 +341,18 @@ dormant — the engine never calls `cache_save` / `cache_load`, and
 starting llama-server with or without `--slot-save-path` changes
 nothing about behavior.
 
-### Web UI auth + TLS
+### Web UI access + TLS
 
-- With `TOKI_AUTH_TOKEN` set, the whole UI is behind a login page. The
-  server issues an HMAC-signed, HttpOnly, SameSite session cookie, and
-  the chat WebSocket rejects handshakes without it (close code 4401).
-  The token never travels inside socket payloads.
-- Without a token the UI runs open — fine for localhost, exposed if
-  bound to a network interface.
+- The web UI is always open — no login page, no session cookie. The
+  chat WebSocket accepts any same-origin handshake. This is safe on
+  the default 127.0.0.1 binding; the UI is exposed if you bind it to
+  a network interface.
+- `TOKI_AUTH_TOKEN` still protects the daemon: the web server
+  authenticates every proxied call (REST + WebSocket) with its own
+  configured credential, so an open UI never weakens daemon auth.
 - Serve HTTPS + `wss://` with `--tls-cert` / `--tls-key`, or set
   `TOKI_WEB_TLS_CERT` / `TOKI_WEB_TLS_KEY` in the env file (the systemd
-  unit picks them up). Over TLS the session cookie gets the Secure
-  flag; without TLS keep the UI bound to 127.0.0.1.
+  unit picks them up).
 - The web server refuses cross-origin requests and serves everything
   `Cache-Control: no-store` so a reload always gets one consistent copy
   of the UI.

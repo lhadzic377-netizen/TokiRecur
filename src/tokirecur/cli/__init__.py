@@ -343,9 +343,10 @@ def web(host: str, port: int, raw_url: str, daemon_url: str,
     other localhost services like 3000, 5000, 8080, etc.).
 
     Pass --tls-cert and --tls-key to serve over HTTPS (wss:// for the
-    chat socket). The web UI reads TOKI_AUTH_TOKEN (or the auth file)
-    and gates the whole app behind a login; over TLS the session cookie
-    is marked Secure.
+    chat socket). The UI is always open (no login page); the daemon
+    stays protected because the server authenticates every proxied
+    call with its own configured token (TOKI_AUTH_TOKEN or the auth
+    file).
 
     The UI lets you toggle between three inference modes (raw, cached,
     compare) with a single click, stream responses, and see live metrics
@@ -370,7 +371,7 @@ def web(host: str, port: int, raw_url: str, daemon_url: str,
 
     from ..web import create_web_app
 
-    app = create_web_app(raw_url=raw_url, daemon_url=daemon_url, tls=bool(tls_cert))
+    app = create_web_app(raw_url=raw_url, daemon_url=daemon_url)
     scheme = "https" if tls_cert else "http"
 
     if detach:
@@ -392,8 +393,7 @@ def web(host: str, port: int, raw_url: str, daemon_url: str,
             cmd,
             env={**os.environ,
                  "TOKI_WEB_RAW_URL": raw_url,
-                 "TOKI_WEB_DAEMON_URL": daemon_url,
-                 "TOKI_WEB_TLS": "1" if tls_cert else "0"},
+                 "TOKI_WEB_DAEMON_URL": daemon_url},
             stdout=open(log_path, "ab"),
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,

@@ -1219,14 +1219,6 @@ document.addEventListener("DOMContentLoaded", () => {
     renderSessionId();
   });
 
-  const logoutBtn = $("#logout-btn");
-  if (logoutBtn) {
-    logoutBtn.addEventListener("click", async () => {
-      try { await fetch("/logout", { method: "POST" }); } catch (e) { /* ignore */ }
-      window.location.href = "/login";
-    });
-  }
-
   $("#copy-session-btn").addEventListener("click", () => {
     const sid = getSessionId();
     navigator.clipboard?.writeText(sid).then(() => {

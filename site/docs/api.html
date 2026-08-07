@@ -57,7 +57,7 @@ GET    /cache/stats     # hit rate, bytes, entries</code></pre>
     <pre><code>GET /healthz</code></pre>
 
     <h2>Auth</h2>
-    <p>Set <code>TOKI_AUTH_TOKEN</code> to gate the API. Clients send it as a standard <code>Authorization: Bearer &lt;token&gt;</code> header. The same token gates the web UI login (HMAC-signed, HttpOnly session cookie) and the chat WebSocket (rejects handshakes without it, close code 4401).</p>
+    <p>Set <code>TOKI_AUTH_TOKEN</code> to gate the API. Clients send it as a standard <code>Authorization: Bearer &lt;token&gt;</code> header. The web UI itself is always open (no login); the web server authenticates every proxied daemon call with its own configured credential.</p>
 
     <h2>Client wiring</h2>
     <p>Any OpenAI-compatible client works. Example — opencode:</p>

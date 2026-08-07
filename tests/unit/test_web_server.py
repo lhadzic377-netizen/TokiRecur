@@ -10,7 +10,6 @@ import json
 
 import pytest
 from fastapi.testclient import TestClient
-from starlette.websockets import WebSocketDisconnect
 
 from tokirecur.web import server as server_mod
 from tokirecur.web.server import (
@@ -254,7 +253,6 @@ class TestParsePrometheusMetrics:
         fake_async_client(fake)
         app = create_web_app(raw_url="http://raw:8088", daemon_url="http://daemon:8787")
         with TestClient(app) as client:
-            _login(client)
             r = client.get("/v1/metrics/live")
         assert r.json()["cache_hits"] == 1
         assert r.json()["cache_misses"] == 2
@@ -278,7 +276,6 @@ class TestPrecisionProxy:
         fake_async_client(fake)
         app = create_web_app(raw_url="http://raw:8088", daemon_url="http://daemon:8787")
         with TestClient(app) as client:
-            _login(client)
             r = client.post("/v1/precision", json={"max_tokens": 32})
         assert r.status_code == 200
         assert r.json() == body
@@ -289,7 +286,6 @@ class TestPrecisionProxy:
         fake_async_client(fake)
         app = create_web_app(raw_url="http://raw:8088", daemon_url="http://daemon:8787")
         with TestClient(app) as client:
-            _login(client)
             r = client.post("/v1/precision", json={})
         assert "error" in r.json()
 
@@ -300,21 +296,6 @@ class TestPrecisionProxy:
 def _chat_client(monkeypatch, fake):
     monkeypatch.setattr(server_mod.httpx, "AsyncClient", lambda *a, **k: fake)
     return create_web_app(raw_url="http://raw:8088", daemon_url="http://daemon:8787")
-
-
-def _login(client):
-    """Authenticate the TestClient when a token is configured.
-
-    Dev machines have an auth file (~/.config/tokirecur/auth) so the
-    web gate is on and every stateful request needs the session
-    cookie. Machines without a token run with the gate off and don't
-    need a login. Returns the token used (or None).
-    """
-    token = server_mod._configured_token()
-    if token:
-        r = client.post("/login", json={"token": token})
-        assert r.status_code == 200, r.text
-    return token
 
 
 class TestWsChat:
@@ -336,7 +317,6 @@ class TestWsChat:
         fake_async_client(fake)
         app = create_web_app(raw_url="http://raw:8088", daemon_url="http://daemon:8787")
         with TestClient(app) as client:
-            _login(client)
             with client.websocket_connect("/ws/chat") as ws:
                 ws.send_json({
                     "mode": "cached", "prompt": "hi", "max_tokens": 8,
@@ -367,7 +347,6 @@ class TestWsChat:
         fake_async_client(fake)
         app = create_web_app(raw_url="http://raw:8088", daemon_url="http://daemon:8787")
         with TestClient(app) as client:
-            _login(client)
             with client.websocket_connect("/ws/chat") as ws:
                 ws.send_json({
                     "mode": "raw", "prompt": "hi", "max_tokens": 8,
@@ -396,7 +375,6 @@ class TestWsChat:
         fake_async_client(fake)
         app = create_web_app(raw_url="http://raw:8088", daemon_url="http://daemon:8787")
         with TestClient(app) as client:
-            _login(client)
             with client.websocket_connect("/ws/chat") as ws:
                 ws.send_json({
                     "mode": "cached", "prompt": "long", "max_tokens": 8,
@@ -416,7 +394,9 @@ class TestWsChat:
         assert done["aborted"] is True
         assert done["text"]  # partial output preserved
 
-    def test_anonymous_socket_rejected_when_gate_is_on(self, fake_async_client):
+    def test_socket_open_without_any_session(self, fake_async_client):
+        """The UI is always open: no login, no session cookie needed —
+        even when a daemon token is configured on this machine."""
         fake = FakeHttpx(
             stream_response=FakeStreamResponse(
                 sse({"choices": [{"index": 0, "delta": {"content": "yo"}, "finish_reason": None}]})
@@ -425,10 +405,12 @@ class TestWsChat:
         fake_async_client(fake)
         app = create_web_app(raw_url="http://raw:8088", daemon_url="http://daemon:8787")
         with TestClient(app) as client:
-            if not server_mod._configured_token():
-                return  # gate off on this machine; nothing to assert
-            with pytest.raises(WebSocketDisconnect) as exc:
-                with client.websocket_connect("/ws/chat"):
-                    pass
-            assert exc.value.code == 4401
-            assert fake.calls == []  # nothing was ever forwarded to a backend
+            with client.websocket_connect("/ws/chat") as ws:
+                ws.send_json({"mode": "raw", "prompt": "hi", "max_tokens": 8})
+                done = None
+                while True:
+                    msg = ws.receive_json()
+                    if msg["type"] == "done":
+                        done = msg
+                        break
+        assert done["text"] == "yo"

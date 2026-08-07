@@ -10,9 +10,6 @@ Run via `toki web` (added in cli/__init__.py).
 from __future__ import annotations
 
 import asyncio
-import base64
-import hashlib
-import hmac
 import json
 import logging
 import os
@@ -24,10 +21,8 @@ from urllib.parse import urlparse
 
 import httpx
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-
-from ..daemon.ratelimit import RateLimiter
 
 # Configure logging once. Honor TOKI_LOG_LEVEL env var (default INFO).
 logging.basicConfig(
@@ -91,9 +86,8 @@ def _forward_headers(request: Request) -> dict[str, str]:
 
     Uses the client's Authorization header when present (legacy setups
     that manage their own token), otherwise the web server's own
-    configured token — the default when the UI is behind the login
-    gate. The daemon therefore never sees an unauthenticated call from
-    the web UI.
+    configured token. The daemon therefore never sees an
+    unauthenticated call from the web UI.
     """
     auth = request.headers.get("authorization")
     if auth:
@@ -113,22 +107,17 @@ def _token_headers(token: str | None) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-# ── Web UI authentication ─────────────────────────────────────────────
+# ── Web UI access ────────────────────────────────────────────────────
 #
-# The web UI itself is gated by the same bearer token the daemon uses.
-# After a successful login the server issues an HMAC-signed, HttpOnly,
-# SameSite session cookie. All stateful endpoints (including the
-# WebSocket) require that cookie, so an anonymous client can neither
-# drive the daemon through the UI nor read slot/metrics state.
+# The web UI is always open — no login page, no session cookie, no
+# token gate on the UI or the chat WebSocket. This is safe on the
+# default localhost-only deployment and keeps the UI usable on a
+# machine where TOKI_AUTH_TOKEN is configured for the daemon.
 #
-# When no token is configured, the UI stays open (localhost-only
-# deployment) and the legacy client-supplied token path remains usable.
-
-AUTH_COOKIE = "toki_session"
-SESSION_TTL_SECONDS = 12 * 3600
-# Brute-force protection: per-IP cap on /login attempts. Without this,
-# an attacker can grind the token in a tight loop.
-LOGIN_RATE_LIMIT_PER_MINUTE = 10
+# The daemon itself stays protected: every proxied call (REST + WS)
+# is authenticated with the server's own configured token (see
+# `_forward_headers` / `auth_token`), so an open UI never weakens
+# daemon auth.
 
 
 def _configured_token() -> str | None:
@@ -151,28 +140,6 @@ def _configured_token() -> str | None:
     return None
 
 
-def _sign_session(token: str, ttl: int = SESSION_TTL_SECONDS) -> str:
-    payload = json.dumps({"exp": int(time.time()) + ttl}, separators=(",", ":")).encode()
-    b64 = base64.urlsafe_b64encode(payload).decode()
-    sig = hmac.new(token.encode(), b64.encode(), hashlib.sha256).hexdigest()
-    return f"{b64}.{sig}"
-
-
-def _valid_session(cookie: str | None, token: str | None) -> bool:
-    """Verify an HMAC-signed session cookie (constant-time)."""
-    if not cookie or not token:
-        return False
-    try:
-        b64, sig = cookie.rsplit(".", 1)
-        expected = hmac.new(token.encode(), b64.encode(), hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(sig, expected):
-            return False
-        payload = json.loads(base64.urlsafe_b64decode(b64.encode()))
-        return payload.get("exp", 0) > time.time()
-    except Exception:
-        return False
-
-
 def _is_same_origin(request: Request) -> bool:
     """Reject requests whose Origin doesn't match the Host we serve."""
     origin = request.headers.get("origin")
@@ -189,30 +156,16 @@ def create_web_app(
     *,
     raw_url: str = DEFAULT_RAW_URL,
     daemon_url: str = DEFAULT_DAEMON_URL,
-    tls: bool = False,
 ) -> FastAPI:
-    """Build the FastAPI app with the given default backend URLs.
-
-    ``tls`` marks the deployment as serving over HTTPS so session
-    cookies get the Secure flag. It is set automatically when the CLI
-    is given cert/key paths.
-    """
+    """Build the FastAPI app with the given default backend URLs."""
     app = FastAPI(title="Toki Recur", version="0.1.0")
     app.state.raw_url = raw_url
     app.state.daemon_url = daemon_url
     web_token = _configured_token()
-    secure_cookies = tls or os.environ.get("TOKI_WEB_TLS") == "1"
-    # Per-IP token bucket for /login. Keyed by remote address; entries
-    # older than ~10 min fall out naturally as their tokens refill
-    # back to capacity and stop triggering 429s.
-    login_limiter = RateLimiter(
-        burst=LOGIN_RATE_LIMIT_PER_MINUTE,
-        refill_rate=LOGIN_RATE_LIMIT_PER_MINUTE / 60.0,
-    )
 
     @app.middleware("http")
     async def security_and_no_store(request: Request, call_next):
-        """Enforce same-origin + auth, then serve everything no-store.
+        """Enforce same-origin, then serve everything no-store.
 
         A stale mix of old HTML + new styles (or vice versa) has
         repeatedly broken the chat input for real users, and every
@@ -224,11 +177,6 @@ def create_web_app(
                 {"detail": "cross-origin requests are not allowed"},
                 status_code=403,
             )
-        path = request.url.path
-        if web_token and path != "/login" and not path.startswith("/static"):
-            cookie = request.cookies.get(AUTH_COOKIE)
-            if not _valid_session(cookie, web_token):
-                return RedirectResponse("/login", status_code=307)
         response = await call_next(request)
         response.headers["Cache-Control"] = "no-store"
         # Defence-in-depth CSP. The static UI is self-hosted so a tight
@@ -260,48 +208,6 @@ def create_web_app(
             "<h1>Toki Recur</h1><p>UI not found.</p>"
         )
         return HTMLResponse(body, headers={"Cache-Control": "no-store"})
-
-    @app.get("/login", response_class=HTMLResponse)
-    async def login_page() -> HTMLResponse:
-        page = STATIC_DIR / "login.html"
-        body = page.read_text(encoding="utf-8") if page.exists() else "<h1>Token required</h1>"
-        return HTMLResponse(body, headers={"Cache-Control": "no-store"})
-
-    @app.post("/login")
-    async def login(request: Request) -> JSONResponse:
-        """Verify the supplied token (constant-time) and issue a cookie.
-
-        Rate-limited per client IP to blunt brute-force attempts."""
-        client_ip = (request.client.host if request.client else "unknown")
-        if not login_limiter.check(f"login:{client_ip}"):
-            return JSONResponse(
-                {"ok": False, "detail": "too many login attempts; slow down"},
-                status_code=429,
-            )
-        data = {}
-        try:
-            data = await request.json()
-        except Exception:
-            pass
-        provided = str(data.get("token", ""))
-        if web_token and hmac.compare_digest(provided, web_token):
-            resp = JSONResponse({"ok": True})
-            resp.set_cookie(
-                AUTH_COOKIE,
-                _sign_session(web_token),
-                max_age=SESSION_TTL_SECONDS,
-                httponly=True,
-                samesite="strict",
-                secure=secure_cookies,
-            )
-            return resp
-        return JSONResponse({"ok": False, "detail": "invalid token"}, status_code=401)
-
-    @app.post("/logout")
-    async def logout() -> JSONResponse:
-        resp = JSONResponse({"ok": True})
-        resp.delete_cookie(AUTH_COOKIE)
-        return resp
 
     @app.get("/config")
     async def config() -> dict:
@@ -450,15 +356,9 @@ def create_web_app(
 
     @app.websocket("/ws/chat")
     async def chat_ws(websocket: WebSocket) -> None:
-        # No anonymous sockets: when the UI requires auth, the handshake
-        # must carry a valid session cookie (sent automatically by the
-        # browser for same-origin WS upgrades). This closes the hole
-        # where the auth token previously travelled inside every payload.
-        if web_token and not _valid_session(
-            websocket.cookies.get(AUTH_COOKIE), web_token
-        ):
-            await websocket.close(code=4401)
-            return
+        # The UI is always open: the handshake needs no session cookie.
+        # The server authenticates daemon calls with its own configured
+        # credential (`auth_token = web_token or payload token`).
         await websocket.accept()
         try:
             while True:
@@ -521,12 +421,10 @@ def create_web_app_from_env() -> FastAPI:
     Reads configuration from environment variables:
       TOKI_WEB_RAW_URL     default http://127.0.0.1:8088
       TOKI_WEB_DAEMON_URL  default http://127.0.0.1:8787
-      TOKI_WEB_TLS         "1" to set the Secure flag on cookies
     """
     return create_web_app(
         raw_url=os.environ.get("TOKI_WEB_RAW_URL", DEFAULT_RAW_URL),
         daemon_url=os.environ.get("TOKI_WEB_DAEMON_URL", DEFAULT_DAEMON_URL),
-        tls=os.environ.get("TOKI_WEB_TLS") == "1",
     )
 
 

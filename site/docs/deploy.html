@@ -51,11 +51,11 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now toki-recur toki-recur-web</code></pre>
     <p class="note">macOS uses a launchd LaunchDaemon instead; Windows wraps <code>toki serve</code> in NSSM or a scheduled task.</p>
 
-    <h2>Web UI auth + TLS</h2>
+    <h2>Web UI access + TLS</h2>
     <ul>
-      <li>With <code>TOKI_AUTH_TOKEN</code> set, the whole UI is behind a login page. The server issues an HMAC-signed, HttpOnly, SameSite session cookie, and the chat WebSocket rejects handshakes without it (close code 4401). The token never travels inside socket payloads.</li>
+      <li>The web UI is always open — no login page, no session cookie. <code>TOKI_AUTH_TOKEN</code> still protects the daemon: the web server authenticates every proxied call (REST + WebSocket) with its own configured credential.</li>
       <li>Without a token the UI runs open — fine for localhost, exposed if bound to a network interface.</li>
-      <li>Serve HTTPS + <code>wss://</code> with <code>--tls-cert</code> / <code>--tls-key</code>, or set <code>TOKI_WEB_TLS_CERT</code> / <code>TOKI_WEB_TLS_KEY</code> in the env file (the systemd unit picks them up). Over TLS the session cookie gets the Secure flag; without TLS keep the UI bound to 127.0.0.1.</li>
+      <li>Serve HTTPS + <code>wss://</code> with <code>--tls-cert</code> / <code>--tls-key</code>, or set <code>TOKI_WEB_TLS_CERT</code> / <code>TOKI_WEB_TLS_KEY</code> in the env file (the systemd unit picks them up).</li>
       <li>The web server refuses cross-origin requests and serves everything <code>Cache-Control: no-store</code> so a reload always gets one consistent copy of the UI.</li>
     </ul>
 
