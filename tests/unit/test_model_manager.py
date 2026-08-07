@@ -591,6 +591,32 @@ def test_backfill_heals_bare_binary_to_installed(env, monkeypatch):
     assert healed.binary == str(bin_dir / exe_name)
 
 
+def test_resolve_binary_prefers_custom_then_installed(env, monkeypatch):
+    """Launch-time resolution: a custom binary wins; a bare PATH default
+    falls back to the installed build; bare name only as last resort."""
+    monkeypatch.delenv("TOKI_LLAMA_SERVER", raising=False)
+    bin_dir = ctl.STATE_ROOT / "bin"
+    bin_dir.mkdir(parents=True)
+    exe_name = "llama-server.exe" if os.name == "nt" else "llama-server"
+    installed = str(bin_dir / exe_name)
+    (bin_dir / exe_name).write_bytes(b"")
+    reg = env / "models.yaml"
+    reg.write_text(yaml.safe_dump({"models": [
+        {"name": "custom", "gguf": "/tmp/c.gguf", "llama_port": 1,
+         "daemon_port": 2, "ctx_size": 100, "max_tokens": 90,
+         "model_id": "c", "binary": "/opt/llama-server"},
+        {"name": "bare", "gguf": "/tmp/b.gguf", "llama_port": 3,
+         "daemon_port": 4, "ctx_size": 100, "max_tokens": 90,
+         "model_id": "b", "binary": "llama-server"},
+    ]}))
+    specs = ctl.load_registry(reg)
+    by_name = {s.name: s for s in specs}
+    assert ctl._resolve_binary(by_name["custom"]) == "/opt/llama-server"
+    assert ctl._resolve_binary(by_name["bare"]) == installed
+    (bin_dir / exe_name).unlink()
+    assert ctl._resolve_binary(by_name["bare"]) == "llama-server"
+
+
 def test_pull_model_inherits_binary(seeded_env, hf):
     spec = ctl.pull_model("acme/My-Model-GGUF", "inherits")
     assert spec.binary == ctl.DEFAULT_MODELS[2]["binary"]

@@ -1010,12 +1010,29 @@ def model_status(spec: ModelSpec) -> dict[str, Any]:
 # ── Start / stop ───────────────────────────────────────────────────────
 
 
+def _resolve_binary(spec: ModelSpec) -> str:
+    """Concrete llama-server path for launching.
+
+    Entries whose ``binary`` is still the bare PATH default (legacy
+    entries written before backfill, or pulls from a registry without
+    a tuned reference spec) resolve to the build installed by
+    ``toki model install-llama`` when one exists — on Windows the bare
+    name is not on PATH and Popen would fail with WinError 2.
+    """
+    if spec.binary and spec.binary != "llama-server":
+        return spec.binary
+    installed = _installed_binary()
+    if installed:
+        return installed
+    return "llama-server"
+
+
 def _llama_args(spec: ModelSpec, ctx_override: int | None = None) -> list[str]:
     if not Path(spec.gguf).exists():
         raise FileNotFoundError(f"model file not found: {spec.gguf}")
     ctx = spec.ctx_size if ctx_override is None else ctx_override
     args = [
-        spec.binary,
+        _resolve_binary(spec),
         "-m", spec.gguf,
         "--host", "127.0.0.1",
         "--port", str(spec.llama_port),
