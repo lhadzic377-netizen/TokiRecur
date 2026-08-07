@@ -541,7 +541,7 @@ Letter grades: A+ ≥ 90, A ≥ 80, B ≥ 70, C ≥ 60, D ≥ 50, F < 50.
 
 ## Benchmark results (this hardware)
 
-Run on AMD Ryzen AI MAX+ 395, max-tokens=32:
+Run on an AMD Ryzen AI MAX+ 395 (Ryzen AI Halo), max-tokens=32.
 
 ### Qwen3.5-9B-Q4_K_M
 
@@ -618,9 +618,9 @@ control workload by design) and `stress_adversarial` (which deliberately
 maximizes false-positive hits and short-prompt edge cases) are expected on
 every model.
 
-These are the most realistic scores — cache performance varies with the
-environment, so the benchmark may score better or worse on other
-hardware, models, or workloads.
+**Disclaimer:** all scores are based on multiple benchmark runs on this
+hardware and depend on the hardware, environment, and model — the benchmark
+may score better or worse on other hardware, models, or workloads.
 
 ## Repository layout
 

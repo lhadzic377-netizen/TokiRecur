@@ -126,7 +126,7 @@
   <section id="benchmarks">
     <p class="overline reveal">Benchmarks</p>
     <h2 class="reveal">Cache-hit efficiency &amp; throughput.</h2>
-    <p class="section-sub reveal">Measured on an AMD Ryzen AI MAX+ 395 via llama-server.</p>
+    <p class="section-sub reveal">Measured on an AMD Ryzen AI MAX+ 395 (Ryzen AI Halo) via llama-server.</p>
     <div class="bench-picker">
       <div class="bench-tabs" role="tablist" aria-label="Benchmarked models">
         <button type="button" class="bench-tab active" role="tab" aria-selected="true" data-model="m9b">Qwen3.5-9B-Q4_K_M</button>
@@ -317,9 +317,10 @@
     </div>
     <p class="note reveal">Bigger and sparser is better: the 122B-A10B MoE tops every table
       (realistic_mixed 89.7, summarization 95.8), and the 35B-A3B beats the dense 9B — the
-      more of each prompt's prefill that can be skipped, the larger the relative gain. Cache
-      performance varies with the environment, so the benchmark may score better or worse
-      on other hardware, models, or workloads.</p>
+      more of each prompt's prefill that can be skipped, the larger the relative gain.
+      <strong>Disclaimer:</strong> all scores are based on multiple benchmark runs on this hardware
+      (AMD Ryzen AI Halo) and depend on the hardware, environment, and model — the benchmark
+      may score better or worse elsewhere.</p>
   </section>
 
   <section id="quickstart">
