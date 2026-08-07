@@ -552,6 +552,45 @@ def test_pull_defaults_fallback_when_no_reference(env, monkeypatch):
     assert env_vars == {}
 
 
+def test_pull_defaults_prefers_installed_binary(env, monkeypatch):
+    """A machine with `toki model install-llama` (binary in STATE_ROOT/bin)
+    must default to that concrete path, not the bare PATH name — the bin
+    dir is not on PATH, and on Windows a bare name makes Popen fail with
+    WinError 2 (regression: `toki model pull --use` crash after install)."""
+    monkeypatch.delenv("TOKI_LLAMA_SERVER", raising=False)
+    bin_dir = ctl.STATE_ROOT / "bin"
+    bin_dir.mkdir(parents=True)
+    exe_name = "llama-server.exe" if os.name == "nt" else "llama-server"
+    installed = bin_dir / exe_name
+    installed.write_bytes(b"")
+    reg = env / "models.yaml"
+    reg.write_text(yaml.safe_dump({"models": []}))
+    binary, env_vars = ctl.pull_defaults(ctl.load_registry(reg))
+    assert binary == str(installed)
+    assert env_vars == {}
+
+
+def test_backfill_heals_bare_binary_to_installed(env, monkeypatch):
+    """Existing pulled entries left with the bare PATH default are
+    rewritten to the installed build by backfill_binary_env — the path
+    `use_model` takes, so an already-pulled model gets fixed on next use."""
+    monkeypatch.delenv("TOKI_LLAMA_SERVER", raising=False)
+    bin_dir = ctl.STATE_ROOT / "bin"
+    bin_dir.mkdir(parents=True)
+    exe_name = "llama-server.exe" if os.name == "nt" else "llama-server"
+    (bin_dir / exe_name).write_bytes(b"")
+    reg = env / "models.yaml"
+    reg.write_text(yaml.safe_dump({"models": [
+        {"name": "old-pull", "gguf": "/tmp/old.gguf", "llama_port": 1,
+         "daemon_port": 2, "ctx_size": 100, "max_tokens": 90,
+         "model_id": "old", "binary": "llama-server"},
+    ]}))
+    updated = ctl.backfill_binary_env(ctl.load_registry(reg))
+    assert updated == ["old-pull"]
+    healed = ctl.get_model("old-pull", reg)
+    assert healed.binary == str(bin_dir / exe_name)
+
+
 def test_pull_model_inherits_binary(seeded_env, hf):
     spec = ctl.pull_model("acme/My-Model-GGUF", "inherits")
     assert spec.binary == ctl.DEFAULT_MODELS[2]["binary"]

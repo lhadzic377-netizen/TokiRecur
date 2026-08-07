@@ -598,11 +598,28 @@ def _reference_spec(specs: list[ModelSpec]) -> ModelSpec | None:
     return custom[0] if custom else None
 
 
+def _installed_binary() -> str | None:
+    """The llama-server build installed by ``toki model install-llama``.
+
+    ``install-llama`` unpacks the pinned release into ``STATE_ROOT/bin``,
+    which is not on PATH — on Windows a bare ``llama-server`` name then
+    fails ``subprocess.Popen`` with WinError 2. Return the concrete
+    installed path when present so pulls/backfills never fall back to
+    the PATH default on a machine that has a real build.
+    """
+    name = "llama-server.exe" if os.name == "nt" else "llama-server"
+    candidate = STATE_ROOT / "bin" / name
+    if candidate.exists():
+        return str(candidate)
+    return None
+
+
 def pull_defaults(specs: list[ModelSpec]) -> tuple[str, dict[str, str]]:
     """Resolve binary + env defaults for a new model.
 
     Order: TOKI_LLAMA_SERVER env → an existing spec's binary + env (the
-    machine's tuned build, e.g. ROCm b10008) → PATH's llama-server.
+    machine's tuned build, e.g. ROCm b10008) → the build installed by
+    ``toki model install-llama`` → PATH's llama-server.
     """
     env_override = os.environ.get("TOKI_LLAMA_SERVER")
     if env_override:
@@ -611,6 +628,9 @@ def pull_defaults(specs: list[ModelSpec]) -> tuple[str, dict[str, str]]:
     ref = _reference_spec(specs)
     if ref:
         return ref.binary, dict(ref.env)
+    installed = _installed_binary()
+    if installed:
+        return installed, {}
     return "llama-server", {}
 
 
