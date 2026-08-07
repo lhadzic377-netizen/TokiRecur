@@ -68,6 +68,23 @@ toki down                      # stop everything
 toki down -y                   # skip confirmation
 toki status                    # show stack state</code></pre>
 
+    <h2>Model registry</h2>
+    <pre><code>toki model list                                 # registry + port + status
+toki model status                               # per-model stack state
+toki model use &lt;name&gt;                          # boot, wire clients at it
+toki model use &lt;name&gt; --keep-others            # don't stop the other big stacks
+toki model stop &lt;name&gt;                         # stop llama-server + daemon
+toki model stop &lt;name&gt; --force                # stop even unmanaged stacks on the ports
+toki model pull &lt;hf-repo&gt; --use                # download, register, and start
+toki model pull &lt;hf-repo&gt; --file name.gguf    # pick a specific GGUF (or split)
+toki model pull &lt;hf-repo&gt; --name my9b --ctx-size 16384
+toki model remove &lt;name&gt;                      # drop from the registry
+toki model remove &lt;name&gt; --purge             # also delete weights + runtime state
+toki model remove &lt;name&gt; --force              # allow removing the active model
+toki model repair                               # backfill binary/env on legacy entries</code></pre>
+
+    <p class="note"><code>toki model pull</code> detects multi-file GGUF splits (the upstream llama.cpp convention <code>-NNNN-of-NNNN.gguf</code>) and downloads every sibling part automatically — picking the recommended Q4_K_M variant no longer leaves llama-server unable to find the other shards. The model's registry entry always points at the first part (the entry point llama-server loads); the rest land beside it. <code>toki model remove</code> defaults to keeping weights and state on disk so you can re-add the same name with <code>toki model pull</code> without re-downloading; pass <code>--purge</code> to free the disk.</p>
+
     <h2>Benchmark (the headline tool)</h2>
     <pre><code>toki bench   # interactive: pick a model from the registry + a workload from a menu
 

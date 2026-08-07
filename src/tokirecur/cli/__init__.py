@@ -730,6 +730,42 @@ def stop(name: str, force: bool) -> None:
 
 
 @model.command()
+@click.argument("name")
+@click.option("--force", "-f", is_flag=True,
+              help="Allow removing the active model and stop unmanaged stacks.")
+@click.option("--purge", is_flag=True,
+              help="Also delete the model weights (~/models/<name>/) and runtime "
+                   "state (slot-save, llama.log, daemon.log, pid files). "
+                   "Re-adding the model after this requires re-downloading.")
+def remove(name: str, force: bool, purge: bool) -> None:
+    """Drop a model from the registry.
+
+    Stops the stack first so the launcher and opencode / openclaw / hermes
+    never point at a model that is no longer registered. By default the
+    model weights and runtime state are kept on disk so you can re-add the
+    same name with `toki model pull` without re-downloading; pass --purge
+    to free the disk. Refuses to remove the active model without --force.
+    """
+    from ..ctl import remove_model
+    try:
+        summary = remove_model(name, force=force, purge=purge)
+    except (KeyError, RuntimeError) as e:
+        click.echo(f"error: {e}", err=True)
+        raise SystemExit(1) from None
+    extras = []
+    if summary["was_active"]:
+        extras.append("was the active model — cleared the active marker")
+    if summary["purged_weights"]:
+        extras.append("weights deleted")
+    elif purge:
+        extras.append("weights kept (path lives outside ~/models)")
+    if summary["purged_state"]:
+        extras.append("state deleted")
+    tail = f"  ({'; '.join(extras)})" if extras else ""
+    click.echo(f"removed '{summary['removed']}' from the registry.{tail}")
+
+
+@model.command()
 def repair() -> None:
     """Backfill binary/env on legacy pulled entries.
 

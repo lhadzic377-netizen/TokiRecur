@@ -958,3 +958,132 @@ def test_chat_completion_stream_emits_reasoning_sse(tmp_path, monkeypatch):
     assert '"reasoning_content": "step 1 "' in body
     assert '"reasoning_content": "step 2"' in body
     assert '"content": "Answer"' in body
+
+
+# ── toki model remove ─────────────────────────────────────────────────
+
+
+def test_remove_model_drops_registry_entry(seeded_env, hf, monkeypatch):
+    """A plain `remove_model(name)` must drop the spec from the registry."""
+    monkeypatch.setattr(ctl, "stop_model", lambda spec, force=False: None)
+    ctl.pull_model("acme/Pulled-GGUF", "pulled")
+    names_before = {s.name for s in ctl.load_registry()}
+    assert "pulled" in names_before
+
+    summary = ctl.remove_model("pulled")
+
+    assert summary["removed"] == "pulled"
+    assert summary["was_active"] is False
+    assert summary["purged_weights"] is False
+    assert summary["purged_state"] is False
+    assert "pulled" not in {s.name for s in ctl.load_registry()}
+    # Other entries are untouched.
+    assert {"9b", "35b", "laguna"} <= {s.name for s in ctl.load_registry()}
+
+
+def test_remove_model_unknown_raises(env, monkeypatch):
+    monkeypatch.setattr(ctl, "stop_model", lambda spec, force=False: None)
+    with pytest.raises(KeyError, match="no model named 'nope'"):
+        ctl.remove_model("nope")
+
+
+def test_remove_model_refuses_active_without_force(seeded_env, hf, monkeypatch):
+    """Without --force the active model must NOT be removed — the launcher
+    and CLI configs would otherwise point at a name that no longer exists."""
+    monkeypatch.setattr(ctl, "stop_model", lambda spec, force=False: None)
+    ctl.pull_model("acme/Pulled-GGUF", "pulled")
+    ctl.set_active("pulled")
+
+    with pytest.raises(RuntimeError, match="active model"):
+        ctl.remove_model("pulled")
+
+    # Registry unchanged.
+    assert "pulled" in {s.name for s in ctl.load_registry()}
+    assert ctl.read_active() == "pulled"
+
+
+def test_remove_model_with_force_allows_active(seeded_env, hf, monkeypatch):
+    monkeypatch.setattr(ctl, "stop_model", lambda spec, force=False: None)
+    ctl.pull_model("acme/Pulled-GGUF", "pulled")
+    ctl.set_active("pulled")
+
+    summary = ctl.remove_model("pulled", force=True)
+
+    assert summary["was_active"] is True
+    assert "pulled" not in {s.name for s in ctl.load_registry()}
+    # Active marker cleared (the model it pointed at is gone).
+    assert ctl.read_active() is None
+    assert not ctl.ACTIVE_MARKER.exists()
+
+
+def test_remove_model_purge_deletes_weights_and_state(seeded_env, hf, monkeypatch, tmp_path):
+    """--purge removes the weights directory under ~/models/<name>/ and
+    the runtime state directory under STATE_ROOT/model/<name>/."""
+    monkeypatch.setattr(ctl, "stop_model", lambda spec, force=False: None)
+    ctl.pull_model("acme/Pulled-GGUF", "pulled")
+    # Redirect Path.home() so ~/models/<name>/ lives inside tmp_path.
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    # pull_model already wrote weights at ~/models/pulled/ inside tmp_path.
+    state_dir = ctl.STATE_ROOT / "model" / "pulled"
+    state_dir.mkdir(parents=True)
+    (state_dir / "llama.pid").write_text("999")
+
+    summary = ctl.remove_model("pulled", purge=True)
+
+    assert summary["purged_weights"] is True
+    assert summary["purged_state"] is True
+    assert not (tmp_path / "models" / "pulled").exists()
+    assert not state_dir.exists()
+
+
+def test_remove_model_purge_keeps_weights_outside_models_dir(seeded_env, hf, monkeypatch, tmp_path):
+    """If the spec's gguf path lives outside ~/models (e.g. a custom
+    legacy layout pointing at /opt/...), --purge must not delete it.
+    The state dir is still cleaned."""
+    monkeypatch.setattr(ctl, "stop_model", lambda spec, force=False: None)
+    ctl.pull_model("acme/Pulled-GGUF", "pulled")
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    # Rewrite the registry entry's gguf path to point outside ~/models.
+    outside = tmp_path / "external-weights" / "pulled-Q4_K_M.gguf"
+    outside.parent.mkdir(parents=True, exist_ok=True)
+    outside.write_text("stub")
+    specs = ctl.load_registry()
+    for s in specs:
+        if s.name == "pulled":
+            s.gguf = str(outside)
+            s.raw["gguf"] = str(outside)
+    ctl.save_registry(specs)
+    ctl.invalidate_registry_cache()
+    state_dir = ctl.STATE_ROOT / "model" / "pulled"
+    state_dir.mkdir(parents=True)
+
+    summary = ctl.remove_model("pulled", purge=True)
+
+    assert summary["purged_weights"] is False  # refused — outside ~/models
+    assert summary["purged_state"] is True
+    assert outside.exists()         # weights preserved
+    assert not state_dir.exists()   # state still cleaned
+
+
+def test_remove_model_clears_active_marker(seeded_env, hf, monkeypatch):
+    """The active-marker file is removed when its target is removed so
+    read_active() falls back to the always-on default (or None)."""
+    monkeypatch.setattr(ctl, "stop_model", lambda spec, force=False: None)
+    ctl.pull_model("acme/Pulled-GGUF", "pulled")
+    ctl.set_active("pulled")
+    assert ctl.ACTIVE_MARKER.exists()
+
+    ctl.remove_model("pulled", force=True)
+
+    assert not ctl.ACTIVE_MARKER.exists()
+    assert ctl.read_active() is None  # no always-on, no marker → None
+
+
+def test_remove_model_idempotent(seeded_env, hf, monkeypatch):
+    """Removing a name that is no longer in the registry must raise KeyError
+    (not silently succeed) — protects against double-removes."""
+    monkeypatch.setattr(ctl, "stop_model", lambda spec, force=False: None)
+    ctl.pull_model("acme/Pulled-GGUF", "pulled")
+    ctl.remove_model("pulled")
+    with pytest.raises(KeyError):
+        ctl.remove_model("pulled")

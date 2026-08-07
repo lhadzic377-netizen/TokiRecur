@@ -57,9 +57,13 @@ toki model use qwen3-4b
 
 # 6. Talk to it — the full-screen TUI chat (or open the web UI with `toki web`)
 toki tui
+
+# 7. Done with it — unregister (weights and state stay on disk by default;
+#    pass --purge to delete them too; --force overrides the active-model guard):
+toki model remove qwen3-4b
 ```
 
-No models are installed or started at install time — `toki model use <name>` is the explicit, documented way to bring one up (it starts llama-server + the toki daemon, stops competing big-model stacks, and wires opencode/openclaw/hermes at it). `toki up --model <path>` is the single-model equivalent for a raw GGUF without a registry entry. `toki serve` is **only** the API daemon (default 127.0.0.1:8787) that proxies to an already-running llama-server; it warns loudly if the backend isn't reachable instead of failing silently. Two chat frontends ship with toki: bare `toki` opens the full-screen launcher, `toki tui` is the full-screen TUI chat, and `toki web` is the browser chat UI.
+No models are installed or started at install time — `toki model use <name>` is the explicit, documented way to bring one up (it starts llama-server + the toki daemon, stops competing big-model stacks, and wires opencode/openclaw/hermes at it). `toki model remove <name>` is the inverse: it drops the registry entry and (with `--purge`) deletes the downloaded weights under `~/models/<name>` plus the runtime state dir. `toki up --model <path>` is the single-model equivalent for a raw GGUF without a registry entry. `toki serve` is **only** the API daemon (default 127.0.0.1:8787) that proxies to an already-running llama-server; it warns loudly if the backend isn't reachable instead of failing silently. Two chat frontends ship with toki: bare `toki` opens the full-screen launcher, `toki tui` is the full-screen TUI chat, and `toki web` is the browser chat UI.
 
 ### Small-RAM machines
 

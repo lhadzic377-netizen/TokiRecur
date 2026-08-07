@@ -1160,6 +1160,91 @@ def stop_model(spec: ModelSpec, force: bool = False) -> None:
         )
 
 
+def remove_model(
+    name: str,
+    *,
+    force: bool = False,
+    purge: bool = False,
+    registry: Path | None = None,
+) -> dict[str, Any]:
+    """Drop a model from the registry.
+
+    Refuses to remove the active model unless ``force=True``; ``purge=True``
+    additionally deletes the model weights (``~/models/<name>/``) and the
+    runtime state directory (``~/.local/state/tokirecur/model/<name>/``)
+    so re-adding the model requires re-downloading everything.
+
+    Returns a summary ``{"removed": name, "purged_weights": bool,
+    "purged_state": bool, "was_active": bool}``.
+    """
+    specs = load_registry(registry)
+    try:
+        spec = get_model(name, registry)
+    except KeyError:
+        raise KeyError(f"no model named '{name}' in the registry") from None
+
+    was_active = read_active(registry) == name
+    if was_active and not force:
+        raise RuntimeError(
+            f"'{name}' is the active model — `toki model use <other>` first, "
+            "or pass --force"
+        )
+
+    # Stop the stack first so we don't leave a daemon pointing at a model
+    # that is no longer registered. Force it if the user already opted in.
+    try:
+        stop_model(spec, force=force)
+    except RuntimeError:
+        if not force:
+            raise
+        # With --force the message above already stopped whatever is on
+        # the ports; the unreachable llama-server is the user's problem.
+
+    kept = [s for s in specs if s.name != name]
+    save_registry(kept, registry)
+    invalidate_registry_cache()
+
+    purged_weights = False
+    purged_state = False
+    if purge:
+        weights_dir = Path(spec.gguf).parent.resolve()
+        # Don't follow a symlink that points outside the user's models dir.
+        try:
+            weights_dir.relative_to(Path.home() / "models")
+            shutil.rmtree(weights_dir, ignore_errors=True)
+            purged_weights = True
+        except ValueError:
+            # gguf path lives outside ~/models (legacy custom paths) —
+            # leave it alone, the user opted in to that layout.
+            purged_weights = False
+
+        state_dir = spec.state_dir()
+        shutil.rmtree(state_dir, ignore_errors=True)
+        purged_state = True
+
+        # The slot-save directory is shared across all models when the
+        # registry default `--slot-save-path` is used; only clean it up
+        # if it's now empty, otherwise we'd nuke another stack's state.
+        slot_save = Path.home() / ".local" / "state" / "tokirecur" / "slot-save"
+        try:
+            slot_save.rmdir()  # rmdir only succeeds on empty dirs
+        except OSError:
+            pass
+
+    if was_active and ACTIVE_MARKER.exists():
+        try:
+            ACTIVE_MARKER.unlink()
+        except OSError:
+            pass
+
+    return {
+        "removed": name,
+        "purged_weights": purged_weights,
+        "purged_state": purged_state,
+        "was_active": was_active,
+    }
+
+
 def backfill_binary_env(specs: list[ModelSpec] | None = None) -> list[str]:
     """Rewrite any non-default registry entry missing `binary`/`env`
     to inherit the machine's tuned build (ROCm build + HSA vars)
