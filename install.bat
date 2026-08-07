@@ -9,8 +9,8 @@ rem
 rem Does everything:
 rem   1. python 3.10+ check
 rem   2. venv at %%LOCALAPPDATA%%\tokirecur\venv + package (embeddings extra)
-rem   3. toki model install-llama (official llama-server.exe for this machine)
-rem   4. idempotent user-PATH hook so `toki` works from any terminal
+rem   3. idempotent user-PATH hook so `toki` works from any terminal
+rem   4. toki model install-llama (official llama-server.exe for this machine)
 rem   5. verification: toki --version + llama-server --version
 rem
 rem No tokens needed - the clone already authenticated you. Re-runnable.
@@ -60,18 +60,8 @@ if not exist "%TOKI%" (
   echo error: toki.exe missing after install at %TOKI% & exit /b 1
 )
 
-rem ── 3. llama-server ─────────────────────────────────────────────
-if "%TOKI_SKIP_LLAMA%"=="1" goto :pathhook
-echo [+] fetching llama-server for this machine (toki model install-llama)...
-"%TOKI%" model install-llama
-if errorlevel 1 (
-  echo error: toki model install-llama failed. Fix the error above, or re-run
-  echo with TOKI_SKIP_LLAMA=1 and retry later with:  toki model install-llama
-  exit /b 1
-)
-
-rem ── 4. user-PATH hook (idempotent) ──────────────────────────────
-:pathhook
+rem ── 3. user-PATH hook (idempotent, before llama so a fetch
+rem    failure never leaves toki off PATH) ─────────────────────────
 set "SCRIPTS=%VENV%\Scripts"
 echo %PATH% | findstr /i /c:"%SCRIPTS%" >nul
 if errorlevel 1 (
@@ -80,7 +70,19 @@ if errorlevel 1 (
   setx PATH "%SCRIPTS%;!USERPATH!" >nul
 )
 
+rem ── 4. llama-server (non-fatal: warn and continue on failure) ───
+if "%TOKI_SKIP_LLAMA%"=="1" goto :verify
+echo [+] fetching llama-server for this machine (toki model install-llama)...
+"%TOKI%" model install-llama
+if errorlevel 1 (
+  echo.
+  echo warning: toki model install-llama failed. toki itself is installed and
+  echo on PATH; retry the binary later from a new terminal with:
+  echo     toki model install-llama
+)
+
 rem ── 5. verification ─────────────────────────────────────────────
+:verify
 echo [+] verifying...
 "%TOKI%" --version
 set "LLAMA=%USERPROFILE%\.local\state\tokirecur\bin\llama-server.exe"

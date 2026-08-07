@@ -93,6 +93,29 @@ def test_pick_asset_none_when_no_match():
     assert backend is None
 
 
+def test_pick_asset_skips_cudart_runtime_archives():
+    # CUDA releases also ship cudart-llama-bin-* / cuda-cublas-llama-bin-*
+    # runtime archives that match the same "win-cuda" fragment but contain
+    # no llama-server.exe. The llama-<tag>-bin-* archive must win even when
+    # the runtime archives sort first (GitHub lists them alphabetically).
+    assets = [
+        {"name": "cudart-llama-bin-win-cuda-13.3-x64.zip", "size": 390_000_000},
+        {"name": "cuda-cublas-llama-bin-win-cuda-13.3-x64.zip", "size": 1_000_000},
+        {"name": "llama-b10311-bin-win-cuda-13.3-x64.zip", "size": 140_000_000},
+    ]
+    asset, backend = _pick_asset(assets, _asset_patterns("windows", "x64"))
+    assert backend == "cuda"
+    assert asset["name"].startswith("llama-b10311-bin-")
+
+    # And the runtime archives must NOT shadow any other backend's archive.
+    assets = [
+        {"name": "cudart-llama-bin-win-cuda-13.3-x64.zip", "size": 390_000_000},
+        {"name": "llama-b10311-bin-win-vulkan-x64.zip", "size": 50_000_000},
+    ]
+    asset, backend = _pick_asset(assets, _asset_patterns("windows", "x64"))
+    assert asset["name"] == "llama-b10311-bin-win-vulkan-x64.zip"
+
+
 def test_rocm_env_defaults():
     env = _rocm_env(None)
     assert env == {"GGML_CUDA_ENABLE_UNIFIED_MEMORY": "1"}

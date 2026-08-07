@@ -907,13 +907,19 @@ def _pick_asset(
     patterns: list[tuple[str, str]],
 ) -> tuple[dict | None, str | None]:
     """Return (best asset, backend) or (None, None)."""
-    best: tuple[int, dict, str] | None = None
+    best: tuple[tuple[int, int], dict, str] | None = None
     for a in assets:
         low = a.get("name", "").lower()
         for i, (backend, frag) in enumerate(patterns):
             if frag in low:
-                if best is None or i < best[0]:
-                    best = (i, a, backend)
+                # Prefer the archive that actually contains llama-server:
+                # CUDA/ROCm releases also ship runtime archives named
+                # cudart-llama-bin-* / cuda-cublas-llama-bin-* that match
+                # the same fragment but hold no binaries.
+                rank = 0 if low.startswith("llama-") else 1
+                score = (rank, i)
+                if best is None or score < best[0]:
+                    best = (score, a, backend)
                 break
     if best is None:
         return None, None
