@@ -301,6 +301,75 @@ def test_pull_model_registers_entry(env, hf):
     assert hf["downloads"][0][1] == ["*model-Q4_K_M.gguf"]
 
 
+def test_pull_model_auto_ctx_caps_at_model_max(env, hf, monkeypatch):
+    """A pull without --ctx auto-sizes: a 350M-class model whose max
+    context is 8k must never be registered at the old flat 200k."""
+    from tokirecur.ggufmeta import GgufMeta
+    monkeypatch.setattr(ctl, "read_gguf_meta", lambda p: GgufMeta(
+        n_embd=1024, n_layer=16, n_head=16, n_head_kv=8,
+        context_length=8192))
+    spec = ctl.pull_model("acme/My-Model-GGUF", "auto")
+    assert spec.ctx_size == 8192
+    assert spec.max_tokens == 4096
+
+
+def test_pull_model_auto_ctx_default_cap(env, hf, monkeypatch):
+    """Unreadable metadata -> conservative auto ctx (16k), never 200k."""
+    from tokirecur.ggufmeta import GgufMeta
+    monkeypatch.setattr(ctl, "read_gguf_meta", lambda p: GgufMeta())
+    spec = ctl.pull_model("acme/My-Model-GGUF", "auto2")
+    assert spec.ctx_size == 16384
+    assert spec.max_tokens == 8192
+
+
+def test_auto_ctx_respects_ram_budget_and_ceiling(env, monkeypatch):
+    """KV at f16 for the 16-layer/8-kv-head model is 64KB/token (x2
+    parallel). A small RAM box gets a small ctx; the 64k ceiling caps
+    even unlimited RAM."""
+    from tokirecur.ggufmeta import GgufMeta
+    gguf = env / "m.gguf"
+    gguf.write_bytes(b"")
+    monkeypatch.setattr(ctl, "read_gguf_meta", lambda p: GgufMeta(
+        n_embd=1024, n_layer=16, n_head=16, n_head_kv=8,
+        context_length=128000))
+    monkeypatch.setattr(ctl, "_available_gb", lambda: 6.0)
+    # Budget = 6 - 0 - 4 = 2 GB -> max_fit ~30517, floor 512.
+    assert ctl._auto_ctx_size(gguf, parallel=2, kv="f16") == 30517
+    monkeypatch.setattr(ctl, "_available_gb", lambda: float("inf"))
+    # Unlimited RAM -> capped by the 64k ceiling (model max is 128k).
+    assert ctl._auto_ctx_size(gguf, parallel=2, kv="f16") == 65536
+
+
+def test_clamp_ctx_caps_at_model_max(env, monkeypatch):
+    """_clamp_ctx never returns more than the model supports, even when
+    RAM would allow it (regression: 200k requested on a 128k model)."""
+    from tokirecur.ggufmeta import GgufMeta
+    gguf = env / "m.gguf"
+    gguf.write_bytes(b"")
+    spec = ctl.ModelSpec(
+        name="m", label="m", gguf=str(gguf), llama_port=1, daemon_port=2,
+        ctx_size=200000, parallel=2, kv="f16", max_tokens=100000,
+        model_id="m")
+    monkeypatch.setattr(ctl, "read_gguf_meta", lambda p: GgufMeta(
+        n_embd=1024, n_layer=16, n_head=16, n_head_kv=8,
+        context_length=128000))
+    assert ctl._clamp_ctx(spec, avail_gb=float("inf"), weight_gb=0.0) == 128000
+
+
+def test_model_max_ctx_reads_metadata(env, monkeypatch):
+    from tokirecur.ggufmeta import GgufMeta
+    gguf = env / "m.gguf"
+    gguf.write_bytes(b"")
+    spec = ctl.ModelSpec(
+        name="m", label="m", gguf=str(gguf), llama_port=1, daemon_port=2,
+        ctx_size=200000, parallel=2, kv="f16", max_tokens=1, model_id="m")
+    monkeypatch.setattr(ctl, "read_gguf_meta", lambda p: GgufMeta(
+        context_length=32000))
+    assert ctl._model_max_ctx(spec) == 32000
+    monkeypatch.setattr(ctl, "read_gguf_meta", lambda p: GgufMeta())
+    assert ctl._model_max_ctx(spec) is None
+
+
 def test_pull_model_endpoint_sets_hf_env(env, hf):
     ctl.pull_model("acme/My-Model-GGUF", "mirrored",
                    endpoint="http://localhost:8090")

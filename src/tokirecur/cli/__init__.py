@@ -223,6 +223,8 @@ def tui(daemon_url: str, raw_url: str, auth_token: str | None) -> None:
         raise SystemExit(2)
     try:
         from ..tui.app import run as tui_run
+        from ..tui.launcher import _warn_legacy_console
+        _warn_legacy_console()
         tui_run(
             daemon_url=daemon_url, raw_url=raw_url, auth_token=auth_token,
         )
@@ -794,8 +796,9 @@ def repair() -> None:
 @click.option("--file", "gguf_file", default=None,
               help="Exact GGUF filename in the repo (needed when the repo "
                    "contains several; otherwise you are prompted).")
-@click.option("--ctx", "ctx_size", default=200000, type=int,
-              help="Context size for the registry entry.")
+@click.option("--ctx", "ctx_size", default=None, type=int,
+              help="Context size for the registry entry (default: "
+                   "auto-sized to fit this machine and the model).")
 @click.option("--kv", default="f16", help="KV cache type (f16, q8_0, ...).")
 @click.option("--endpoint", default=None,
               help="HF mirror base URL, e.g. http://localhost:8090 "

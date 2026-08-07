@@ -240,27 +240,41 @@ def _kv_bytes_per_token(spec: ModelSpec) -> float | None:
     return per_layer * meta.n_layer * spec.parallel
 
 
+def _model_max_ctx(spec: ModelSpec) -> int | None:
+    """The model's own max context (from GGUF metadata), or ``None``."""
+    meta = read_gguf_meta(spec.gguf)
+    if meta and meta.context_length:
+        return meta.context_length
+    return None
+
+
 def _clamp_ctx(spec: ModelSpec, avail_gb: float | None = None,
                weight_gb: float | None = None) -> int:
     """Largest context (>= ``_CTX_FLOOR``) whose KV cache fits in RAM.
 
     Uses the same headroom budget as ``_estimate_need``: weights * 1.2
-    + 4 GB. When the GGUF metadata is unavailable (or the machine's
-    RAM can't be measured) the configured ``ctx_size`` is returned
-    untouched and llama-server's own auto-reduction applies.
+    + 4 GB. Also caps at the model's own max context (a 350M model is
+    never going to use 200k even when RAM would allow). When the GGUF
+    metadata is unavailable (or the machine's RAM can't be measured)
+    the configured ``ctx_size`` is returned untouched and llama-server's
+    own auto-reduction applies.
     """
+    cap = spec.ctx_size
+    model_max = _model_max_ctx(spec)
+    if model_max:
+        cap = min(cap, model_max)
     kv_per_token = _kv_bytes_per_token(spec)
     if kv_per_token is None:
-        return spec.ctx_size
+        return cap
     if avail_gb is None:
         avail_gb = _available_gb()
     if weight_gb is None:
         weight_gb = Path(spec.gguf).stat().st_size / 1e9 if Path(spec.gguf).exists() else 0.0
     budget = avail_gb - weight_gb * 1.2 - 4.0
     if budget <= 0 or not math.isfinite(budget):
-        return spec.ctx_size  # unknown RAM or weights alone don't fit
+        return cap  # unknown RAM or weights alone don't fit
     max_fit = int(budget * 1e9 / kv_per_token)
-    return max(_CTX_FLOOR, min(spec.ctx_size, max_fit))
+    return max(_CTX_FLOOR, min(cap, max_fit))
 
 
 def _effective_ctx(spec: ModelSpec) -> int:
@@ -704,12 +718,35 @@ def _expand_gguf_patterns(filename: str) -> list[str]:
     return [f"*{p}" for p in siblings]
 
 
+def _auto_ctx_size(gguf: Path, *, parallel: int, kv: str) -> int:
+    """Pick a context for a fresh pull that fits this machine.
+
+    Uses the same RAM budget as ``_clamp_ctx`` (weights * 1.2 + 4 GB
+    headroom), capped at the model's own max context and a sane 64k
+    ceiling — a small model on a modest machine should never request
+    a KV cache it cannot serve, and 64k is already far beyond chat
+    use. When the GGUF metadata is unreadable the KV cannot be sized,
+    so the conservative 16k default applies instead of the old flat
+    200k (still capped at the model max when that IS known).
+    """
+    meta = read_gguf_meta(gguf)
+    model_max = meta.context_length if (meta and meta.context_length) else None
+    if not (meta and meta.complete):
+        return max(_CTX_FLOOR, min(16384, model_max or 16384))
+    placeholder = ModelSpec(
+        name="_auto", label="_auto", gguf=str(gguf), llama_port=0,
+        daemon_port=0, ctx_size=200000, parallel=parallel, kv=kv,
+        max_tokens=1, model_id="_auto",
+    )
+    return max(_CTX_FLOOR, min(_clamp_ctx(placeholder), 65536))
+
+
 def pull_model(
     repo_id: str,
     name: str | None = None,
     *,
     file: str | None = None,
-    ctx_size: int = 200000,
+    ctx_size: int | None = None,
     kv: str = "f16",
     endpoint: str | None = None,
     reasoning: str = "auto",
@@ -726,9 +763,12 @@ def pull_model(
     selects one; otherwise ``choose_file`` is called with the real
     candidates as ``(filename, size_bytes)`` pairs (sizes fetched from
     the hub, best-effort); without either, an error listing the
-    candidates is raised. Binary and env inherit from an existing spec's
-    custom build (e.g. the machine's tuned ROCm llama.cpp) when
-    available; ``reasoning`` selects the thinking-model handling.
+    candidates is raised. ``ctx_size`` defaults to an auto-picked value
+    that fits this machine and the model (RAM budget + model max ctx);
+    pass an explicit value to override. Binary and env inherit from an
+    existing spec's custom build (e.g. the machine's tuned ROCm
+    llama.cpp) when available; ``reasoning`` selects the thinking-model
+    handling.
     """
     if not name:
         name = repo_id.rstrip("/").rsplit("/", 1)[-1]
@@ -807,6 +847,8 @@ def pull_model(
 
     llama_port, daemon_port = next_free_ports(specs)
     binary, env = pull_defaults(specs)
+    if ctx_size is None:
+        ctx_size = _auto_ctx_size(local_dir / filename, parallel=2, kv=kv)
     raw = {
         "name": name,
         "label": Path(filename).stem,
@@ -1137,6 +1179,21 @@ def start_model(spec: ModelSpec, wait: bool = True) -> None:
     """Bring up the model's llama-server + daemon (idempotent)."""
     state = spec.state_dir()
     state.mkdir(parents=True, exist_ok=True)
+
+    # Self-heal: a registry ctx above the model's real max (e.g. the
+    # old flat 200k pull default on a 128k model) is corrected in place
+    # so it never sneaks back in after an edit.
+    max_ctx = _model_max_ctx(spec)
+    if max_ctx and spec.ctx_size > max_ctx:
+        try:
+            update_spec_field(spec.name, "ctx_size", str(max_ctx))
+            logger.info(
+                "%s: ctx %d exceeds model max %d — registry corrected",
+                spec.name, spec.ctx_size, max_ctx,
+            )
+            spec.ctx_size = max_ctx
+        except (KeyError, ValueError):
+            pass  # best-effort; _clamp_ctx still caps at launch
 
     if not llama_reachable(spec):
         if not Path(spec.gguf).exists():

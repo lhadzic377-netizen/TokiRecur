@@ -27,6 +27,7 @@ class GgufMeta:
     n_layer: int | None = None
     n_head: int | None = None
     n_head_kv: int | None = None
+    context_length: int | None = None
 
     @property
     def complete(self) -> bool:
@@ -105,7 +106,7 @@ def read_gguf_meta(path: Path | str) -> GgufMeta:
             # architecture key is missing.
             prefixes = [f"{arch}."] if arch else []
             prefixes.append("llama.")
-            n_embd = n_layer = n_head = n_head_kv = None
+            n_embd = n_layer = n_head = n_head_kv = context_length = None
             for pref in prefixes:
                 if n_embd is None:
                     v = meta.get(f"{pref}embedding_length")
@@ -119,8 +120,13 @@ def read_gguf_meta(path: Path | str) -> GgufMeta:
                 if n_head_kv is None:
                     v = meta.get(f"{pref}attention.head_count_kv")
                     n_head_kv = int(v) if isinstance(v, (int, float)) else None
+                if context_length is None:
+                    v = meta.get(f"{pref}context_length")
+                    if not isinstance(v, (int, float)):
+                        v = meta.get(f"{pref}max_position_embeddings")
+                    context_length = int(v) if isinstance(v, (int, float)) else None
                 if n_embd is not None and n_layer is not None:
                     break
-            return GgufMeta(n_embd, n_layer, n_head, n_head_kv)
+            return GgufMeta(n_embd, n_layer, n_head, n_head_kv, context_length)
     except (OSError, struct.error, UnicodeDecodeError, ValueError):
         return GgufMeta()
