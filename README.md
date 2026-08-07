@@ -18,6 +18,28 @@ models.
 
 Toki Recur is a Python app, so install it like one — with pip. While the repo is private, the install URL carries a read-only token (a fine-grained PAT with **Contents: read** on `lhadzic377-netizen/TokiRecur` only — create/revoke at https://github.com/settings/personal-access-tokens). The token appears in your shell history; that's the private-repo tax.
 
+Simplest: clone the repo once (your Git credentials do the auth) and run the
+installer from the checkout — cross-platform, no token needed:
+
+```bash
+# Linux / macOS
+git clone https://github.com/lhadzic377-netizen/TokiRecur.git
+cd TokiRecur
+./install.sh
+```
+
+```bat
+:: Windows (double-click or from cmd/PowerShell)
+git clone https://github.com/lhadzic377-netizen/TokiRecur.git
+cd TokiRecur
+install.bat
+```
+
+Both install the `toki` CLI with pipx (auto-installed if missing, with a venv
+fallback on Linux/macOS). The embeddings extra is included by default
+(sentence-transformers + torch, used by the similarity index); to skip it:
+`TOKI_EXTRAS= ./install.sh`.
+
 ```bash
 # 1. Install the CLI (pipx isolates it in its own venv and puts toki on PATH)
 #    (one-time: sudo apt install pipx   or   python3 -m pip install --user pipx)

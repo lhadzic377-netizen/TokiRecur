@@ -43,6 +43,22 @@
 
     <p class="reveal">Toki Recur is a Python app, install it with pipx, which isolates it in its own venv and puts <code>toki</code> on PATH. While the repo is private, the install URL carries a read-only token (a fine-grained PAT with <strong>Contents: read</strong> on <code>lhadzic377-netizen/TokiRecur</code> only). The token appears in your shell history; that's the private-repo tax.</p>
 
+    <h2>Simplest: clone, then run the installer</h2>
+    <p>Clone the repo once (your Git credentials do the auth) and run the
+    installer from the checkout. Cross-platform, no token required.</p>
+    <pre><code># Linux / macOS
+git clone https://github.com/lhadzic377-netizen/TokiRecur.git
+cd TokiRecur
+./install.sh</code></pre>
+    <pre><code>:: Windows (cmd or PowerShell)
+git clone https://github.com/lhadzic377-netizen/TokiRecur.git
+cd TokiRecur
+install.bat</code></pre>
+    <p class="note">Both install the <code>toki</code> CLI with pipx (auto-installed if missing; Linux/macOS falls back to a venv). The embeddings extra
+    (sentence-transformers + torch) is included by default; skip it with
+    <code>TOKI_EXTRAS= ./install.sh</code>.</p>
+
+    <h2>Direct pipx install</h2>
     <pre><code>pipx install "tokirecur[embeddings] @ git+https://x-access-token:&lt;PAT&gt;@github.com/lhadzic377-netizen/TokiRecur.git"</code></pre>
 
     <p class="note">One-time: <code>sudo apt install pipx</code> or <code>python3 -m pip install --user pipx</code>.</p>
