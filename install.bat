@@ -53,7 +53,7 @@ if defined TOKI_EXTRAS (
 )
 
 echo [+] installing tokirecur (%EXTRA%) into the venv...
-"%PIP%" install --upgrade pip >nul
+"%VENV%\Scripts\python.exe" -m pip install --upgrade pip >nul
 "%PIP%" install "%EXTRA%"
 if errorlevel 1 (echo error: package install failed & exit /b 1)
 if not exist "%TOKI%" (
@@ -90,7 +90,7 @@ if exist "%LLAMA%" (
   "%LLAMA%" --version
 ) else (
   if "%TOKI_SKIP_LLAMA%"=="1" (
-    echo     llama-server skipped (TOKI_SKIP_LLAMA=1). Install later: toki model install-llama
+    echo     llama-server skipped, TOKI_SKIP_LLAMA=1. Install later: toki model install-llama
   ) else (
     echo warning: llama-server not found at %LLAMA%
   )
