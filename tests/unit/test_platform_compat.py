@@ -109,6 +109,72 @@ def test_lifecycle_stop_pid_no_killpg(monkeypatch, tmp_path):
 
     assert lifecycle.stop_pid(pidfile, "toki daemon") is True
     assert seen == [signal.SIGTERM]
+
+
+def test_hard_kill_windows_uses_taskkill(monkeypatch):
+    monkeypatch.setattr(ctl.os, "name", "nt")
+    seen = []
+    monkeypatch.setattr(
+        ctl.subprocess, "run", lambda argv, **kw: seen.append(argv),
+    )
+    ctl._hard_kill(12345)
+    assert seen == [["taskkill", "/pid", "12345", "/f"]]
+
+
+def test_hard_kill_posix_uses_sigkill(monkeypatch):
+    monkeypatch.setattr(ctl.os, "name", "posix")
+    monkeypatch.setattr(
+        ctl.os, "killpg",
+        lambda pgid, sig: (_ for _ in ()).throw(ProcessLookupError()),
+    )
+    monkeypatch.setattr(ctl.os, "getpgid", lambda pid: 999)
+    seen = {}
+    monkeypatch.setattr(ctl.os, "kill", lambda pid, sig: seen.update(pid=pid, sig=sig))
+    ctl._hard_kill(12345)
+    assert seen == {"pid": 12345, "sig": signal.SIGKILL}
+
+
+def test_stop_pidfile_hard_kill_windows_style(monkeypatch, tmp_path):
+    # Graceful stop times out -> hard kill must use taskkill, never
+    # signal.SIGKILL (which does not exist on Windows Python).
+    monkeypatch.setattr(ctl.os, "name", "nt")
+    monkeypatch.delattr(ctl.os, "killpg", raising=False)
+    monkeypatch.delattr(ctl.os, "getpgid", raising=False)
+    monkeypatch.setattr(ctl, "_read_pid", lambda path: 12345)
+    monkeypatch.setattr(ctl, "_is_alive", lambda pid: True)
+    seen = []
+    monkeypatch.setattr(ctl.os, "kill", lambda pid, sig: seen.append(sig))
+    tasks = []
+    monkeypatch.setattr(
+        ctl.subprocess, "run", lambda argv, **kw: tasks.append(argv),
+    )
+    pidfile = tmp_path / "llama.pid"
+    pidfile.write_text("12345")
+
+    assert ctl._stop_pidfile(pidfile, grace=0.01) is True
+    assert seen == [signal.SIGTERM]
+    assert tasks == [["taskkill", "/pid", "12345", "/f"]]
+    assert not pidfile.exists()
+
+
+def test_lifecycle_stop_pid_hard_kill_windows(monkeypatch, tmp_path):
+    monkeypatch.setattr(lifecycle.os, "name", "nt")
+    monkeypatch.delattr(lifecycle.os, "killpg", raising=False)
+    monkeypatch.delattr(lifecycle.os, "getpgid", raising=False)
+    monkeypatch.setattr(lifecycle, "_read_pid", lambda path: 12345)
+    monkeypatch.setattr(lifecycle, "_is_alive", lambda pid: True)
+    seen = []
+    monkeypatch.setattr(lifecycle.os, "kill", lambda pid, sig: seen.append(sig))
+    tasks = []
+    monkeypatch.setattr(
+        lifecycle.subprocess, "run", lambda argv, **kw: tasks.append(argv),
+    )
+    pidfile = tmp_path / "tokid.pid"
+    pidfile.write_text("12345")
+
+    assert lifecycle.stop_pid(pidfile, "toki daemon", grace=0.01) is True
+    assert seen == [signal.SIGTERM]
+    assert tasks == [["taskkill", "/pid", "12345", "/f"]]
     assert not pidfile.exists()
 
 

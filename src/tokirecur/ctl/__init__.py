@@ -1357,6 +1357,21 @@ def _signal_proc(pid: int, sig: int) -> None:
         pass
 
 
+def _hard_kill(pid: int) -> None:
+    """Best-effort hard kill: ``taskkill /F`` on Windows (where Python's
+    ``signal`` module has no SIGKILL), ``os.kill(SIGKILL)`` on POSIX."""
+    if os.name == "nt":
+        try:
+            subprocess.run(
+                ["taskkill", "/pid", str(pid), "/f"],
+                capture_output=True, text=True, timeout=10,
+            )
+        except (OSError, subprocess.SubprocessError):
+            pass
+        return
+    _signal_proc(pid, signal.SIGKILL)
+
+
 def _stop_pidfile(path: Path, grace: float = 8.0) -> bool:
     pid = _read_pid(path)
     if pid is None or not _is_alive(pid):
@@ -1369,7 +1384,7 @@ def _stop_pidfile(path: Path, grace: float = 8.0) -> bool:
             path.unlink(missing_ok=True)
             return True
         time.sleep(0.2)
-    _signal_proc(pid, signal.SIGKILL)
+    _hard_kill(pid)
     path.unlink(missing_ok=True)
     return True
 
