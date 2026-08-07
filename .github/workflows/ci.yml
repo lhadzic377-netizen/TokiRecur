@@ -145,6 +145,38 @@ jobs:
           Test-Path $bin
           & $bin --version
 
+  installer-cli:
+    name: Installer CLI (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      # The clone-and-run path from the README: TOKI_EXTRAS= skips the
+      # embeddings extra (torch) so CI stays fast while still exercising
+      # pipx auto-install, the local-checkout install, and PATH detection.
+      - name: Run the simple installer (no embeddings)
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            TOKI_EXTRAS= cmd //c install.bat
+          else
+            TOKI_EXTRAS= ./install.sh
+          fi
+      - name: Verify the toki CLI
+        shell: bash
+        run: |
+          set -e
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            TOKI="$USERPROFILE/.local/bin/toki.exe"
+          else
+            TOKI="$HOME/.local/bin/toki"
+          fi
+          test -x "$TOKI"
+          "$TOKI" --version
+
   install-llama:
     name: install-llama (${{ matrix.os }} / ${{ matrix.backend }})
     runs-on: ${{ matrix.os }}

@@ -36,9 +36,11 @@ install.bat
 ```
 
 Both install the `toki` CLI with pipx (auto-installed if missing, with a venv
-fallback on Linux/macOS). The embeddings extra is included by default
+fallback on Linux/macOS — `TOKI_VENV_DIR=<dir>` forces the venv path on both
+platforms). The embeddings extra is included by default
 (sentence-transformers + torch, used by the similarity index); to skip it:
-`TOKI_EXTRAS= ./install.sh`.
+`TOKI_EXTRAS= ./install.sh` (Linux/macOS) or `set TOKI_EXTRAS= && install.bat`
+(Windows).
 
 ```bash
 # 1. Install the CLI (pipx isolates it in its own venv and puts toki on PATH)
