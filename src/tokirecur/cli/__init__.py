@@ -1260,6 +1260,11 @@ def main() -> int:
     if len(sys.argv) > 1 and sys.argv[1] in ("--version", "-V"):
         click.echo(f"toki, version {_version()}")
         return 0
+    # `--help` must show the full command reference, not the legacy
+    # benchmark parser's help.
+    if len(sys.argv) > 1 and sys.argv[1] in ("--help", "-h"):
+        click.echo(cli.get_help(click.Context(cli)))
+        return 0
     # Known subcommands. Anything else (no args, or a flag) prints help
     # and shows stack status instead of running a multi-minute benchmark.
     if len(sys.argv) == 1:
