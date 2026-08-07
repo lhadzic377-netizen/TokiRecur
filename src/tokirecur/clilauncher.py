@@ -2,9 +2,9 @@
 
 The Textual launcher renders slowly and glitches on the classic
 Windows console, so on Windows bare ``toki`` opens this plain CLI
-menu instead: a numbered app list, a model line, and foreground
-chat / detached-console launches. Linux and macOS keep the Textual
-launcher unchanged.
+menu instead. It keeps the Textual launcher's capabilities: pick an
+app, switch the active model, and see live stack + GPU status.
+Linux and macOS keep the Textual launcher unchanged.
 
 The app catalog mirrors ``tui.launcher.LAUNCH_APPS`` (kept as plain
 data here so this module needs no Textual import).
@@ -17,8 +17,7 @@ import shutil
 import subprocess
 import webbrowser
 
-APPS: tuple[tuple[str, str, str], ...] = (
-    ("toki", "Chat", "chat with models in the CLI chat"),
+AGENTS: tuple[tuple[str, str, str], ...] = (
     ("opencode", "Launch OpenCode", "Anomaly's open-source coding agent"),
     ("hermes", "Launch Hermes Agent", "self-improving AI agent"),
     ("openclaw", "Launch OpenClaw", "personal AI with 100+ skills"),
@@ -36,20 +35,66 @@ WEB_URLS: tuple[str, ...] = (
 _NEW_CONSOLE = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
 
 
-def _model_line() -> str:
+def _ctl():
+    from . import ctl
+
+    return ctl
+
+
+_BACKEND_CACHE: dict[str, str | None] = {}
+
+
+def _gpu_label(spec, llama_up: bool) -> str:
+    """GPU status for a model: log evidence, else build evidence."""
+    ctl = _ctl()
+    gpu = ctl.gpu_state(spec)
+    if gpu["backend"]:
+        bits = [gpu["backend"]]
+        if gpu["layers"]:
+            bits.append(gpu["layers"] + " layers")
+        return " · ".join(bits)
+    if not llama_up:
+        return "stopped"
+    binary = ctl._resolve_binary(spec)
+    if binary not in _BACKEND_CACHE:
+        from . import diagnose
+
+        _BACKEND_CACHE[binary] = diagnose.binary_backend(binary)
+    kind = _BACKEND_CACHE[binary]
+    if kind and kind != "CPU":
+        return f"log terse (build: {kind})"
+    return "CPU only"
+
+
+def _active_spec():
+    """The active registry spec, or None when none is set."""
+    ctl = _ctl()
     try:
-        from . import ctl
-
         active = ctl.read_active()
+        if active:
+            return ctl.get_model(active)
     except Exception:
-        active = None
-    return f"model: {active}" if active else "model: none set (chat will ask)"
+        return None
+    return None
 
 
-def _pick(lo: int, hi: int) -> str:
+def _header() -> str:
+    """One-line header: model, stack state, GPU."""
+    ctl = _ctl()
+    spec = _active_spec()
+    if spec is None:
+        return "model: none set — use `2) Switch model`"
+    st = ctl.model_status(spec)
+    llama = "up" if st["llama"]["reachable"] else "down"
+    daemon = "up" if st["daemon"]["reachable"] else "down"
+    return (f"model: {spec.name}  llama:{llama}  daemon:{daemon}  "
+            f"gpu: {_gpu_label(spec, st['llama']['reachable'])}")
+
+
+def _pick(lo: int, hi: int, prompt: str = "pick") -> str:
     while True:
         try:
-            raw = input(f"pick ({lo}-{hi}, 0 to quit)> ").strip().lower()
+            raw = input(f"{prompt} ({lo}-{hi}, 0 to quit)> ").strip().lower()
         except EOFError:
             print()
             return "0"
@@ -58,61 +103,123 @@ def _pick(lo: int, hi: int) -> str:
         return raw
 
 
+def _status_row(spec) -> str:
+    ctl = _ctl()
+    st = ctl.model_status(spec)
+    llama = "up" if st["llama"]["reachable"] else "down"
+    daemon = "up" if st["daemon"]["reachable"] else "down"
+    gpu = _gpu_label(spec, st["llama"]["reachable"])
+    return f"llama={llama} daemon={daemon} gpu={gpu}"
+
+
+def switch_model() -> None:
+    """List models, pick one (or type a name) to make active."""
+    ctl = _ctl()
+    try:
+        specs = ctl.load_registry()
+    except Exception as e:
+        print(f"error reading registry: {e}")
+        return
+    if not specs:
+        print("no models installed — run `toki model pull <owner>/<repo>-GGUF` "
+              "first.")
+        return
+    active = ctl.read_active()
+    print()
+    print("models:")
+    for i, spec in enumerate(specs, 1):
+        mark = " *active" if spec.name == active else ""
+        print(f"  {i}) {spec.name:<16} {spec.label}  "
+              f"{_status_row(spec)}{mark}")
+    print()
+    print("enter a number or a model name (blank keeps the active model)")
+    try:
+        raw = input("model> ").strip()
+    except EOFError:
+        print()
+        return
+    if not raw:
+        return
+    chosen = None
+    try:
+        idx = int(raw) - 1
+        if 0 <= idx < len(specs):
+            chosen = specs[idx].name
+    except ValueError:
+        if any(s.name == raw for s in specs):
+            chosen = raw
+    if chosen is None:
+        print(f"  unknown model: {raw}")
+        return
+    if chosen == active:
+        print(f"  {chosen} is already active.")
+        return
+    print(f"  starting {chosen} ...")
+    try:
+        spec = ctl.use_model(chosen)
+    except (KeyError, FileNotFoundError, RuntimeError, OSError) as e:
+        print(f"  error: {e}")
+        return
+    print(f"  {spec.name} active  ({_status_row(spec)}).")
+
+
 def run_cli_launcher() -> int:
     """Plain CLI stand-in for the Textual launcher. Returns exit code."""
     if os.name == "nt":
         os.system("")
+    from . import diagnose
     from .clichat import run_cli_chat
 
+    agents_available = {app: _find_binary(app) for app, _, _ in AGENTS}
     while True:
-        print("toki launcher (CLI — the Textual launcher is replaced here "
-              "on Windows)")
-        print(_model_line())
+        print("toki launcher")
+        print(_header())
         print()
-        for i, (_, title, desc) in enumerate(APPS, 1):
-            print(f"  {i}) {title:<22} {desc}")
-        print(f"  {len(APPS) + 1}) Web Dashboards       browser UIs: toki · "
+        print("  1) Chat                  chat with the active model")
+        print("  2) Switch model          list models, make one active")
+        for i, (app, title, desc) in enumerate(AGENTS, 3):
+            mark = "" if agents_available.get(app) else "  [not installed]"
+            print(f"  {i}) {title:<22} {desc}{mark}")
+        print(f"  {len(AGENTS) + 3}) Web Dashboards       browser UIs: toki · "
               "openclaw · hermes")
+        print(f"  {len(AGENTS) + 4}) Doctor                GPU / build / stack "
+              "diagnostics")
         print("  0) Quit")
         print()
-        pick = _pick(1, len(APPS) + 1)
+        hi = len(AGENTS) + 4
+        pick = _pick(1, hi)
         if pick in ("0", "q", "quit", "exit"):
             print("bye.")
             return 0
-        if pick == str(len(APPS) + 1):
-            for url in WEB_URLS:
-                webbrowser.open(url)
-            print(f"opened {len(WEB_URLS)} dashboards in your browser.")
-            continue
-        try:
-            idx = int(pick) - 1
-        except ValueError:
-            print(f"  invalid pick — enter a number 1-{len(APPS) + 1}.")
-            continue
-        if not 0 <= idx < len(APPS):
-            print(f"  invalid pick — enter a number 1-{len(APPS) + 1}.")
-            continue
-        app, title, _ = APPS[idx]
-        if app == "toki":
+        if pick == "1":
             try:
                 run_cli_chat()
             except SystemExit:
                 continue
             continue
-        _launch_agent(app)
-
-
-def _active_spec():
-    """The active registry spec, or None when none is set."""
-    try:
-        from . import ctl
-
-        active = ctl.read_active()
-        if active:
-            return ctl.get_model(active)
-    except Exception:
-        return None
-    return None
+        if pick == "2":
+            switch_model()
+            agents_available = {app: _find_binary(app) for app, _, _ in AGENTS}
+            continue
+        if pick == str(len(AGENTS) + 3):
+            for url in WEB_URLS:
+                webbrowser.open(url)
+            print(f"opened {len(WEB_URLS)} dashboards in your browser.")
+            continue
+        if pick == str(len(AGENTS) + 4):
+            print()
+            print(diagnose.run())
+            input("press Enter to return to the launcher> ")
+            continue
+        try:
+            idx = int(pick) - 3
+        except ValueError:
+            print(f"  invalid pick — enter a number 1-{hi}.")
+            continue
+        if not 0 <= idx < len(AGENTS):
+            print(f"  invalid pick — enter a number 1-{hi}.")
+            continue
+        _launch_agent(AGENTS[idx][0])
 
 
 def _agent_argv(app: str, spec) -> list[str]:

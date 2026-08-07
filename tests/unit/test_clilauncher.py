@@ -22,18 +22,11 @@ def test_menu_shows_apps(quit_after, capsys):
     out = capsys.readouterr().out
     assert "toki launcher" in out
     assert "1) Chat" in out
+    assert "2) Switch model" in out
+    assert "Launch OpenCode" in out
     assert "Web Dashboards" in out
+    assert "Doctor" in out
     assert "0) Quit" in out
-
-
-def test_model_line_none(monkeypatch):
-    monkeypatch.setattr("tokirecur.ctl.read_active", lambda: None)
-    assert clilauncher._model_line() == "model: none set (chat will ask)"
-
-
-def test_model_line_active(monkeypatch):
-    monkeypatch.setattr("tokirecur.ctl.read_active", lambda: "my-model")
-    assert clilauncher._model_line() == "model: my-model"
 
 
 def test_quit_word(quit_after):
@@ -72,15 +65,22 @@ def test_invalid_pick_loops(monkeypatch, quit_after, capsys):
 def test_web_opens_browsers(monkeypatch, quit_after, capsys):
     opened = []
     monkeypatch.setattr(clilauncher.webbrowser, "open", lambda u: opened.append(u))
-    assert quit_after("6") == 0
+    assert quit_after("7") == 0
     assert opened == list(clilauncher.WEB_URLS)
     assert "dashboards" in capsys.readouterr().out
 
 
 def test_missing_agent_warns(monkeypatch, quit_after, capsys):
     monkeypatch.setattr("shutil.which", lambda _: None)
-    assert quit_after("2") == 0
+    assert quit_after("3") == 0
     assert "not found in PATH: opencode" in capsys.readouterr().out
+
+
+def test_menu_marks_missing_agents(monkeypatch, quit_after, capsys):
+    monkeypatch.setattr("shutil.which", lambda _: None)
+    quit_after("0")
+    out = capsys.readouterr().out
+    assert "[not installed]" in out
 
 
 def test_agent_argv_with_spec():
@@ -158,6 +158,66 @@ def test_agent_launch_exe(monkeypatch, capsys):
     cl._launch_agent("codex")
     assert captured["argv"] == [r"C:\bin\codex.exe"]
     assert "pid 7" in capsys.readouterr().out
+
+
+def test_switch_model_by_number(monkeypatch, tmp_path, capsys):
+    from tokirecur import ctl
+    reg = tmp_path / "models.yaml"
+    monkeypatch.setattr(ctl, "DEFAULT_REGISTRY", reg)
+    monkeypatch.setattr(ctl, "STATE_ROOT", tmp_path / "state")
+    monkeypatch.setattr(ctl, "ACTIVE_MARKER", tmp_path / "active")
+
+    import yaml
+    reg.write_text(yaml.safe_dump({"models": [
+        {"name": "a", "gguf": "/tmp/a.gguf", "llama_port": 1, "daemon_port": 2,
+         "ctx_size": 100, "max_tokens": 90, "model_id": "A-GGUF"},
+        {"name": "b", "gguf": "/tmp/b.gguf", "llama_port": 3, "daemon_port": 4,
+         "ctx_size": 100, "max_tokens": 90, "model_id": "B-GGUF"},
+    ]}))
+    used = []
+    monkeypatch.setattr(ctl, "use_model", lambda name, **kw: used.append(name) or ctl.get_model(name))
+    monkeypatch.setattr("builtins.input", lambda _: "2")
+    clilauncher.switch_model()
+    assert used == ["b"]
+    assert "b" in capsys.readouterr().out
+
+
+def test_switch_model_by_name(monkeypatch, tmp_path):
+    from tokirecur import ctl
+    reg = tmp_path / "models.yaml"
+    monkeypatch.setattr(ctl, "DEFAULT_REGISTRY", reg)
+    monkeypatch.setattr(ctl, "STATE_ROOT", tmp_path / "state")
+    monkeypatch.setattr(ctl, "ACTIVE_MARKER", tmp_path / "active")
+
+    import yaml
+    reg.write_text(yaml.safe_dump({"models": [
+        {"name": "alpha", "gguf": "/tmp/a.gguf", "llama_port": 1,
+         "daemon_port": 2, "ctx_size": 100, "max_tokens": 90, "model_id": "A"},
+    ]}))
+    used = []
+    monkeypatch.setattr(ctl, "use_model", lambda name, **kw: used.append(name) or ctl.get_model(name))
+    monkeypatch.setattr("builtins.input", lambda _: "alpha")
+    clilauncher.switch_model()
+    assert used == ["alpha"]
+
+
+def test_switch_model_blank_keeps_active(monkeypatch, tmp_path):
+    from tokirecur import ctl
+    reg = tmp_path / "models.yaml"
+    monkeypatch.setattr(ctl, "DEFAULT_REGISTRY", reg)
+    monkeypatch.setattr(ctl, "STATE_ROOT", tmp_path / "state")
+    monkeypatch.setattr(ctl, "ACTIVE_MARKER", tmp_path / "active")
+
+    import yaml
+    reg.write_text(yaml.safe_dump({"models": [
+        {"name": "alpha", "gguf": "/tmp/a.gguf", "llama_port": 1,
+         "daemon_port": 2, "ctx_size": 100, "max_tokens": 90, "model_id": "A"},
+    ]}))
+    used = []
+    monkeypatch.setattr(ctl, "use_model", lambda name, **kw: used.append(name) or ctl.get_model(name))
+    monkeypatch.setattr("builtins.input", lambda _: "")
+    clilauncher.switch_model()
+    assert used == []
 
 
 def test_windows_routing_in_selector(monkeypatch):

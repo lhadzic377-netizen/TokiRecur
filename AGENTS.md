@@ -22,10 +22,26 @@
 
 - On Windows, the Textual TUIs are replaced by plain CLIs because the classic
   Windows console renders TUIs slowly and glitches:
-  - bare `toki` → **CLI launcher menu** (`src/tokirecur/clilauncher.py`,
-    ollama-style numbered app pick; Chat runs the CLI chat REPL, agents launch
-    in new consoles, web opens dashboards). Wired in `src/tokirecur/selector.py`.
+  - bare `toki` → **CLI launcher menu** (`src/tokirecur/clilauncher.py`):
+    Chat, Switch model (lists models + GPU, calls `ctl.use_model`), agents
+    (marked `[not installed]` when missing, launched via cmd.exe for .cmd
+    shims), Web, Doctor. Wired in `src/tokirecur/selector.py`.
   - `toki tui` → **CLI chat** (`src/tokirecur/clichat.py`, ollama-style REPL,
     `/bye`, `"""` multiline, `TOKI_MAX_TOKENS`). Wired in
     `src/tokirecur/cli/__init__.py` (`tui` command).
 - Linux/macOS keep the full Textual TUI + launcher.
+
+## GPU / diagnosis
+
+- `toki doctor` (module `src/tokirecur/diagnose.py`): GPU hardware detection
+  (nvidia-smi / ROCm / Vulkan / Metal), per-binary build backend
+  (`binary_backend`: CUDA/ROCm/Vulkan DLLs on Windows, `ldd` on POSIX), and
+  per-model offload from llama.log (`ctl.gpu_state` — parses both classic
+  "offloaded N/M layers to GPU" and modern "- CUDA0 : device (sm_xx, MiB)"
+  device_info lines; skips system_info lines).
+- `_llama_args` (ctl) passes `-ngl` from `TOKI_NGL` or auto-detect
+  (`_default_ngl`: GPU present → 99, else 0); registry `extra_args` pinning
+  `-ngl`/`--n-gpu-layers` wins and is never duplicated.
+- Log quirk: some llama.cpp builds (e.g. custom Clang b10008) suppress
+  device_info at `-lv 3`; the launcher then falls back to the build-backend
+  label ("log terse (build: ROCm)").

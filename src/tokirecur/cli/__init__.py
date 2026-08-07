@@ -308,36 +308,26 @@ def diff(raw_url: str, daemon_url: str, system: str | None, max_tokens: int,
 
 @cli.command()
 def doctor() -> None:
-    """Check llama-server health, ROCm runtime, GPU availability."""
-    import shutil
-    import subprocess
+    """Check GPU, llama-server build, and stack health."""
+    from .. import diagnose
+
+    click.echo(diagnose.run())
+    # Stack health (existing checks, unchanged in spirit).
+    import httpx
+
     rows = []
-    rows.append(("llama-server binary", shutil.which("llama-server") or "missing"))
-    for cmd, label in [
-        (["rocminfo"], "rocminfo"),
-        (["hipconfig", "--version"], "hipconfig"),
-    ]:
-        try:
-            out = subprocess.check_output(cmd, text=True, timeout=5).strip().splitlines()
-            rows.append((label, out[0] if out else "ok"))
-        except Exception as e:
-            rows.append((label, f"missing ({e})"))
     try:
-        import httpx
         r = httpx.get("http://127.0.0.1:8080/health", timeout=2.0)
         rows.append(("llama-server :8080", "ok" if r.status_code == 200 else "down"))
     except Exception:
         rows.append(("llama-server :8080", "not reachable"))
     try:
-        import httpx
         r = httpx.get("http://127.0.0.1:8787/healthz", timeout=2.0)
         rows.append(("toki daemon :8787", "ok" if r.status_code == 200 else "down"))
     except Exception:
         rows.append(("toki daemon :8787", "not running"))
-
-    width = max(len(k) for k, _ in rows) + 2
     for k, v in rows:
-        click.echo(f"{k.ljust(width)}{v}")
+        click.echo(f"{k.ljust(24)}{v}")
 
 
 @cli.command()
@@ -665,7 +655,7 @@ def list() -> None:
 def status() -> None:  # noqa: F811
 
     """Show per-model stack status."""
-    from ..ctl import load_registry, model_status, read_active
+    from ..ctl import gpu_state, load_registry, model_status, read_active
     active = read_active()
     click.echo(f"active model: {active or 'none'}")
     for spec in load_registry():
@@ -676,9 +666,19 @@ def status() -> None:  # noqa: F811
         llama_state = "up" if llama["reachable"] else "down"
         daemon_state = "up" if daemon["reachable"] else "down"
         mark = "*" if spec.name == active else " "
+        gpu = gpu_state(spec)
+        gpu_bits = []
+        if gpu["backend"]:
+            gpu_bits.append(gpu["backend"])
+            if gpu["layers"]:
+                gpu_bits.append(gpu["layers"] + " layers")
+        elif llama_state == "up":
+            gpu_bits.append("CPU")
+        gpu_col = f"  gpu={'/'.join(gpu_bits)}" if gpu_bits else ""
         click.echo(
             f"  {mark} {spec.name.ljust(8)} llama={llama_state} ({ctx})  "
             f"daemon={daemon_state}  pids={llama['pid']}/{daemon['pid']}"
+            f"{gpu_col}"
         )
 
 

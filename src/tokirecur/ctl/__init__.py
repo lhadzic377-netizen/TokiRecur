@@ -1049,6 +1049,47 @@ def model_status(spec: ModelSpec) -> dict[str, Any]:
     }
 
 
+def gpu_state(spec: ModelSpec) -> dict[str, str | None]:
+    """GPU evidence from the model's llama.log.
+
+    Returns ``{"backend", "device", "layers"}``; every value is None
+    when the log is missing or shows no GPU. Matches both the classic
+    ``offloaded 34/37 layers to GPU`` line and the modern backend
+    device lines (``- CUDA0 : NVIDIA GeForce GTX 1650 ...``), so the
+    check survives llama.cpp log format churn.
+    """
+    empty: dict[str, str | None] = {"backend": None, "device": None,
+                                    "layers": None}
+    log = spec.state_dir() / "llama.log"
+    if not log.exists():
+        return empty
+    try:
+        text = log.read_text(errors="replace")
+    except OSError:
+        return empty
+    result = dict(empty)
+    for line in text.splitlines():
+        m = re.search(r"offloaded\s+(\d+)\s*/\s*(\d+)\s+layers to GPU", line)
+        if m:
+            result["layers"] = f"{m.group(1)}/{m.group(2)}"
+        # "- CUDA0 : NVIDIA GeForce GTX 1650 (sm_75, 4096 MiB)" etc.
+        # Older builds wrote "CUDA0 : ..." without the leading dash.
+        # system_info lines also mention backends but only as flags
+        # ("CUDA0 : NO_VMM = 1") — never a device; skip them.
+        if "system_info" in line:
+            continue
+        m = re.search(
+            r"(?:-\s+)?(CUDA\d+|ROCm\d+|Vulkan\d+|Metal)\s*:\s*"
+            r"([^()\n]+?)\s*(?:\([^)]*\))?\s*$",
+            line,
+        )
+        if m:
+            name = m.group(1)
+            result["backend"] = name.rstrip("0123456789")
+            result["device"] = m.group(2).strip()
+    return result
+
+
 # ── Start / stop ───────────────────────────────────────────────────────
 
 
