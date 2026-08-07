@@ -126,54 +126,104 @@
   <section id="benchmarks">
     <p class="overline reveal">Benchmarks</p>
     <h2 class="reveal">Cache-hit efficiency &amp; throughput.</h2>
-    <p class="section-sub reveal">Measured on an AMD Ryzen AI MAX+ 395 with Qwen3.5-9B-Q4_K_M via llama-server.</p>
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr><th>Workload</th><th>TTFT improvement</th><th>Prefill speedup</th><th>Cache hit rate</th><th>Composite</th><th>Grade</th></tr>
-        </thead>
-        <tbody>
-          <tr class="reveal">
-            <td><code>realistic_mixed</code></td>
-            <td>+66.8%</td><td>+560.9%</td><td>88.1%</td><td>84.4</td><td><span class="grade">A</span></td>
-          </tr>
-          <tr class="reveal">
-            <td><code>summarization</code></td>
-            <td>+90.7%</td><td>+1090.7%</td><td>95.0%</td><td>92.0</td><td><span class="grade">A+</span></td>
-          </tr>
-          <tr class="reveal">
-            <td><code>code_review</code></td>
-            <td>+77.8%</td><td>+379.5%</td><td>96.7%</td><td>90.0</td><td><span class="grade">A+</span></td>
-          </tr>
-          <tr class="reveal">
-            <td><code>agent_long_output</code></td>
-            <td>+22.9%</td><td>+41.2%</td><td>98.0%</td><td>64.4</td><td><span class="grade mid">C</span></td>
-          </tr>
-          <tr class="reveal">
-            <td><code>agent_100</code></td>
-            <td>+45.0%</td><td>+264.0%</td><td>99.0%</td><td>47.3</td><td><span class="grade bad">F</span></td>
-          </tr>
-          <tr class="reveal">
-            <td><code>rag_chunks</code></td>
-            <td>+47.0%</td><td>+226.0%</td><td>87.5%</td><td>47.7</td><td><span class="grade bad">F</span></td>
-          </tr>
-          <tr class="reveal">
-            <td><code>agent_long_context</code></td>
-            <td>+47.7%</td><td>+264.6%</td><td>90.0%</td><td>47.1</td><td><span class="grade bad">F</span></td>
-          </tr>
-          <tr class="reveal">
-            <td><code>no_overlap</code></td>
-            <td>+16.7%</td><td>+18.0%</td><td>0.0%</td><td>12.0</td><td><span class="grade bad">F</span></td>
-          </tr>
-          <tr class="reveal">
-            <td><code>stress_adversarial</code></td>
-            <td>+20.4%</td><td>+33.1%</td><td>52.2%</td><td>52.3</td><td><span class="grade mid">D</span></td>
-          </tr>
-        </tbody>
-      </table>
+    <p class="section-sub reveal">Measured on an AMD Ryzen AI MAX+ 395 via llama-server.</p>
+    <div class="bench-grid">
+      <div class="table-wrap">
+        <table>
+          <caption>Qwen3.5-9B-Q4_K_M</caption>
+          <thead>
+            <tr><th>Workload</th><th>TTFT&nbsp;Δ</th><th>Prefill&nbsp;Δ</th><th>Hit</th><th>Score</th><th>Grade</th></tr>
+          </thead>
+          <tbody>
+            <tr class="reveal">
+              <td><code>realistic_mixed</code></td>
+              <td>+66.8%</td><td>+560.9%</td><td>88.1%</td><td>84.4</td><td><span class="grade">A</span></td>
+            </tr>
+            <tr class="reveal">
+              <td><code>summarization</code></td>
+              <td>+90.7%</td><td>+1090.7%</td><td>95.0%</td><td>92.0</td><td><span class="grade">A+</span></td>
+            </tr>
+            <tr class="reveal">
+              <td><code>code_review</code></td>
+              <td>+77.8%</td><td>+379.5%</td><td>96.7%</td><td>90.0</td><td><span class="grade">A+</span></td>
+            </tr>
+            <tr class="reveal">
+              <td><code>agent_long_output</code></td>
+              <td>+22.9%</td><td>+41.2%</td><td>98.0%</td><td>64.4</td><td><span class="grade mid">C</span></td>
+            </tr>
+            <tr class="reveal">
+              <td><code>agent_100</code></td>
+              <td>+45.0%</td><td>+264.0%</td><td>99.0%</td><td>47.3</td><td><span class="grade bad">F</span></td>
+            </tr>
+            <tr class="reveal">
+              <td><code>rag_chunks</code></td>
+              <td>+47.0%</td><td>+226.0%</td><td>87.5%</td><td>47.7</td><td><span class="grade bad">F</span></td>
+            </tr>
+            <tr class="reveal">
+              <td><code>agent_long_context</code></td>
+              <td>+47.7%</td><td>+264.6%</td><td>90.0%</td><td>47.1</td><td><span class="grade bad">F</span></td>
+            </tr>
+            <tr class="reveal">
+              <td><code>no_overlap</code></td>
+              <td>+16.7%</td><td>+18.0%</td><td>0.0%</td><td>12.0</td><td><span class="grade bad">F</span></td>
+            </tr>
+            <tr class="reveal">
+              <td><code>stress_adversarial</code></td>
+              <td>+20.4%</td><td>+33.1%</td><td>52.2%</td><td>52.3</td><td><span class="grade mid">D</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <caption>Qwen3.6-35B-A3B (UD-Q4_K_M)</caption>
+          <thead>
+            <tr><th>Workload</th><th>TTFT&nbsp;Δ</th><th>Prefill&nbsp;Δ</th><th>Hit</th><th>Score</th><th>Grade</th></tr>
+          </thead>
+          <tbody>
+            <tr class="reveal">
+              <td><code>realistic_mixed</code></td>
+              <td>+74.2%</td><td>+685.3%</td><td>87.6%</td><td>86.8</td><td><span class="grade">A</span></td>
+            </tr>
+            <tr class="reveal">
+              <td><code>summarization</code></td>
+              <td>+93.5%</td><td>+1187.2%</td><td>95.8%</td><td>93.7</td><td><span class="grade">A+</span></td>
+            </tr>
+            <tr class="reveal">
+              <td><code>code_review</code></td>
+              <td>+84.1%</td><td>+494.6%</td><td>96.9%</td><td>91.5</td><td><span class="grade">A+</span></td>
+            </tr>
+            <tr class="reveal">
+              <td><code>agent_long_output</code></td>
+              <td>+29.8%</td><td>+58.4%</td><td>97.2%</td><td>69.3</td><td><span class="grade mid">C</span></td>
+            </tr>
+            <tr class="reveal">
+              <td><code>agent_100</code></td>
+              <td>+54.3%</td><td>+343.7%</td><td>98.7%</td><td>59.8</td><td><span class="grade mid">D</span></td>
+            </tr>
+            <tr class="reveal">
+              <td><code>rag_chunks</code></td>
+              <td>+54.7%</td><td>+299.1%</td><td>91.8%</td><td>59.9</td><td><span class="grade mid">D</span></td>
+            </tr>
+            <tr class="reveal">
+              <td><code>agent_long_context</code></td>
+              <td>+54.9%</td><td>+347.2%</td><td>93.6%</td><td>59.7</td><td><span class="grade mid">D</span></td>
+            </tr>
+            <tr class="reveal">
+              <td><code>no_overlap</code></td>
+              <td>+14.8%</td><td>+17.2%</td><td>0.0%</td><td>11.9</td><td><span class="grade bad">F</span></td>
+            </tr>
+            <tr class="reveal">
+              <td><code>stress_adversarial</code></td>
+              <td>+29.2%</td><td>+48.7%</td><td>54.8%</td><td>59.4</td><td><span class="grade mid">D</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </div>
-    <p class="note reveal">These are the most realistic scores — cache performance varies with the
-      environment, so the benchmark may score better or worse on other hardware, models, or workloads.</p>
+    <p class="note reveal">The 35B-A3B MoE benefits most from caching — its active-token cost is
+      low, so prefill reuse shows up as even larger relative gains. Cache performance varies
+      with the environment, so the benchmark may score better or worse on other hardware, models, or workloads.</p>
   </section>
 
   <section id="quickstart">

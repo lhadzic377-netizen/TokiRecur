@@ -83,8 +83,9 @@ toki bench --model ~/Downloads/Qwen3.5-9B-Q4_K_M.gguf \
     <p>Letter grades: A+ ≥ 90, A ≥ 80, B ≥ 70, C ≥ 60, D ≥ 50, F &lt; 50.</p>
 
     <h2>Measured results (this hardware)</h2>
-    <p>Run on AMD Ryzen AI MAX+ 395, Qwen3.5-9B-Q4_K_M, max-tokens=32. Cache performance varies with the environment — the benchmark may score better or worse on other hardware, models, or workloads.</p>
+    <p>Run on AMD Ryzen AI MAX+ 395, max-tokens=32. Cache performance varies with the environment — the benchmark may score better or worse on other hardware, models, or workloads.</p>
 
+    <h3>Qwen3.5-9B-Q4_K_M</h3>
     <table>
       <thead><tr><th>Workload</th><th>TTFT improvement</th><th>Prefill speedup</th><th>Cache hit rate</th><th>Composite</th><th>Grade</th></tr></thead>
       <tbody>
@@ -101,6 +102,24 @@ toki bench --model ~/Downloads/Qwen3.5-9B-Q4_K_M.gguf \
     </table>
 
     <p>The headline number is <code>realistic_mixed</code>: 216 prompts across 5 real-world categories (RAG, tool-using, multi-turn, support, one-off) — TTFT cut by two thirds, prefill nearly 6x faster, 88% cache hit rate, composite 84.4 (A). The <code>summarization</code> and <code>code_review</code> workloads are even stronger (A+). Low scores on <code>no_overlap</code> and the adversarial workloads are expected — zero-overlap prompts are the worst case for prefix caching, and the stress workload is designed to surface edge cases (false-positive hits from cosine similarity, minimal savings on short prompts, underperforming sequential growth).</p>
+
+    <h3>Qwen3.6-35B-A3B (UD-Q4_K_M)</h3>
+    <table>
+      <thead><tr><th>Workload</th><th>TTFT improvement</th><th>Prefill speedup</th><th>Cache hit rate</th><th>Composite</th><th>Grade</th></tr></thead>
+      <tbody>
+        <tr><td><code>realistic_mixed</code></td><td>+74.2%</td><td>+685.3%</td><td>87.6%</td><td>86.8</td><td>A</td></tr>
+        <tr><td><code>summarization</code></td><td>+93.5%</td><td>+1187.2%</td><td>95.8%</td><td>93.7</td><td>A+</td></tr>
+        <tr><td><code>code_review</code></td><td>+84.1%</td><td>+494.6%</td><td>96.9%</td><td>91.5</td><td>A+</td></tr>
+        <tr><td><code>agent_long_output</code></td><td>+29.8%</td><td>+58.4%</td><td>97.2%</td><td>69.3</td><td>C</td></tr>
+        <tr><td><code>agent_100</code></td><td>+54.3%</td><td>+343.7%</td><td>98.7%</td><td>59.8</td><td>D</td></tr>
+        <tr><td><code>rag_chunks</code></td><td>+54.7%</td><td>+299.1%</td><td>91.8%</td><td>59.9</td><td>D</td></tr>
+        <tr><td><code>agent_long_context</code></td><td>+54.9%</td><td>+347.2%</td><td>93.6%</td><td>59.7</td><td>D</td></tr>
+        <tr><td><code>no_overlap</code></td><td>+14.8%</td><td>+17.2%</td><td>0.0%</td><td>11.9</td><td>F</td></tr>
+        <tr><td><code>stress_adversarial</code></td><td>+29.2%</td><td>+48.7%</td><td>54.8%</td><td>59.4</td><td>D</td></tr>
+      </tbody>
+    </table>
+
+    <p>The 35B-A3B MoE benefits most from caching — its per-token compute is dominated by the 3B active experts, so skipping prefill shows up as larger relative TTFT and throughput gains than on the dense 9B (e.g. realistic_mixed 84.4 → 86.8 composite, summarization prefill speedup 1090% → 1187%). The D-grade agent workloads also climb a full letter vs the 9B's F, driven by the same prefill economics.</p>
 
     <p class="callout">Next: <a href="/docs/deploy.html">Production deploy</a> — systemd, auth, and TLS.</p>
   </main>

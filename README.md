@@ -554,7 +554,9 @@ Letter grades: A+ ≥ 90, A ≥ 80, B ≥ 70, C ≥ 60, D ≥ 50, F < 50.
 
 ## Benchmark results (this hardware)
 
-Run on AMD Ryzen AI MAX+ 395, Qwen3.5-9B-Q4_K_M, max-tokens=32:
+Run on AMD Ryzen AI MAX+ 395, max-tokens=32:
+
+### Qwen3.5-9B-Q4_K_M
 
 | Workload | TTFT improvement | Prefill speedup | Cache hit rate | Composite | Grade |
 |---|---|---|---|---|---|
@@ -568,14 +570,31 @@ Run on AMD Ryzen AI MAX+ 395, Qwen3.5-9B-Q4_K_M, max-tokens=32:
 | `no_overlap` | +16.7% | +18.0% | 0.0% | 12.0 | F |
 | `stress_adversarial` | +20.4% | +33.1% | 52.2% | 52.3 | D |
 
+### Qwen3.6-35B-A3B (UD-Q4_K_M)
+
+| Workload | TTFT improvement | Prefill speedup | Cache hit rate | Composite | Grade |
+|---|---|---|---|---|---|
+| `realistic_mixed` | +74.2% | +685.3% | 87.6% | 86.8 | A |
+| `summarization` | +93.5% | +1187.2% | 95.8% | 93.7 | A+ |
+| `code_review` | +84.1% | +494.6% | 96.9% | 91.5 | A+ |
+| `agent_long_output` | +29.8% | +58.4% | 97.2% | 69.3 | C |
+| `agent_100` | +54.3% | +343.7% | 98.7% | 59.8 | D |
+| `rag_chunks` | +54.7% | +299.1% | 91.8% | 59.9 | D |
+| `agent_long_context` | +54.9% | +347.2% | 93.6% | 59.7 | D |
+| `no_overlap` | +14.8% | +17.2% | 0.0% | 11.9 | F |
+| `stress_adversarial` | +29.2% | +48.7% | 54.8% | 59.4 | D |
+
 The headline number is `realistic_mixed`: 216 prompts across 5 real-world
 categories (RAG, tool-using, multi-turn, support, one-off) — TTFT cut by two
-thirds, prefill nearly 6x faster, 88% cache hit rate, composite 84.4 (A).
-`summarization` and `code_review` score even higher (A+). Low scores on
-`no_overlap` and the adversarial workloads are expected: zero-overlap prompts
-are the worst case for prefix caching, and the stress workload is designed to
-surface edge cases (false-positive hits from cosine similarity, minimal
-savings on short prompts, underperforming sequential growth).
+thirds, prefill ~6x faster, 88% cache hit rate, composite 84.4 (A) on the
+9B and 86.8 (A) on the 35B-A3B MoE. `summarization` and `code_review` score
+even higher (A+). The 35B-A3B MoE benefits most from caching — its per-token
+compute is dominated by the 3B active experts, so skipping prefill shows up
+as larger relative TTFT and throughput gains than on the dense 9B. Low scores
+on `no_overlap` and the adversarial workloads are expected: zero-overlap
+prompts are the worst case for prefix caching, and the stress workload is
+designed to surface edge cases (false-positive hits from cosine similarity,
+minimal savings on short prompts, underperforming sequential growth).
 
 These are the most realistic scores — cache performance varies with the
 environment, so the benchmark may score better or worse on other
