@@ -58,6 +58,7 @@ def test_codex_config_writer(env):
     prov = cfg["model_providers"]["tokirecur-9b"]
     assert prov["base_url"] == "http://127.0.0.1:8787/v1"
     assert prov["wire_api"] == "responses"
+    assert prov["env_key"] == "TOKI_AUTH_TOKEN"
     assert prov["env"]["TOKI_AUTH_TOKEN"] == ctl.DEFAULT_AUTH
     ctl.write_codex_config(spec, [spec], path=cfg_path)
     assert Path(str(cfg_path) + ".bak-model").exists()

@@ -9,88 +9,124 @@
 <meta property="og:description" content="Drop-in prefix caching across CUDA, ROCm, Vulkan, Metal, and CPU. Reuse the KV cache between agents and services on llama.cpp.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://tokirecur.com/">
-<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon.png" type="image/png" sizes="any">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700;750&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
 <header class="topbar">
   <nav>
-    <a class="brand" href="#top"><svg class="logo" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="14" fill="none" stroke="#ffd60a" stroke-width="4"/><g class="l-slice" fill="#ffd60a"><rect x="11" y="12" width="42" height="9" rx="4.5"/><rect x="24" y="24" width="16" height="9" rx="4.5"/></g><rect class="l-slice" x="24" y="36" width="16" height="9" rx="4.5" fill="none" stroke="#ffd60a" stroke-width="4"/><rect class="l-slice" x="24" y="48" width="16" height="9" rx="4.5" fill="none" stroke="#ffd60a" stroke-width="4"/></svg> Toki Recur</a>
+    <a class="brand" href="#top">
+      <img class="logo" src="/img/logo.png" alt="Toki Recur" width="30" height="30">
+      toki<span class="wordmark-accent">recur</span>
+    </a>
     <div class="links">
       <a href="#how">How it works</a>
       <a href="#benchmarks">Benchmarks</a>
       <a href="#quickstart">Quick start</a>
       <a href="#architecture">Architecture</a>
-      <a href="https://github.com/lhadzic377-netizen/TokiRecur" target="_blank" rel="noopener">GitHub</a>
       <a href="/docs/">Docs</a>
+      <a href="https://github.com/lhadzic377-netizen/TokiRecur" target="_blank" rel="noopener" class="btn-nav">GitHub</a>
     </div>
   </nav>
 </header>
 
 <main id="top">
   <section class="hero">
-    <p class="kicker reveal">Local LLM inference · llama.cpp</p>
-    <h1 class="reveal">Reuse the KV cache.<br><span class="accent">Never regenerate the same context twice.</span></h1>
+    <img class="mascot reveal" src="/img/toki.png" alt="toki the bear mascot" width="88" height="88">
+    <p class="kicker reveal"><span class="accent">Local LLM inference</span> · drop-in prefix caching for llama.cpp</p>
+    <h1 class="reveal">Reuse the KV cache.<br>Never regenerate the <span class="accent">same context twice.</span></h1>
     <p class="lede reveal">
-      Toki Recur is drop-in prefix caching for local inference. Agents, shells, and services
-      running against the same llama-server share one living KV cache — so a long system
-      prompt, tool corpus, or project context is computed once and replayed from memory.
-      No patches. No vendor lock-in. Just an OpenAI-compatible daemon in front of your model.
+      Toki Recur sits in front of llama-server as an OpenAI-compatible daemon. Agents, shells,
+      and services that share a prefix hit the same KV cache — so a long system prompt,
+      tool corpus, or project context is computed once and replayed from memory.
+      No patches. No vendor lock-in.
     </p>
     <div class="cta reveal">
-      <a class="btn" href="#quickstart">Install in 3 commands</a>
+      <a class="btn primary" href="#quickstart">
+        Install in 3 commands
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg>
+      </a>
       <a class="btn ghost" href="#benchmarks">See measured results</a>
+    </div>
+
+    <div class="stats">
+      <div class="stat reveal"><div class="num">51.5%</div><div class="label">time-to-first-token reduction vs. a fresh cache</div></div>
+      <div class="stat reveal"><div class="num">90.0%</div><div class="label">cache hit rate on real agent workloads</div></div>
+      <div class="stat reveal"><div class="num">2.8×</div><div class="label">prefill throughput — 731 → 2,819 tok/s</div></div>
+      <div class="stat reveal"><div class="num">0</div><div class="label">model patches or vendor lock-in</div></div>
     </div>
   </section>
 
   <section class="cards" id="what">
     <div class="card reveal">
-      <h3>⚡ Drop-in cache</h3>
-      <p>Point any OpenAI-compatible client (opencode, OpenClaw, Hermes, your own) at the toki
-      daemon. Prompts that start with a cached prefix return instantly.</p>
+      <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 3 14h9l-1 8 11-12h-9l1-8z"/></svg></div>
+      <h3>Drop-in cache</h3>
+      <p>Point any OpenAI-compatible client at the toki daemon. Prompts that share a prefix return instantly.</p>
     </div>
     <div class="card reveal">
-      <h3>🔄 Live reuse</h3>
-      <p>Multiple agents and shells share one server's KV cache. Context written by one session
-      is replayed by the next — no duplicate compute, no duplicate memory.</p>
+      <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg></div>
+      <h3>Live reuse</h3>
+      <p>Multiple agents and shells share one server's KV cache. Context written by one session is replayed by the next.</p>
     </div>
     <div class="card reveal">
-      <h3>📦 Save &amp; restore</h3>
-      <p>Persist whole caches to disk and restore them later: cold-start a service with its
-      long system prompt already cached, or hand a session to another machine.</p>
+      <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg></div>
+      <h3>Save &amp; restore</h3>
+      <p>Snapshot caches to disk and restore them later: cold-start with a long system prompt already cached, or hand a session to another machine.</p>
     </div>
     <div class="card reveal">
-      <h3>🛡️ RAM-aware by default</h3>
-      <p>The daemon reads the GGUF header, fits the KV cache into your machine's memory, and
-      advertises the <em>real</em> context to clients — no more “not enough tokens” 400s on
-      small boxes.</p>
+      <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2 4 5.5v5c0 5.2 3.4 9.4 8 11.5 4.6-2.1 8-6.3 8-11.5v-5L12 2z"/><path d="m12 8 2.5 4L12 14l-2.5-2L12 8z"/></svg></div>
+      <h3>RAM-aware by default</h3>
+      <p>The daemon reads the GGUF header, fits the KV cache into the machine's memory, and advertises the real context to clients.</p>
     </div>
     <div class="card reveal">
-      <h3>🧪 Benchmark harness</h3>
-      <p>A self-contained bench runs real workloads (agent loops, RAG chunks, adversarial
-      prompts) and reports cache-hit rates and end-to-end latency vs. a fresh cache.</p>
+      <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.34 19a10 10 0 1 1 17.32 0"/><path d="m12 14 4-4"/></svg></div>
+      <h3>Benchmark harness</h3>
+      <p>Run real workloads — agent loops, RAG chunks, adversarial prompts — and report cache-hit rates vs. a fresh cache.</p>
     </div>
     <div class="card reveal">
-      <h3>🖥️ TUI + web chat</h3>
-      <p>Full-screen terminal chat and a production-ready single-page web UI ship with the
-      package — one command each.</p>
+      <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17l6-5-6-5"/><path d="M12 19h8"/></svg></div>
+      <h3>TUI + web chat</h3>
+      <p>Full-screen terminal chat and a production-ready single-page web UI ship with the package — one command each.</p>
     </div>
   </section>
 
   <section id="how">
-    <h2>How it works</h2>
+    <p class="overline reveal">How it works</p>
+    <h2 class="reveal">Three commands from cold start to a shared cache.</h2>
+    <p class="section-sub reveal">Boot the stack, wire your clients at the daemon, and let the prefix matcher do the rest.</p>
     <ol class="steps">
-      <li class="reveal"><strong>Boot</strong> — <code>toki model use</code> starts llama-server plus the toki
+      <li class="reveal" data-n="01"><strong>Boot</strong> — <code>toki model use</code> starts llama-server plus the toki
         daemon, wires your CLI tools at it, and writes the effective context it can actually hold.</li>
-      <li class="reveal"><strong>Stream</strong> — clients call the daemon's OpenAI-compatible API. Shared
+      <li class="reveal" data-n="02"><strong>Stream</strong> — clients call the daemon's OpenAI-compatible API. Shared
         prefixes hit the cached KV blocks instead of re-running the model.</li>
-      <li class="reveal"><strong>Persist</strong> — <code>toki cache save</code> / <code>toki cache restore</code>
+      <li class="reveal" data-n="03"><strong>Persist</strong> — <code>toki cache save</code> / <code>toki cache restore</code>
         snapshot caches to disk; <code>toki cache stats</code> shows hits, misses, and savings.</li>
     </ol>
   </section>
 
+  <section id="meet-toke">
+    <div class="meet-toke">
+      <img src="/img/toki.png" alt="toki the bear mascot" width="200" height="200">
+      <div>
+        <span class="toke-tag">Mascot</span>
+        <h2>Meet toki.</h2>
+        <p>toki is the open-source mascot of Toki Recur — the bear who recurs. He wears the recycle
+          symbol because the whole product is one idea: <em>don't recompute what you've already read.</em>
+          Long system prompts, RAG corpora, agent tool definitions — all get computed once, then
+          streamed from cache on every subsequent request.</p>
+        <p>He's here to remind you that cache reuse is the boring superpower underneath every fast
+          local model.</p>
+      </div>
+    </div>
+  </section>
+
   <section id="benchmarks">
-    <h2 class="reveal">Benchmarks <span class="sub">cache-hit efficiency &amp; throughput</span></h2>
+    <p class="overline reveal">Benchmarks</p>
+    <h2 class="reveal">Cache-hit efficiency &amp; throughput.</h2>
+    <p class="section-sub reveal">Measured on an AMD Ryzen AI MAX+ 395 with Qwen3.5-9B-Q4_K_M via llama-server.</p>
     <div class="table-wrap">
       <table>
         <thead>
@@ -115,37 +151,71 @@
   </section>
 
   <section id="quickstart">
-    <h2 class="reveal">Quick start</h2>
-    <p class="reveal">Nothing is preinstalled — you pull exactly what you want. Three commands to first chat:</p>
-    <pre class="code reveal" data-copy><code>pipx install tokirecur
-toki model install-llama                          # auto-detects ROCm/CUDA/Vulkan/Metal/CPU
-toki model pull Qwen/Qwen3-8B-GGUF --name qwen3-8b   # fetch a GGUF, register as "qwen3-8b"
-toki model use qwen3-8b                           # boot llama-server + daemon, wire your CLIs
-toki tui                                          # full-screen chat — or: toki web</code></pre>
+    <p class="overline reveal">Quick start</p>
+    <h2 class="reveal">Install in 3 commands.</h2>
+    <p class="section-sub reveal">Nothing is preinstalled — you pull exactly what you want. Three commands to first chat:</p>
+    <pre class="code reveal" data-copy><code><span class="k">pipx install tokirecur</span><span class="c">                    # one command, no deps</span>
+<span class="k">toki model install-llama</span><span class="c">                  # auto-detects ROCm / CUDA / Vulkan / Metal / CPU</span>
+<span class="k">toki model pull</span> Qwen/Qwen3-8B-GGUF --name qwen3-8b<span class="c">  # fetch a GGUF, register as "qwen3-8b"</span>
+<span class="k">toki model use</span> qwen3-8b<span class="c">                   # boots llama-server + daemon, wires your CLIs</span>
+<span class="k">toki tui</span><span class="c">                                      # full-screen chat — or: toki web</span></code></pre>
     <p class="note">Runs on any x86_64 or arm64 Linux, macOS, or Windows box — with whatever GPU
       backend your llama-server build has. Optional systemd/launchd daemon mode included.</p>
   </section>
 
   <section id="architecture">
-    <h2 class="reveal">Architecture</h2>
+    <p class="overline reveal">Architecture</p>
+    <h2 class="reveal">One cache, every client.</h2>
     <div class="arch">
-      <div class="node reveal">Your agents<br><small>opencode · OpenClaw · Hermes · any OpenAI client</small></div>
-      <div class="arrow">↓ ↑</div>
-      <div class="node accent reveal">toki daemon<br><small>OpenAI-compatible API · cache save/restore · metrics</small></div>
-      <div class="arrow">↓ ↑</div>
-      <div class="node reveal">llama-server<br><small>one living KV cache shared by every client</small></div>
+      <div class="arch-node reveal">Your agents<small>opencode · OpenClaw · Hermes · any OpenAI client</small></div>
+      <div class="arch-arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg></div>
+      <div class="arch-node reveal">toki daemon<small>OpenAI-compatible API · cache save/restore · metrics</small></div>
+      <div class="arch-arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg></div>
+      <div class="arch-node reveal">llama-server<small>one living KV cache shared by every client</small></div>
     </div>
   </section>
 
   <section class="cta-final">
-    <h2 class="reveal">Your server, your cache, your tokens.</h2>
-    <a class="btn" href="https://github.com/lhadzic377-netizen/TokiRecur" target="_blank" rel="noopener">Get it on GitHub</a>
+    <h2 class="reveal">Your server. Your cache. Your tokens.</h2>
+    <div class="cta reveal">
+      <a class="btn primary" href="https://github.com/lhadzic377-netizen/TokiRecur" target="_blank" rel="noopener">Get it on GitHub
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg>
+      </a>
+      <a class="btn ghost" href="/docs/">Read the docs</a>
+    </div>
   </section>
 </main>
 
 <footer>
-  <p>Toki Recur — KV cache reuse for LLM inference · MIT licensed</p>
-  <p class="dim">Site serving via <span class="accent">tokirecur.com</span> · <span class="accent">chat.tokirecur.com</span> for the live web chat</p>
+  <div class="footer-grid">
+    <div class="footer-brand">
+      <a class="brand" href="#top">
+        <img class="logo" src="/img/logo.png" alt="" width="30" height="30">
+        toki<span class="wordmark-accent">recur</span>
+      </a>
+      <p>KV cache reuse for LLM inference. Drop-in prefix caching on llama.cpp — no patches, no vendor lock-in.</p>
+    </div>
+    <div class="footer-col">
+      <h4>Product</h4>
+      <a href="#quickstart">Quick start</a>
+      <a href="#benchmarks">Benchmarks</a>
+      <a href="/docs/">Docs</a>
+    </div>
+    <div class="footer-col">
+      <h4>Project</h4>
+      <a href="https://github.com/lhadzic377-netizen/TokiRecur" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/lhadzic377-netizen/TokiRecur/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
+    </div>
+    <div class="footer-col">
+      <h4>Deploy</h4>
+      <a href="https://tokirecur.com" target="_blank" rel="noopener">tokirecur.com</a>
+      <a href="https://chat.tokirecur.com" target="_blank" rel="noopener">chat.tokirecur.com</a>
+    </div>
+  </div>
+  <div class="footer-bottom">
+    <span>© 2026 Toki Recur · MIT licensed</span>
+    <span>Mascot: <span class="accent">toki the bear</span></span>
+  </div>
 </footer>
 
 <script src="/app.js" defer></script>

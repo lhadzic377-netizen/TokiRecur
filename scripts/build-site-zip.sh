@@ -20,10 +20,12 @@ BUILD="$(mktemp -d)"
 trap 'rm -rf "$BUILD"' EXIT
 
 DEST="$BUILD/toki-site"
-mkdir -p "$DEST/site/docs" "$REPO/dist"
+mkdir -p "$DEST/site/docs" "$DEST/site/img" "$REPO/dist"
 
 cp "$REPO/site/index.html" "$REPO/site/style.css" \
-   "$REPO/site/app.js" "$REPO/site/favicon.svg" "$DEST/site/"
+   "$REPO/site/app.js" "$REPO/site/favicon.png" "$DEST/site/"
+mkdir -p "$DEST/site/img"
+cp "$REPO/site/img/"*.png "$DEST/site/img/"
 cp -r "$REPO/site/docs/"*.html "$REPO/site/docs/"*.css "$REPO/site/docs/"*.js \
    "$DEST/site/docs/"
 cp "$REPO/scripts/install-site.sh" "$DEST/install.sh"

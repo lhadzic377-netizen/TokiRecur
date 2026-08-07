@@ -46,7 +46,8 @@ def test_chat_openclaw_opens_gateway_tui():
     assert not plan["detach"]
 
 
-def test_chat_toki_uses_model_urls():
+def test_chat_toki_uses_model_urls(monkeypatch):
+    monkeypatch.delenv("TOKI_AUTH_TOKEN", raising=False)
     plan = launch_cmd("chat", "toki", spec())
     # The launcher's Chat entry opens the TUI chat client, not the
     # plain-text REPL.
@@ -102,6 +103,30 @@ def test_unknown_combo_raises():
         launch_cmd("web", "nope", spec())
     with pytest.raises(ValueError):
         launch_cmd("desktop", "opencode", spec())
+
+
+def test_codex_injects_auth_token_from_env(monkeypatch):
+    monkeypatch.setenv("TOKI_AUTH_TOKEN", "demo-token")
+    plan = launch_cmd("chat", "codex", spec())
+    assert plan["argv"] == ["codex"]
+    assert plan["env"]["TOKI_AUTH_TOKEN"] == "demo-token"
+
+
+def test_codex_injects_auth_token_from_auth_file(monkeypatch, tmp_path):
+    monkeypatch.delenv("TOKI_AUTH_TOKEN", raising=False)
+    auth = tmp_path / ".config" / "tokirecur" / "auth"
+    auth.parent.mkdir(parents=True)
+    auth.write_text("file-token\n")
+    monkeypatch.setattr("tokirecur.selector.Path.home", lambda: tmp_path)
+    plan = launch_cmd("chat", "codex", spec())
+    assert plan["env"]["TOKI_AUTH_TOKEN"] == "file-token"
+
+
+def test_codex_no_token_when_unconfigured(monkeypatch, tmp_path):
+    monkeypatch.delenv("TOKI_AUTH_TOKEN", raising=False)
+    monkeypatch.setattr("tokirecur.selector.Path.home", lambda: tmp_path)
+    plan = launch_cmd("chat", "codex", spec())
+    assert "TOKI_AUTH_TOKEN" not in plan["env"]
 
 
 def test_default_index():

@@ -66,6 +66,12 @@ LAUNCH_APPS: tuple[LaunchApp, ...] = (
         "chat", "openclaw",
     ),
     LaunchApp(
+        "codex",
+        "Launch Codex",
+        "OpenAI CLI coding agent (Responses API)",
+        "chat", "codex",
+    ),
+    LaunchApp(
         "web",
         "Launch Web Dashboards",
         "browser UIs: toki · openclaw · hermes",

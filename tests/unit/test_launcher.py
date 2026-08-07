@@ -27,7 +27,7 @@ def isolated_registry(tmp_path, monkeypatch):
 
 def test_apps_bind_to_pinned_model():
     keys = [a.key for a in LAUNCH_APPS]
-    assert keys == ["toki", "opencode", "hermes", "openclaw", "web"]
+    assert keys == ["toki", "opencode", "hermes", "openclaw", "codex", "web"]
     assert all(a.interface in ("chat", "tui", "web") for a in LAUNCH_APPS)
 
 

@@ -27,6 +27,30 @@ console = Console()
 INTERFACES = ["chat", "tui", "web"]
 CLIENTS = ["toki", "opencode", "openclaw", "hermes", "codex"]
 
+
+def _auth_token() -> str | None:
+    """Daemon auth token, mirroring ``api.app._get_auth_token``.
+
+    Read order: TOKI_AUTH_TOKEN env var → ~/.config/tokirecur/auth →
+    /etc/toki-recur/auth. ``None`` when no token is configured (daemon
+    runs open on loopback).
+    """
+    tok = os.environ.get("TOKI_AUTH_TOKEN")
+    if tok:
+        return tok
+    for path in (
+        Path.home() / ".config" / "tokirecur" / "auth",
+        Path("/etc/toki-recur/auth"),
+    ):
+        try:
+            if path.is_file():
+                content = path.read_text().strip()
+                if content:
+                    return content
+        except OSError:
+            pass
+    return None
+
 INTERFACE_HINTS = {
     "chat": "open the client's interactive UI / TUI",
     "tui": "full-screen terminal interface",
@@ -64,6 +88,14 @@ def launch_cmd(interface: str, client: str, spec: Any) -> dict:
     env = dict(os.environ)
     if os.environ.get("TOKI_AUTH_TOKEN"):
         env["TOKI_AUTH_TOKEN"] = os.environ["TOKI_AUTH_TOKEN"]
+    if client == "codex":
+        # Codex resolves the provider key from a real environment
+        # variable (`env` in the provider config only names it). Inject
+        # the daemon's token so codex works without the user exporting
+        # anything; the daemon's own auth resolution is mirrored.
+        tok = _auth_token()
+        if tok:
+            env["TOKI_AUTH_TOKEN"] = tok
 
     if interface == "chat":
         if client == "toki":
