@@ -22,7 +22,37 @@ Toki Recur is a Python app, so install it like one — with pip. While the repo 
 # 1. Install the CLI (pipx isolates it in its own venv and puts toki on PATH)
 #    (one-time: sudo apt install pipx   or   python3 -m pip install --user pipx)
 pipx install "tokirecur[embeddings] @ git+https://x-access-token:<PAT>@github.com/lhadzic377-netizen/TokiRecur.git"
+```
 
+Prefer the secure one-liner installers instead — the token is read from the
+environment (`TOKI_REPO_TOKEN`, never hardcoded), fetched via the GitHub API
+with fail-fast flags, and scoped to a fine-grained PAT with `Contents: read`:
+
+```bash
+# Linux/macOS (curl)
+export TOKI_REPO_TOKEN="<pat>"
+curl -sf -H "Authorization: Bearer $TOKI_REPO_TOKEN" \
+  -H "Accept: application/vnd.github.raw" \
+  "https://api.github.com/repos/lhadzic377-netizen/TokiRecur/contents/scripts/install-curl.sh" \
+  -o /tmp/toki-install.sh && bash /tmp/toki-install.sh
+```
+
+```powershell
+# Windows (irm / PowerShell)
+$env:TOKI_REPO_TOKEN = "<pat>"
+$installer = irm -Uri "https://api.github.com/repos/lhadzic377-netizen/TokiRecur/contents/scripts/install-irm.ps1" `
+  -Headers @{ Authorization = "Bearer $env:TOKI_REPO_TOKEN"; Accept = "application/vnd.github.raw" } -ErrorAction Stop
+$installer | Out-File -Encoding utf8 "$env:TEMP\toki-install.ps1"
+pwsh -File "$env:TEMP\toki-install.ps1"
+```
+
+Security notes: pass tokens via environment variables, not CLI args; scope to
+minimum permissions; clear the variable after testing (`unset TOKI_REPO_TOKEN` /
+`Remove-Item Env:\TOKI_REPO_TOKEN`); never commit test scripts containing
+credentials. See the [install docs](site/docs/install.html) for the full
+do/don't checklist.
+
+```bash
 # 2. Fetch the llama-server binary matching your OS/arch and GPU.
 #    Auto-detects the best backend: ROCm (AMD/HIP), CUDA (NVIDIA),
 #    Vulkan, Metal (macOS), CPU. Pass --backend to override.

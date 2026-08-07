@@ -53,6 +53,36 @@
 pip install "tokirecur[embeddings] @ git+https://x-access-token:&lt;PAT&gt;@github.com/lhadzic377-netizen/TokiRecur.git"</code></pre>
     <p>If <code>toki</code> is not found after install, your PATH may not include the venv's bin directory — either activate the venv or use the full path (<code>./.venv/bin/toki</code>). On systems where <code>pip install -e</code> writes a shim to <code>~/.local/bin</code> that points at system Python, delete that shim and re-run <code>pip install -e .</code> from inside the activated venv so the shim is regenerated with the correct shebang.</p>
 
+    <h2>curl / irm one-liner installers</h2>
+    <p>While the repo is private, fetching the installer <em>and</em> the package itself requires a token. Always pass it via the environment — never hardcode tokens in scripts or workflow files, never pass them as CLI arguments (they'd be visible in the process list), and scope them to the minimum (a fine-grained PAT with <strong>Contents: read</strong> on <code>lhadzic377-netizen/TokiRecur</code> only). The installers below are the scripts <code>scripts/install-curl.sh</code> and <code>scripts/install-irm.ps1</code>, fetched securely from the private repo and run locally — they install tokirecur via pipx using <code>TOKI_REPO_TOKEN</code>.</p>
+
+    <h3>Linux / macOS (curl)</h3>
+    <pre><code>export TOKI_REPO_TOKEN="ghp_..."   # fine-grained PAT, Contents: read
+curl -sf -H "Authorization: Bearer $TOKI_REPO_TOKEN" \
+  -H "Accept: application/vnd.github.raw" \
+  "https://api.github.com/repos/lhadzic377-netizen/TokiRecur/contents/scripts/install-curl.sh" \
+  -o /tmp/toki-install.sh
+bash /tmp/toki-install.sh</code></pre>
+
+    <h3>Windows (irm / PowerShell)</h3>
+    <pre><code>$env:TOKI_REPO_TOKEN = "ghp_..."
+$installer = irm -Uri "https://api.github.com/repos/lhadzic377-netizen/TokiRecur/contents/scripts/install-irm.ps1" `
+  -Headers @{ Authorization = "Bearer $env:TOKI_REPO_TOKEN"; Accept = "application/vnd.github.raw" } -ErrorAction Stop
+$installer | Out-File -Encoding utf8 "$env:TEMP\toki-install.ps1"
+pwsh -File "$env:TEMP\toki-install.ps1"</code></pre>
+
+    <p class="note"><code>curl -sf</code> (exit code 22 on HTTP errors) and <code>irm ... -ErrorAction Stop</code> fail fast on auth errors instead of silently downloading an error page. Both installers read the token from <code>TOKI_REPO_TOKEN</code> (or <code>GITHUB_TOKEN</code>) and refuse to run without it. After local testing, clear it: <code>unset TOKI_REPO_TOKEN</code> / <code>Remove-Item Env:\TOKI_REPO_TOKEN</code>.</p>
+
+    <table>
+      <thead><tr><th>Do</th><th>Don't</th></tr></thead>
+      <tbody>
+        <tr><td>Pass the token via environment variables</td><td>Hardcode PATs in scripts or workflow files</td></tr>
+        <tr><td>Scope tokens to minimum permissions (Contents: read for installs)</td><td>Use full-scope or admin tokens for simple installs</td></tr>
+        <tr><td>Fail fast: <code>curl -sf</code> / <code>-ErrorAction Stop</code></td><td>Ignore HTTP status codes silently</td></tr>
+        <tr><td>Rotate PATs regularly</td><td>Reuse the same PAT across multiple repos/services</td></tr>
+      </tbody>
+    </table>
+
     <h2>Fetch the llama-server binary</h2>
     <p>One command installs the matching official build — it auto-detects the best backend for your machine. Pass <code>--backend</code> to override.</p>
     <pre><code>toki model install-llama                 # auto-detect backend, latest release
