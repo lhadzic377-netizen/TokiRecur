@@ -196,3 +196,103 @@ def test_detect_backend_windows_cuda_then_cpu(monkeypatch):
     assert _detect_gpu_backend("windows") == "cuda"
     monkeypatch.setattr("shutil.which", lambda name: None)
     assert _detect_gpu_backend("windows") == "cpu"
+
+
+@pytest.mark.parametrize(
+    "main,cudart",
+    [
+        ("llama-b10326-bin-win-cuda-13.3-x64.zip",
+         "cudart-llama-bin-win-cuda-13.3-x64.zip"),
+        ("llama-b10326-bin-win-cuda-12.4-x64.zip",
+         "cudart-llama-bin-win-cuda-12.4-x64.zip"),
+        ("llama-b10326-bin-ubuntu-rocm-7.2-x64.tar.gz", None),
+        ("llama-b10326-bin-win-cpu-x64.zip", None),
+    ],
+)
+def test_cuda_runtime_archive_name(main, cudart):
+    from tokirecur.cli import _cuda_runtime_archive_name
+    assert _cuda_runtime_archive_name(main) == cudart
+
+
+def test_install_pulls_cudart_runtime_for_cuda_13_3(tmp_path, monkeypatch):
+    """CUDA 13.x main archives don't bundle cudart64_13.dll; install-llama
+    must download the paired cudart-llama-bin runtime archive too, otherwise
+    llama-server can't load CUDA and falls back to CPU."""
+    from tokirecur import cli as cli_mod
+    from tokirecur.cli import install_llama
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+
+    downloads: list[str] = []
+
+    class FakeClient:
+        def __init__(self, *a, **kw): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+        def get(self, url, headers=None):
+            class _Resp:
+                status_code = 200
+                def json(self_inner): return RELEASE
+                def raise_for_status(self_inner): pass
+            return _Resp()
+
+        def stream(self, method, url, headers=None):
+            downloads.append(url)
+            # Build a real zip in memory containing llama-server.exe so
+            # the main archive extraction succeeds and the cudart hook runs.
+            import io as _io
+            import zipfile as _zipfile
+            buf = _io.BytesIO()
+            with _zipfile.ZipFile(buf, "w") as zf:
+                zf.writestr("llama-server.exe", b"MZ")
+            data = buf.getvalue()
+
+            class _Resp:
+                def raise_for_status(self_inner): pass
+                def __enter__(self_inner): return self_inner
+                def __exit__(self_inner, *a): return False
+                def iter_bytes(self_inner, chunk):
+                    yield data
+            return _Resp()
+
+    RELEASE = {
+        "tag_name": "b10326",
+        "assets": [
+            {"name": "llama-b10326-bin-win-cuda-13.3-x64.zip",
+             "size": 146_540_671,
+             "browser_download_url": "https://example.test/main.zip"},
+            {"name": "cudart-llama-bin-win-cuda-13.3-x64.zip",
+             "size": 390_970_417,
+             "browser_download_url": "https://example.test/cudart.zip"},
+        ],
+    }
+
+    monkeypatch.setattr("httpx.Client", FakeClient, raising=False)
+    import httpx as _httpx
+    monkeypatch.setattr(_httpx, "Client", FakeClient)
+    monkeypatch.setattr("sys.platform", "win32")
+    monkeypatch.setattr("platform.machine", lambda: "AMD64")
+    # Auto-detect backend: pretend nvidia-smi is present → cuda.
+    monkeypatch.setattr("shutil.which", lambda n: "nvidia-smi" if n == "nvidia-smi" else None)
+    # Force a known-good driver so the 13.3 asset is chosen over 12.4.
+    from tokirecur import diagnose
+    monkeypatch.setattr(diagnose, "cuda_driver_verdict", lambda d: (False, False))
+
+    # Skip the real extraction/zipfile plumbing for the cudart archive;
+    # record any URL the dispatch hands to it.
+    extra_downloads: list[str] = []
+
+    def fake_unpack(api, asset, dest_dir, progress_prefix=""):
+        extra_downloads.append(asset["browser_download_url"])
+
+    monkeypatch.setattr(cli_mod, "_download_and_unpack_zip", fake_unpack)
+
+    install_llama.callback(tag="b10326", dest=str(bin_dir), name=None,
+                          backend="cuda", gfx=None)
+
+    urls = extra_downloads
+    assert any("cudart.zip" in u for u in urls), (
+        f"cudart runtime archive not downloaded: {urls}"
+    )

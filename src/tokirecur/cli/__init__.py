@@ -947,6 +947,60 @@ def _pick_asset(
     return asset, backend
 
 
+def _cuda_runtime_archive_name(main_asset_name: str) -> str | None:
+    """Name of the cudart runtime archive paired with a CUDA main asset.
+
+    llama.cpp's CUDA 13.x Windows builds split cudart/cublas out of the
+    main archive into a separate `cudart-llama-bin-win-cuda-13.3-x64.zip`
+    that must be unpacked alongside ``llama-server.exe`` (the 12.4 build
+    statically links cudart, so it doesn't need this).
+    """
+    import re
+    m = re.search(r"win-cuda-(\d+\.\d+)-x64", main_asset_name)
+    if not m:
+        return None
+    return f"cudart-llama-bin-win-cuda-{m.group(1)}-x64.zip"
+
+
+def _download_and_unpack_zip(api, asset: dict, bin_dir: Path,
+                              progress_prefix: str = "") -> None:
+    """Download a llama.cpp release archive and flatten its files into bin_dir.
+
+    The archives nest files under a single top-level folder; this helper
+    strips that folder so ``llama-server.exe``, ``ggml-cuda.dll``,
+    ``cudart64_13.dll`` etc. land directly in bin_dir.
+    """
+    import shutil
+    import tempfile
+    import zipfile
+    with tempfile.TemporaryDirectory(prefix="toki-llama-") as tmp:
+        tmp_dir = Path(tmp)
+        zip_path = tmp_dir / asset["name"]
+        with api.stream("GET", asset["browser_download_url"]) as resp:
+            resp.raise_for_status()
+            with open(zip_path, "wb") as fh:
+                for chunk in resp.iter_bytes(1 << 20):
+                    fh.write(chunk)
+        if zip_path.suffix == ".zip":
+            with zipfile.ZipFile(zip_path) as zf:
+                zf.extractall(tmp_dir)
+        else:
+            import tarfile
+            with tarfile.open(zip_path) as tf:
+                try:
+                    tf.extractall(tmp_dir, filter="data")
+                except TypeError:
+                    tf.extractall(tmp_dir)
+        for src in tmp_dir.rglob("*"):
+            if not src.is_file() or src == zip_path:
+                continue
+            rel = src.relative_to(tmp_dir)
+            target_name = "/".join(rel.parts[1:]) if len(rel.parts) > 1 else rel.name
+            target = bin_dir / target_name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, target)
+
+
 def _detect_gfx_version() -> str | None:
     """Parse `rocminfo` for the first gfxNNN target (e.g. gfx1151)."""
     import re
@@ -1185,6 +1239,26 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
         for side in src.parent.iterdir():
             if side.is_file() and side != src:
                 shutil.copy2(side, bin_dir / side.name)
+
+        # CUDA 13.x ships cudart/cublas as a separate runtime archive
+        # (the main archive has no cudart64_*.dll inside ggml-cuda.dll);
+        # without it llama-server can't load CUDA and falls back to CPU.
+        if matched_backend == "cuda":
+            cudart_name = _cuda_runtime_archive_name(asset["name"])
+            if cudart_name:
+                cudart = next(
+                    (a for a in assets if a.get("name") == cudart_name),
+                    None,
+                )
+                if cudart:
+                    click.echo(
+                        f"downloading {cudart['name']} "
+                        f"({cudart['size'] / 1048576:.0f} MB)..."
+                    )
+                    _download_and_unpack_zip(
+                        api, cudart, bin_dir,
+                        progress_prefix="cudart: ",
+                    )
     if os_name != "windows":
         dst.chmod(dst.stat().st_mode | 0o111)
     click.echo(f"installed: {dst}")

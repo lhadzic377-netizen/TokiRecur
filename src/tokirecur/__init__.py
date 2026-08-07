@@ -1,3 +1,3 @@
 """Toki Recur — KV cache reuse for LLM inference."""
 
-__version__ = "0.2.8"
+__version__ = "0.2.9"
