@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Command reference — Toki Recur Docs</title>
+<title>Command reference: Toki Recur Docs</title>
 <meta name="description" content="Every toki command: stack lifecycle, benchmark, cache management, diagnostics, and the API daemon.">
 <link rel="icon" href="/favicon.png" type="image/png" sizes="any">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -83,7 +83,7 @@ toki model remove &lt;name&gt; --purge             # also delete weights + runti
 toki model remove &lt;name&gt; --force              # allow removing the active model
 toki model repair                               # backfill binary/env on legacy entries</code></pre>
 
-    <p class="note"><code>toki model pull</code> detects multi-file GGUF splits (the upstream llama.cpp convention <code>-NNNN-of-NNNN.gguf</code>) and downloads every sibling part automatically — picking the recommended Q4_K_M variant no longer leaves llama-server unable to find the other shards. The model's registry entry always points at the first part (the entry point llama-server loads); the rest land beside it. <code>toki model remove</code> defaults to keeping weights and state on disk so you can re-add the same name with <code>toki model pull</code> without re-downloading; pass <code>--purge</code> to free the disk.</p>
+    <p class="note"><code>toki model pull</code> detects multi-file GGUF splits (the upstream llama.cpp convention <code>-NNNN-of-NNNN.gguf</code>) and downloads every sibling part automatically, picking the recommended Q4_K_M variant no longer leaves llama-server unable to find the other shards. The model's registry entry always points at the first part (the entry point llama-server loads); the rest land beside it. <code>toki model remove</code> defaults to keeping weights and state on disk so you can re-add the same name with <code>toki model pull</code> without re-downloading; pass <code>--purge</code> to free the disk.</p>
 
     <h2>Benchmark (the headline tool)</h2>
     <pre><code>toki bench   # interactive: pick a model from the registry + a workload from a menu
@@ -127,11 +127,11 @@ DELETE http://127.0.0.1:8787/cache/{id}
 GET  http://127.0.0.1:8787/cache/stats
 GET  http://127.0.0.1:8787/healthz</code></pre>
 
-    <p class="callout">Next: <a href="/docs/interfaces.html">Launcher &amp; shells</a> — the interactive UIs.</p>
+    <p class="callout">Next: <a href="/docs/interfaces.html">Launcher &amp; shells</a>, the interactive UIs.</p>
   </main>
 </div>
 
-<footer>Toki Recur — KV cache reuse for LLM inference · MIT licensed</footer>
+<footer>Toki Recur, KV cache reuse for LLM inference · MIT licensed</footer>
 <script src="/docs/docs.js" defer></script>
 </body>
 </html>

@@ -73,7 +73,7 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 // ── wishlist ──────────────────────────────────────────────
-// State lives only in the visitor's browser (localStorage) — no
+// State lives only in the visitor's browser (localStorage), no
 // emails, no personal data, nothing stored server-side beyond the
 // anonymous running total (a single integer).
 

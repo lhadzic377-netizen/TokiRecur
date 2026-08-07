@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>API reference — Toki Recur Docs</title>
+<title>API reference: Toki Recur Docs</title>
 <meta name="description" content="The OpenAI-compatible daemon API: completions, chat completions, cache admin endpoints, auth, and client wiring.">
 <link rel="icon" href="/favicon.png" type="image/png" sizes="any">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -41,7 +41,7 @@
   <main class="doc">
     <h1 class="reveal">API reference</h1>
 
-    <p class="reveal">The daemon (default <code>127.0.0.1:8787</code>) is OpenAI-compatible, so any OpenAI client — opencode, OpenClaw, Hermes, Codex, or your own — can point at it. Requests are also <strong>tool-calling capable</strong>: tool calls stream through verbatim (<code>delta.tool_calls</code>), finish with <code>finish_reason: "tool_calls"</code>, and <code>role: "tool"</code> result messages round-trip unchanged.</p>
+    <p class="reveal">The daemon (default <code>127.0.0.1:8787</code>) is OpenAI-compatible, so any OpenAI client, opencode, OpenClaw, Hermes, Codex, or your own, can point at it. Requests are also <strong>tool-calling capable</strong>: tool calls stream through verbatim (<code>delta.tool_calls</code>), finish with <code>finish_reason: "tool_calls"</code>, and <code>role: "tool"</code> result messages round-trip unchanged.</p>
 
     <h2>Completions</h2>
     <pre><code>POST /v1/completions
@@ -60,7 +60,7 @@ GET    /cache/stats     # hit rate, bytes, entries</code></pre>
     <p>Set <code>TOKI_AUTH_TOKEN</code> to gate the API. Clients send it as a standard <code>Authorization: Bearer &lt;token&gt;</code> header. The web UI itself is always open (no login); the web server authenticates every proxied daemon call with its own configured credential.</p>
 
     <h2>Client wiring</h2>
-    <p>Any OpenAI-compatible client works. Example — opencode:</p>
+    <p>Any OpenAI-compatible client works. Example, opencode:</p>
     <pre><code>{
   "provider": {
     "tokirecur": {
@@ -93,11 +93,11 @@ env_key = "TOKI_AUTH_TOKEN"
 [model_providers.tokirecur.env]
 TOKI_AUTH_TOKEN = "demo-token"</code></pre>
 
-    <p class="callout">Next: <a href="/docs/benchmark.html">Benchmark</a> — workloads, scoring, and measured results.</p>
+    <p class="callout">Next: <a href="/docs/benchmark.html">Benchmark</a>, workloads, scoring, and measured results.</p>
   </main>
 </div>
 
-<footer>Toki Recur — KV cache reuse for LLM inference · MIT licensed</footer>
+<footer>Toki Recur, KV cache reuse for LLM inference · MIT licensed</footer>
 <script src="/docs/docs.js" defer></script>
 </body>
 </html>

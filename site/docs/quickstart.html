@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Quick start — Toki Recur Docs</title>
+<title>Quick start: Toki Recur Docs</title>
 <meta name="description" content="Six commands to your first KV-cached chat with Toki Recur, plus small-RAM notes and opencode wiring.">
 <link rel="icon" href="/favicon.png" type="image/png" sizes="any">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -41,7 +41,7 @@
   <main class="doc">
     <h1 class="reveal">Quick start</h1>
 
-    <p class="reveal">Nothing is preinstalled — you pull exactly what you want. Six commands to your first cached chat:</p>
+    <p class="reveal">Nothing is preinstalled, you pull exactly what you want. Six commands to your first cached chat:</p>
 
     <pre class="reveal"><code># 1. Install the CLI (pipx isolates it in its own venv and puts toki on PATH)
 pipx install "tokirecur[embeddings] @ git+https://x-access-token:&lt;PAT&gt;@github.com/lhadzic377-netizen/TokiRecur.git"
@@ -51,7 +51,7 @@ pipx install "tokirecur[embeddings] @ git+https://x-access-token:&lt;PAT&gt;@git
 #    Vulkan, Metal (macOS), CPU. Pass --backend to override.
 toki model install-llama
 
-# 3. Install a model — fetch a GGUF from Hugging Face and register it
+# 3. Install a model, fetch a GGUF from Hugging Face and register it
 #    under a short name (quantized Qwen3 GGUFs: huggingface.co/models?library=gguf)
 toki model pull Qwen/Qwen3-4B-GGUF --name qwen3-4b
 
@@ -63,16 +63,16 @@ toki model install-llama --backend rocm --name qwen3-4b
 #    opencode/openclaw/hermes at it)
 toki model use qwen3-4b
 
-# 6. Talk to it — the full-screen TUI chat (or open the web UI with `toki web`)
+# 6. Talk to it, the full-screen TUI chat (or open the web UI with `toki web`)
 toki tui</code></pre>
 
-    <p>No models are installed or started at install time — <code>toki model use &lt;name&gt;</code> is the explicit, documented way to bring one up (it starts llama-server + the toki daemon, stops competing big-model stacks, and wires opencode/openclaw/hermes at it). <code>toki up --model &lt;path&gt;</code> is the single-model equivalent for a raw GGUF without a registry entry. <code>toki serve</code> is <strong>only</strong> the API daemon (default 127.0.0.1:8787) that proxies to an already-running llama-server; it warns loudly if the backend isn't reachable instead of failing silently.</p>
+    <p>No models are installed or started at install time, <code>toki model use &lt;name&gt;</code> is the explicit, documented way to bring one up (it starts llama-server + the toki daemon, stops competing big-model stacks, and wires opencode/openclaw/hermes at it). <code>toki up --model &lt;path&gt;</code> is the single-model equivalent for a raw GGUF without a registry entry. <code>toki serve</code> is <strong>only</strong> the API daemon (default 127.0.0.1:8787) that proxies to an already-running llama-server; it warns loudly if the backend isn't reachable instead of failing silently.</p>
 
     <h2>Small-RAM machines</h2>
-    <p>On machines with limited RAM (8–16 GB), <code>toki model use</code> automatically reduces the requested context so the KV cache fits in memory alongside the model weights. It reads the GGUF header to compute KV usage per token, and the running server's real slot size after boot. The effective context — the smaller of your configured <code>ctx_size</code> and what the machine can actually hold — is written to the model's state dir and becomes the single source of truth: the OpenAI-compatible API advertises exactly that context, clamps <code>max_tokens</code> to it, and refuses to over-allocate when llama-server could not honor the requested context (which previously surfaced as confusing <code>400 not enough tokens</code> errors). Failed startups no longer hang — llama-server's log tail is surfaced and the launcher returns an error. If the server still can't start, pick a smaller/quantized model or lower the model's <code>ctx_size</code> in the registry; the context floor is 512 tokens.</p>
+    <p>On machines with limited RAM (8–16 GB), <code>toki model use</code> automatically reduces the requested context so the KV cache fits in memory alongside the model weights. It reads the GGUF header to compute KV usage per token, and the running server's real slot size after boot. The effective context, the smaller of your configured <code>ctx_size</code> and what the machine can actually hold, is written to the model's state dir and becomes the single source of truth: the OpenAI-compatible API advertises exactly that context, clamps <code>max_tokens</code> to it, and refuses to over-allocate when llama-server could not honor the requested context (which previously surfaced as confusing <code>400 not enough tokens</code> errors). Failed startups no longer hang, llama-server's log tail is surfaced and the launcher returns an error. If the server still can't start, pick a smaller/quantized model or lower the model's <code>ctx_size</code> in the registry; the context floor is 512 tokens.</p>
 
     <h2>Use as an opencode backend</h2>
-    <p>The daemon's <code>/v1/chat/completions</code> is OpenAI-compatible <em>and</em> tool-calling capable, so opencode can run entirely on the local KV-recycled model. Every agent turn reuses the prefix from the previous turn (system prompt, tools, earlier messages) via llama-server's KV cache — no cloud, no <code>num_ctx</code> fiddling, and cache hits show up in the daemon's metrics.</p>
+    <p>The daemon's <code>/v1/chat/completions</code> is OpenAI-compatible <em>and</em> tool-calling capable, so opencode can run entirely on the local KV-recycled model. Every agent turn reuses the prefix from the previous turn (system prompt, tools, earlier messages) via llama-server's KV cache, no cloud, no <code>num_ctx</code> fiddling, and cache hits show up in the daemon's metrics.</p>
 
     <pre><code>// ~/.config/opencode/opencode.json
 {
@@ -99,15 +99,15 @@ toki tui</code></pre>
     <ul>
       <li>Set <code>apiKey</code> to whatever <code>TOKI_AUTH_TOKEN</code> the daemon runs with.</li>
       <li>The model id is a label; the actual weights are whatever llama-server has loaded. <code>contextWindow</code> should stay under <code>TOKI_MAX_CONTEXT_TOKENS</code>.</li>
-      <li>Tool calls stream through verbatim (<code>delta.tool_calls</code>), finish with <code>finish_reason: "tool_calls"</code>, and <code>role: "tool"</code> result messages round-trip unchanged — verified against opencode's own <code>bash</code> tool loop.</li>
+      <li>Tool calls stream through verbatim (<code>delta.tool_calls</code>), finish with <code>finish_reason: "tool_calls"</code>, and <code>role: "tool"</code> result messages round-trip unchanged, verified against opencode's own <code>bash</code> tool loop.</li>
       <li>Non-stream requests work too (<code>choices[0].message.tool_calls</code>).</li>
     </ul>
 
-    <p class="callout">Next: <a href="/docs/commands.html">Command reference</a> — the full toki CLI.</p>
+    <p class="callout">Next: <a href="/docs/commands.html">Command reference</a>, the full toki CLI.</p>
   </main>
 </div>
 
-<footer>Toki Recur — KV cache reuse for LLM inference · MIT licensed</footer>
+<footer>Toki Recur, KV cache reuse for LLM inference · MIT licensed</footer>
 <script src="/docs/docs.js" defer></script>
 </body>
 </html>

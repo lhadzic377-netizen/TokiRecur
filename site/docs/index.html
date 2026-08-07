@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Docs — Toki Recur</title>
-<meta name="description" content="Documentation for Toki Recur — drop-in KV cache reuse for local LLM inference on llama.cpp.">
+<title>Docs: Toki Recur</title>
+<meta name="description" content="Documentation for Toki Recur, drop-in KV cache reuse for local LLM inference on llama.cpp.">
 <link rel="icon" href="/favicon.png" type="image/png" sizes="any">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -44,7 +44,7 @@
     <p class="reveal">A standalone KV cache reuse system for LLM inference. Drop-in prefix caching that works across CUDA, ROCm, Vulkan, Metal, and CPU without any model modifications.</p>
 
     <div class="callout reveal">
-      <strong>What it does.</strong> When a new prompt arrives at an LLM server, the KV cache is rebuilt from scratch — even if 90% of the prompt is identical to one we just processed. Toki Recur detects exact prefix matches, reuses the saved KV state, and skips redundant prefill compute.
+      <strong>What it does.</strong> When a new prompt arrives at an LLM server, the KV cache is rebuilt from scratch, even if 90% of the prompt is identical to one we just processed. Toki Recur detects exact prefix matches, reuses the saved KV state, and skips redundant prefill compute.
     </div>
 
     <h2>Real measured results</h2>
@@ -60,7 +60,7 @@
         <tr><td>Cache hit rate</td><td>0.0%</td><td>90.0%</td><td>+90.0%</td></tr>
       </tbody>
     </table>
-    <p>The headline metric is TTFT — a 51.5% reduction, achieved by serving 2,241 of 2,575 prefill tokens from cache. Total wall-clock improves 5% because generation dominates the 64-token output; for prefill-bound workloads (long inputs, short outputs) the speedup is closer to 2×.</p>
+    <p>The headline metric is TTFT, a 51.5% reduction, achieved by serving 2,241 of 2,575 prefill tokens from cache. Total wall-clock improves 5% because generation dominates the 64-token output; for prefill-bound workloads (long inputs, short outputs) the speedup is closer to 2×.</p>
 
     <h2>Guide</h2>
     <div class="doc-cards">
@@ -77,7 +77,7 @@
   </main>
 </div>
 
-<footer>Toki Recur — KV cache reuse for LLM inference · MIT licensed</footer>
+<footer>Toki Recur, KV cache reuse for LLM inference · MIT licensed</footer>
 <script src="/docs/docs.js" defer></script>
 </body>
 </html>

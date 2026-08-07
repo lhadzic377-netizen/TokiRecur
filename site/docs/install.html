@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Install — Toki Recur Docs</title>
+<title>Install: Toki Recur Docs</title>
 <meta name="description" content="Install Toki Recur with pipx, fetch the llama-server binary, and pull a model.">
 <link rel="icon" href="/favicon.png" type="image/png" sizes="any">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -41,7 +41,7 @@
   <main class="doc">
     <h1 class="reveal">Install</h1>
 
-    <p class="reveal">Toki Recur is a Python app — install it with pipx, which isolates it in its own venv and puts <code>toki</code> on PATH. While the repo is private, the install URL carries a read-only token (a fine-grained PAT with <strong>Contents: read</strong> on <code>lhadzic377-netizen/TokiRecur</code> only). The token appears in your shell history; that's the private-repo tax.</p>
+    <p class="reveal">Toki Recur is a Python app, install it with pipx, which isolates it in its own venv and puts <code>toki</code> on PATH. While the repo is private, the install URL carries a read-only token (a fine-grained PAT with <strong>Contents: read</strong> on <code>lhadzic377-netizen/TokiRecur</code> only). The token appears in your shell history; that's the private-repo tax.</p>
 
     <pre><code>pipx install "tokirecur[embeddings] @ git+https://x-access-token:&lt;PAT&gt;@github.com/lhadzic377-netizen/TokiRecur.git"</code></pre>
 
@@ -51,10 +51,10 @@
     <p>Install into your own venv instead:</p>
     <pre><code>python3 -m venv .venv &amp;&amp; source .venv/bin/activate
 pip install "tokirecur[embeddings] @ git+https://x-access-token:&lt;PAT&gt;@github.com/lhadzic377-netizen/TokiRecur.git"</code></pre>
-    <p>If <code>toki</code> is not found after install, your PATH may not include the venv's bin directory — either activate the venv or use the full path (<code>./.venv/bin/toki</code>). On systems where <code>pip install -e</code> writes a shim to <code>~/.local/bin</code> that points at system Python, delete that shim and re-run <code>pip install -e .</code> from inside the activated venv so the shim is regenerated with the correct shebang.</p>
+    <p>If <code>toki</code> is not found after install, your PATH may not include the venv's bin directory, either activate the venv or use the full path (<code>./.venv/bin/toki</code>). On systems where <code>pip install -e</code> writes a shim to <code>~/.local/bin</code> that points at system Python, delete that shim and re-run <code>pip install -e .</code> from inside the activated venv so the shim is regenerated with the correct shebang.</p>
 
     <h2>curl / irm one-liner installers</h2>
-    <p>While the repo is private, fetching the installer <em>and</em> the package itself requires a token. Always pass it via the environment — never hardcode tokens in scripts or workflow files, never pass them as CLI arguments (they'd be visible in the process list), and scope them to the minimum (a fine-grained PAT with <strong>Contents: read</strong> on <code>lhadzic377-netizen/TokiRecur</code> only). The installers below are the scripts <code>scripts/install-curl.sh</code> and <code>scripts/install-irm.ps1</code>, fetched securely from the private repo and run locally — they install tokirecur via pipx using <code>TOKI_REPO_TOKEN</code>.</p>
+    <p>While the repo is private, fetching the installer <em>and</em> the package itself requires a token. Always pass it via the environment, never hardcode tokens in scripts or workflow files, never pass them as CLI arguments (they'd be visible in the process list), and scope them to the minimum (a fine-grained PAT with <strong>Contents: read</strong> on <code>lhadzic377-netizen/TokiRecur</code> only). The installers below are the scripts <code>scripts/install-curl.sh</code> and <code>scripts/install-irm.ps1</code>, fetched securely from the private repo and run locally, they install tokirecur via pipx using <code>TOKI_REPO_TOKEN</code>.</p>
 
     <h3>Linux / macOS (curl)</h3>
     <pre><code>export TOKI_REPO_TOKEN="ghp_..."   # fine-grained PAT, Contents: read
@@ -84,7 +84,7 @@ pwsh -File "$env:TEMP\toki-install.ps1"</code></pre>
     </table>
 
     <h2>Fetch the llama-server binary</h2>
-    <p>One command installs the matching official build — it auto-detects the best backend for your machine. Pass <code>--backend</code> to override.</p>
+    <p>One command installs the matching official build, it auto-detects the best backend for your machine. Pass <code>--backend</code> to override.</p>
     <pre><code>toki model install-llama                 # auto-detect backend, latest release
 toki model install-llama --backend rocm  # force a backend (rocm|cuda|vulkan|metal|cpu)
 toki model install-llama --backend rocm --gfx 11.5.1  # set HSA_OVERRIDE_GFX_VERSION
@@ -92,7 +92,7 @@ toki model install-llama --tag b6400     # pin a release tag
 toki model install-llama --name 35b      # ...and point a registry model at it</code></pre>
 
     <h2>Platforms</h2>
-    <p>Toki Recur is pure Python over the llama-server HTTP API — it runs on <strong>any x86_64 or aarch64 device</strong> running Linux, macOS or Windows, with whatever GPU backend your llama-server build has. The only per-platform piece is the llama-server binary itself:</p>
+    <p>Toki Recur is pure Python over the llama-server HTTP API, it runs on <strong>any x86_64 or aarch64 device</strong> running Linux, macOS or Windows, with whatever GPU backend your llama-server build has. The only per-platform piece is the llama-server binary itself:</p>
     <table>
       <thead><tr><th>Platform</th><th>Architecture</th><th>llama-server builds</th></tr></thead>
       <tbody>
@@ -103,10 +103,10 @@ toki model install-llama --name 35b      # ...and point a registry model at it</
         <tr><td>Windows</td><td>aarch64</td><td>CPU, Adreno OpenCL</td></tr>
       </tbody>
     </table>
-    <p>The GPU backends are provided by the llama-server binary itself — Toki Recur talks to it over HTTP and is backend-agnostic.</p>
+    <p>The GPU backends are provided by the llama-server binary itself, Toki Recur talks to it over HTTP and is backend-agnostic.</p>
 
     <h2>System daemon installers</h2>
-    <p>Optional — run as a system daemon (dedicated user + service manager unit + log rotation, auto-start at boot). <code>install.sh</code>/<code>install.ps1</code> bootstrap the full stack themselves (own venv at <code>/opt/toki-recur</code>, package + llama-server + service unit), so they work standalone — they don't need the pipx install above:</p>
+    <p>Optional, run as a system daemon (dedicated user + service manager unit + log rotation, auto-start at boot). <code>install.sh</code>/<code>install.ps1</code> bootstrap the full stack themselves (own venv at <code>/opt/toki-recur</code>, package + llama-server + service unit), so they work standalone, they don't need the pipx install above:</p>
     <pre><code># Linux  -> systemd + logrotate   (macOS -> launchd LaunchDaemon)
 sudo ./install.sh
 
@@ -116,11 +116,11 @@ sudo ./install.sh
     <h2>Model registry</h2>
     <p>Or point <code>binary:</code> at any llama-server on PATH in the registry (<code>~/.config/tokirecur/models.yaml</code>). Override locations per-machine with <code>TOKI_MODEL_REGISTRY</code> (config) and <code>TOKI_STATE_DIR</code> (logs/pid/bin). On Windows the systemd service commands are unavailable (reported cleanly); the RAM guard uses <code>GlobalMemoryStatusEx</code>, and on macOS the UMA/RAM guard uses <code>sysctl hw.memsize</code>.</p>
 
-    <p class="callout">Next: <a href="/docs/quickstart.html">Quick start</a> — six commands to your first cached chat.</p>
+    <p class="callout">Next: <a href="/docs/quickstart.html">Quick start</a>, six commands to your first cached chat.</p>
   </main>
 </div>
 
-<footer>Toki Recur — KV cache reuse for LLM inference · MIT licensed</footer>
+<footer>Toki Recur, KV cache reuse for LLM inference · MIT licensed</footer>
 <script src="/docs/docs.js" defer></script>
 </body>
 </html>

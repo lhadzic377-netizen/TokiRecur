@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Benchmark — Toki Recur Docs</title>
+<title>Benchmark: Toki Recur Docs</title>
 <meta name="description" content="The toki bench workloads, composite scoring weights, and measured results on this hardware.">
 <link rel="icon" href="/favicon.png" type="image/png" sizes="any">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -83,7 +83,7 @@ toki bench --model ~/Downloads/Qwen3.5-9B-Q4_K_M.gguf \
     <p>Letter grades: A+ ≥ 90, A ≥ 80, B ≥ 70, C ≥ 60, D ≥ 50, F &lt; 50 (with A- / C- marking the lower end of a band).</p>
 
     <h2>Measured results (this hardware)</h2>
-    <p>Run on an AMD Ryzen AI MAX+ 395 (Ryzen AI Halo), max-tokens=32. <strong>Disclaimer:</strong> all scores are based on multiple benchmark runs and depend on the hardware, environment, and model — the benchmark may score better or worse elsewhere.</p>
+    <p>Run on an AMD Ryzen AI MAX+ 395 (Ryzen AI Halo), max-tokens=32. <strong>Disclaimer:</strong> all scores are based on multiple benchmark runs and depend on the hardware, environment, and model, the benchmark may score better or worse elsewhere.</p>
 
     <h3>Qwen3.5-9B-Q4_K_M</h3>
     <table>
@@ -101,7 +101,7 @@ toki bench --model ~/Downloads/Qwen3.5-9B-Q4_K_M.gguf \
       </tbody>
     </table>
 
-    <p>The headline number is <code>realistic_mixed</code>: 216 prompts across 5 real-world categories (RAG, tool-using, multi-turn, support, one-off) — TTFT cut by two thirds, prefill nearly 6x faster, 88% cache hit rate, composite 84.4 (A). The <code>summarization</code> and <code>code_review</code> workloads are even stronger (A+). Low scores on <code>no_overlap</code> and the adversarial workloads are expected — zero-overlap prompts are the worst case for prefix caching, and the stress workload is designed to surface edge cases (false-positive hits from cosine similarity, minimal savings on short prompts, underperforming sequential growth).</p>
+    <p>The headline number is <code>realistic_mixed</code>: 216 prompts across 5 real-world categories (RAG, tool-using, multi-turn, support, one-off), TTFT cut by two thirds, prefill nearly 6x faster, 88% cache hit rate, composite 84.4 (A). The <code>summarization</code> and <code>code_review</code> workloads are even stronger (A+). Low scores on <code>no_overlap</code> and the adversarial workloads are expected, zero-overlap prompts are the worst case for prefix caching, and the stress workload is designed to surface edge cases (false-positive hits from cosine similarity, minimal savings on short prompts, underperforming sequential growth).</p>
 
     <h3>Qwen3.6-35B-A3B (UD-Q4_K_M)</h3>
     <table>
@@ -119,7 +119,7 @@ toki bench --model ~/Downloads/Qwen3.5-9B-Q4_K_M.gguf \
       </tbody>
     </table>
 
-    <p>The 35B-A3B MoE benefits most from caching — its per-token compute is dominated by the 3B active experts, so skipping prefill shows up as larger relative TTFT and throughput gains than on the dense 9B (e.g. realistic_mixed 84.4 → 86.8 composite, summarization prefill speedup 1090% → 1187%). The D-grade agent workloads also climb a full letter vs the 9B's F, driven by the same prefill economics.</p>
+    <p>The 35B-A3B MoE benefits most from caching, its per-token compute is dominated by the 3B active experts, so skipping prefill shows up as larger relative TTFT and throughput gains than on the dense 9B (e.g. realistic_mixed 84.4 → 86.8 composite, summarization prefill speedup 1090% → 1187%). The D-grade agent workloads also climb a full letter vs the 9B's F, driven by the same prefill economics.</p>
 
     <h3>Qwen3.6-27B</h3>
     <table>
@@ -156,16 +156,16 @@ toki bench --model ~/Downloads/Qwen3.5-9B-Q4_K_M.gguf \
     <p>Across all four models the pattern holds: the bigger and sparser the model, the
     better the relative caching gains. The 122B-A10B tops every table (realistic_mixed
     89.7, summarization 95.8, code_review 94.2), followed by the 35B-A3B and the dense
-    27B / 9B — the more prefill tokens a prompt carries, the more each skipped token is
+    27B / 9B, the more prefill tokens a prompt carries, the more each skipped token is
     worth. <code>no_overlap</code> is a control workload (0% hit by design) and
     <code>stress_adversarial</code> deliberately maximizes false-positive hits and
     short-prompt edge cases, so its scores stay low on every model.</p>
 
-    <p class="callout">Next: <a href="/docs/deploy.html">Production deploy</a> — systemd, auth, and TLS.</p>
+    <p class="callout">Next: <a href="/docs/deploy.html">Production deploy</a>, systemd, auth, and TLS.</p>
   </main>
 </div>
 
-<footer>Toki Recur — KV cache reuse for LLM inference · MIT licensed</footer>
+<footer>Toki Recur, KV cache reuse for LLM inference · MIT licensed</footer>
 <script src="/docs/docs.js" defer></script>
 </body>
 </html>

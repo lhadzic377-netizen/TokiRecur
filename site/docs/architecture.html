@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Architecture — Toki Recur Docs</title>
+<title>Architecture: Toki Recur Docs</title>
 <meta name="description" content="The 5-step recycling algorithm, targets, and how KV save/restore works without patching llama.cpp.">
 <link rel="icon" href="/favicon.png" type="image/png" sizes="any">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -76,22 +76,22 @@ POST /slots/{id_slot}?action=erase    body: {"filename": "..."}</code></pre>
     <h2>Architectural improvements</h2>
     <p>Beyond the basic cache, the tool ships with:</p>
     <ol>
-      <li><strong>Tree-structured KV cache</strong> — KV tensors are tracked in BLOCK_SIZE chunks. Two prompts sharing a prefix share the same on-disk blocks (content-addressed by token hash). Provides a fast tree-hit lookup that bypasses embedding entirely.</li>
-      <li><strong>Persistent slot pool</strong> — the top-N most-frequently-used prefixes get dedicated llama-server slots that never clear. Skips the save/load cycle entirely for hot prefixes.</li>
-      <li><strong>Honest hit definition</strong> (<code>MIN_REUSE_FOR_HIT = 10</code>) — a "hit" requires at least 10 tokens of prefix reuse. Below that, the save/load overhead exceeds the prefill savings, so it's reported as a <code>soft_hit</code> instead of inflating the hit rate.</li>
-      <li><strong>Prefix-length-weighted similarity</strong> (<code>BruteForceIndex.search</code>) — among candidates within 5% cosine similarity, prefers the one with the longest token list. Dampens the "cosine finds a 1-token lookalike" pathology.</li>
-      <li><strong>Substantive divergence classification</strong> — output divergence is classified into identical / whitespace-only / restore-noise / substantive via sentence-transformers semantic similarity. Reports the percentage of divergent pairs that are <em>real</em> (different meaning) vs cosmetic.</li>
-      <li><strong>Embedding chunking fallback</strong> (<code>LlamaServerBackend.embed</code>) — long prompts are split into overlapping segments and re-averaged, with a deterministic hash-based fallback when embedding fails entirely.</li>
+      <li><strong>Tree-structured KV cache</strong>, KV tensors are tracked in BLOCK_SIZE chunks. Two prompts sharing a prefix share the same on-disk blocks (content-addressed by token hash). Provides a fast tree-hit lookup that bypasses embedding entirely.</li>
+      <li><strong>Persistent slot pool</strong>, the top-N most-frequently-used prefixes get dedicated llama-server slots that never clear. Skips the save/load cycle entirely for hot prefixes.</li>
+      <li><strong>Honest hit definition</strong> (<code>MIN_REUSE_FOR_HIT = 10</code>), a "hit" requires at least 10 tokens of prefix reuse. Below that, the save/load overhead exceeds the prefill savings, so it's reported as a <code>soft_hit</code> instead of inflating the hit rate.</li>
+      <li><strong>Prefix-length-weighted similarity</strong> (<code>BruteForceIndex.search</code>), among candidates within 5% cosine similarity, prefers the one with the longest token list. Dampens the "cosine finds a 1-token lookalike" pathology.</li>
+      <li><strong>Substantive divergence classification</strong>, output divergence is classified into identical / whitespace-only / restore-noise / substantive via sentence-transformers semantic similarity. Reports the percentage of divergent pairs that are <em>real</em> (different meaning) vs cosmetic.</li>
+      <li><strong>Embedding chunking fallback</strong> (<code>LlamaServerBackend.embed</code>), long prompts are split into overlapping segments and re-averaged, with a deterministic hash-based fallback when embedding fails entirely.</li>
     </ol>
 
     <h2>In-memory cache (current behavior)</h2>
-    <p>Prefix reuse is <strong>in-memory only</strong>: the engine routes similar prompts to the same llama-server slot and lets the slot's KV cache serve the shared prefix (<code>cache_prompt=true</code>). This is lossless — outputs are byte-identical to a no-cache run. Disk persistence via <code>?action=save</code>/<code>?action=restore</code> was removed after benchmarks showed 88% substantive divergence from baseline outputs; the <code>.trkv</code> sidecar layer remains in the codebase but is dormant.</p>
+    <p>Prefix reuse is <strong>in-memory only</strong>: the engine routes similar prompts to the same llama-server slot and lets the slot's KV cache serve the shared prefix (<code>cache_prompt=true</code>). This is lossless, outputs are byte-identical to a no-cache run. Disk persistence via <code>?action=save</code>/<code>?action=restore</code> was removed after benchmarks showed 88% substantive divergence from baseline outputs; the <code>.trkv</code> sidecar layer remains in the codebase but is dormant.</p>
 
-    <p class="callout">Next: <a href="/docs/api.html">API reference</a> — endpoints and auth.</p>
+    <p class="callout">Next: <a href="/docs/api.html">API reference</a>, endpoints and auth.</p>
   </main>
 </div>
 
-<footer>Toki Recur — KV cache reuse for LLM inference · MIT licensed</footer>
+<footer>Toki Recur, KV cache reuse for LLM inference · MIT licensed</footer>
 <script src="/docs/docs.js" defer></script>
 </body>
 </html>

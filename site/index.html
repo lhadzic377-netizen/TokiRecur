@@ -3,9 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Toki Recur — KV cache reuse for LLM inference</title>
-<meta name="description" content="Toki Recur is drop-in prefix caching for local LLM inference. Reuse the KV cache across agents, shells, and services on llama.cpp — no patches, no vendor lock-in.">
-<meta property="og:title" content="Toki Recur — KV cache reuse for LLM inference">
+<title>Toki Recur: KV cache reuse for LLM inference</title>
+<meta name="description" content="Toki Recur is drop-in prefix caching for local LLM inference. Reuse the KV cache across agents, shells, and services on llama.cpp. No patches, no vendor lock-in.">
+<meta property="og:title" content="Toki Recur: KV cache reuse for LLM inference">
 <meta property="og:description" content="Drop-in prefix caching across CUDA, ROCm, Vulkan, Metal, and CPU. Reuse the KV cache between agents and services on llama.cpp.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://tokirecur.com/">
@@ -41,7 +41,7 @@
     <h1 class="reveal">Reuse the KV cache.<br>Never regenerate the <span class="accent">same context twice.</span></h1>
     <p class="lede reveal">
       Toki Recur sits in front of llama-server as an OpenAI-compatible daemon. Agents, shells,
-      and services that share a prefix hit the same KV cache — so a long system prompt,
+      and services that share a prefix hit the same KV cache, so a long system prompt,
       tool corpus, or project context is computed once and replayed from memory.
       No patches. No vendor lock-in.
     </p>
@@ -64,7 +64,7 @@
     <div class="stats">
       <div class="stat reveal"><div class="num">51.5%</div><div class="label">time-to-first-token reduction vs. a fresh cache</div></div>
       <div class="stat reveal"><div class="num">90.0%</div><div class="label">cache hit rate on real agent workloads</div></div>
-      <div class="stat reveal"><div class="num">2.8×</div><div class="label">prefill throughput — 731 → 2,819 tok/s</div></div>
+      <div class="stat reveal"><div class="num">2.8×</div><div class="label">prefill throughput, 731 → 2,819 tok/s</div></div>
       <div class="stat reveal"><div class="num">0</div><div class="label">model patches or vendor lock-in</div></div>
     </div>
   </section>
@@ -93,12 +93,12 @@
     <div class="card reveal">
       <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.34 19a10 10 0 1 1 17.32 0"/><path d="m12 14 4-4"/></svg></div>
       <h3>Benchmark harness</h3>
-      <p>Run real workloads — agent loops, RAG chunks, adversarial prompts — and report cache-hit rates vs. a fresh cache.</p>
+      <p>Run real workloads, agent loops, RAG chunks, adversarial prompts, and report cache-hit rates vs. a fresh cache.</p>
     </div>
     <div class="card reveal">
       <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17l6-5-6-5"/><path d="M12 19h8"/></svg></div>
       <h3>TUI + web chat</h3>
-      <p>Full-screen terminal chat and a production-ready single-page web UI ship with the package — one command each.</p>
+      <p>Full-screen terminal chat and a production-ready single-page web UI ship with the package, one command each.</p>
     </div>
   </section>
 
@@ -107,11 +107,11 @@
     <h2 class="reveal">Three commands from cold start to a shared cache.</h2>
     <p class="section-sub reveal">Boot the stack, wire your clients at the daemon, and let the prefix matcher do the rest.</p>
     <ol class="steps">
-      <li class="reveal" data-n="01"><strong>Boot</strong> — <code>toki model use</code> starts llama-server plus the toki
+      <li class="reveal" data-n="01"><strong>Boot</strong>, <code>toki model use</code> starts llama-server plus the toki
         daemon, wires your CLI tools at it, and writes the effective context it can actually hold.</li>
-      <li class="reveal" data-n="02"><strong>Stream</strong> — clients call the daemon's OpenAI-compatible API. Shared
+      <li class="reveal" data-n="02"><strong>Stream</strong>, clients call the daemon's OpenAI-compatible API. Shared
         prefixes hit the cached KV blocks instead of re-running the model.</li>
-      <li class="reveal" data-n="03"><strong>Persist</strong> — <code>toki cache save</code> / <code>toki cache restore</code>
+      <li class="reveal" data-n="03"><strong>Persist</strong>, <code>toki cache save</code> / <code>toki cache restore</code>
         snapshot caches to disk; <code>toki cache stats</code> shows hits, misses, and savings.</li>
     </ol>
   </section>
@@ -122,9 +122,9 @@
       <div>
         <span class="toke-tag">Mascot</span>
         <h2>Meet toki.</h2>
-        <p>toki is the open-source mascot of Toki Recur — the bear who recurs. He wears the recycle
+        <p>toki is the open-source mascot of Toki Recur, the bear who recurs. He wears the recycle
           symbol because the whole product is one idea: <em>don't recompute what you've already read.</em>
-          Long system prompts, RAG corpora, agent tool definitions — all get computed once, then
+          Long system prompts, RAG corpora, agent tool definitions, all get computed once, then
           streamed from cache on every subsequent request.</p>
         <p>He's here to remind you that cache reuse is the boring superpower underneath every fast
           local model.</p>
@@ -325,23 +325,23 @@
       </div>
     </div>
     <p class="note reveal">Bigger and sparser is better: the 122B-A10B MoE tops every table
-      (realistic_mixed 89.7, summarization 95.8), and the 35B-A3B beats the dense 9B — the
+      (realistic_mixed 89.7, summarization 95.8), and the 35B-A3B beats the dense 9B, the
       more of each prompt's prefill that can be skipped, the larger the relative gain.
       <strong>Disclaimer:</strong> all scores are based on multiple benchmark runs on this hardware
-      (AMD Ryzen AI Halo) and depend on the hardware, environment, and model — the benchmark
+      (AMD Ryzen AI Halo) and depend on the hardware, environment, and model, the benchmark
       may score better or worse elsewhere.</p>
   </section>
 
   <section id="quickstart">
     <p class="overline reveal">Quick start</p>
     <h2 class="reveal">Install in 3 commands.</h2>
-    <p class="section-sub reveal">Nothing is preinstalled — you pull exactly what you want. Three commands to first chat:</p>
+    <p class="section-sub reveal">Nothing is preinstalled, you pull exactly what you want. Three commands to first chat:</p>
     <pre class="code reveal" data-copy><code><span class="k">pipx install tokirecur</span><span class="c">                    # one command, no deps</span>
 <span class="k">toki model install-llama</span><span class="c">                  # auto-detects ROCm / CUDA / Vulkan / Metal / CPU</span>
 <span class="k">toki model pull</span> Qwen/Qwen3-8B-GGUF --name qwen3-8b<span class="c">  # fetch a GGUF, register as "qwen3-8b"</span>
 <span class="k">toki model use</span> qwen3-8b<span class="c">                   # boots llama-server + daemon, wires your CLIs</span>
-<span class="k">toki tui</span><span class="c">                                      # full-screen chat — or: toki web</span></code></pre>
-    <p class="note">Runs on any x86_64 or arm64 Linux, macOS, or Windows box — with whatever GPU
+<span class="k">toki tui</span><span class="c">                                      # full-screen chat, or: toki web</span></code></pre>
+    <p class="note">Runs on any x86_64 or arm64 Linux, macOS, or Windows box, with whatever GPU
       backend your llama-server build has. Optional systemd/launchd daemon mode included.</p>
   </section>
 
@@ -375,7 +375,7 @@
         <img class="logo" src="/img/logo.png" alt="" width="30" height="30">
         toki<span class="wordmark-accent">recur</span>
       </a>
-      <p>KV cache reuse for LLM inference. Drop-in prefix caching on llama.cpp — no patches, no vendor lock-in.</p>
+      <p>KV cache reuse for LLM inference. Drop-in prefix caching on llama.cpp, no patches, no vendor lock-in.</p>
     </div>
     <div class="footer-col">
       <h4>Product</h4>

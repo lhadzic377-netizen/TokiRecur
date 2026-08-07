@@ -1,4 +1,4 @@
-"""Toki Recur website server — static site + anonymous wishlist counter.
+"""Toki Recur website server, static site + anonymous wishlist counter.
 
 Serves the static `site/` files and a single tiny API:
 
@@ -31,7 +31,7 @@ DATA_DIR = Path(os.environ.get("TOKI_WL_DATA_DIR", SITE_DIR / "data"))
 COUNT_FILE = DATA_DIR / "wishlist.json"
 
 # Crude in-memory spam brake: allow at most N toggles per minute per
-# client IP. No IPs are persisted — the counter is the only state.
+# client IP. No IPs are persisted, the counter is the only state.
 TOGGLE_RATE_PER_MINUTE = 10
 
 
