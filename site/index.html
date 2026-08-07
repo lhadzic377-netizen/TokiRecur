@@ -53,6 +53,14 @@
       <a class="btn ghost" href="#benchmarks">See measured results</a>
     </div>
 
+    <div class="wishlist reveal">
+      <button id="wishlist-btn" class="btn ghost btn-wishlist" type="button" aria-pressed="false" title="Mark this project as wanted">
+        <span class="wl-icon" aria-hidden="true">☆</span>
+        <span id="wishlist-label">Add to wishlist</span>
+      </button>
+      <span class="wishlist-count" id="wishlist-count" hidden></span>
+    </div>
+
     <div class="stats">
       <div class="stat reveal"><div class="num">51.5%</div><div class="label">time-to-first-token reduction vs. a fresh cache</div></div>
       <div class="stat reveal"><div class="num">90.0%</div><div class="label">cache hit rate on real agent workloads</div></div>

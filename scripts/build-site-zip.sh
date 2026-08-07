@@ -8,7 +8,7 @@
 #   toki-site/
 #     install.sh              # self-contained server installer (sudo ./install.sh)
 #     Caddyfile.template
-#     site/                   # index.html, style.css, app.js, favicon.svg, docs/
+#     site/                   # index.html, style.css, app.js, server.py, favicon.svg, docs/
 #
 # On the server laptop: unzip, then `sudo ./install.sh --domain ... --email ...`
 #
@@ -24,6 +24,8 @@ mkdir -p "$DEST/site/docs" "$DEST/site/img" "$REPO/dist"
 
 cp "$REPO/site/index.html" "$REPO/site/style.css" \
    "$REPO/site/app.js" "$REPO/site/favicon.png" "$DEST/site/"
+cp "$REPO/site/server.py" "$DEST/site/"
+mkdir -p "$DEST/site/data"
 mkdir -p "$DEST/site/img"
 cp "$REPO/site/img/"*.png "$DEST/site/img/"
 cp -r "$REPO/site/docs/"*.html "$REPO/site/docs/"*.css "$REPO/site/docs/"*.js \

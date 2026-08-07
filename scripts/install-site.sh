@@ -122,6 +122,44 @@ mkdir -p "$WWW_ROOT/docs"
 cp "$SITE_SRC/docs/"*.html "$SITE_SRC/docs/"*.css "$SITE_SRC/docs/"*.js "$WWW_ROOT/docs/"
 chown -R root:root "$WWW_ROOT"
 
+# ── 3b. Wishlist API (anonymous counter, single integer — no PII) ───
+log "Installing the wishlist API service (127.0.0.1:8891) ..."
+SITE_API="$SITE_ROOT/api"
+API_VENV="$SITE_ROOT/venv-site"
+mkdir -p "$SITE_API" "$SITE_API/data"
+cp "$SITE_SRC/server.py" "$SITE_API/server.py"
+if [[ ! -x "$API_VENV/bin/python" ]]; then
+  python3 -m venv "$API_VENV"
+  "$API_VENV/bin/pip" install --quiet fastapi "uvicorn[standard]"
+fi
+if ! id -u toki-site >/dev/null 2>&1; then
+  useradd --system --home "$SITE_API" --shell /usr/sbin/nologin toki-site
+fi
+chown -R toki-site:toki-site "$SITE_API" "$API_VENV"
+cat > /etc/systemd/system/toki-site-api.service <<UNIT
+[Unit]
+Description=Toki Recur wishlist API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=toki-site
+Group=toki-site
+WorkingDirectory=$SITE_API
+Environment=TOKI_WL_DATA_DIR=$SITE_API/data
+ExecStart=$API_VENV/bin/uvicorn server:app --host 127.0.0.1 --port 8891
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl daemon-reload
+systemctl enable toki-site-api
+systemctl start toki-site-api || warn_api=1
+
 # ── 4. Caddyfile ──────────────────────────────────────────────────────
 log "Writing /etc/caddy/Caddyfile ..."
 if [[ -f /etc/caddy/Caddyfile ]]; then
@@ -168,7 +206,11 @@ fi
 cat > "$SITE_ROOT/README" <<DOC
 Toki Recur site — installed $(date -u +%Y-%m-%dT%H:%MZ)
   Landing page:  $DOMAIN        -> $WWW_ROOT (Caddy)
+  Wishlist API:  $DOMAIN/api/*  -> 127.0.0.1:8891 (toki-site-api.service)
   Web chat:      $CHAT_DOMAIN   -> 127.0.0.1:$WEB_PORT (toki-web.service)
+
+The wishlist stores one anonymous integer ($SITE_API/data/wishlist.json).
+No emails, no visitor data — per-browser state lives in localStorage.
 
 Bring the live chat online (needs a model + GPU/CPU):
   sudo -u $TOKI_USER $VENV_DIR/bin/toki model install-llama
@@ -196,6 +238,9 @@ echo "  2. Forward TCP 80 + 443 to this machine if it's behind a router."
 echo "  3. Caddy already holds the certificates; first https visit takes ~30s."
 if [[ "${warn_chat:-0}" == "1" ]]; then
   echo "  4. NOTE: toki-web failed to start — see: journalctl -u toki-web"
+fi
+if [[ "${warn_api:-0}" == "1" ]]; then
+  echo "  4. NOTE: toki-site-api failed to start — see: journalctl -u toki-site-api"
 fi
 if [[ "$WITH_TOKI" == "1" ]]; then
   echo "  4. Optional: install a model for the live chat (see $SITE_ROOT/README)."

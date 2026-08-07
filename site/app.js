@@ -71,3 +71,61 @@ document.addEventListener("DOMContentLoaded", () => {
   );
   groups.forEach((el) => io.observe(el));
 });
+
+// ── wishlist ──────────────────────────────────────────────
+// State lives only in the visitor's browser (localStorage) — no
+// emails, no personal data, nothing stored server-side beyond the
+// anonymous running total (a single integer).
+
+const WL_KEY = "toki_wishlist";
+const btn = document.getElementById("wishlist-btn");
+const label = document.getElementById("wishlist-label");
+const countEl = document.getElementById("wishlist-count");
+
+function wlState() {
+  return localStorage.getItem(WL_KEY) === "1";
+}
+
+function wlSet(on) {
+  localStorage.setItem(WL_KEY, on ? "1" : "0");
+  btn.setAttribute("aria-pressed", String(on));
+  label.textContent = on ? "On the wishlist" : "Add to wishlist";
+  btn.querySelector(".wl-icon").textContent = on ? "★" : "☆";
+}
+
+async function wlFetch(url, opts = {}) {
+  try {
+    const r = await fetch(url, opts);
+    if (!r.ok) return null;
+    return await r.json();
+  } catch (e) {
+    return null;
+  }
+}
+
+async function wlSyncCount() {
+  const data = await wlFetch("/api/wishlist");
+  if (!data || typeof data.count !== "number") return;
+  countEl.hidden = false;
+  countEl.textContent =
+    data.count === 1 ? "1 on the wishlist" : `${data.count.toLocaleString()} on the wishlist`;
+}
+
+if (btn) {
+  wlSet(wlState());
+  wlSyncCount();
+  btn.addEventListener("click", async () => {
+    const on = !wlState();
+    wlSet(on);
+    const data = await wlFetch("/api/wishlist", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ delta: on ? 1 : -1 }),
+    });
+    if (data && typeof data.count === "number") {
+      countEl.hidden = false;
+      countEl.textContent =
+        data.count === 1 ? "1 on the wishlist" : `${data.count.toLocaleString()} on the wishlist`;
+    }
+  });
+}

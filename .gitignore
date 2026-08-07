@@ -11,6 +11,9 @@ dist/
 test-reports/*.json
 test-reports/*.html
 
+# Runtime counter state (single integer — regenerated on first toggle)
+site/data/
+
 # Local state / secrets
 *.log
 auth
