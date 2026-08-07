@@ -31,6 +31,10 @@ WEB_URLS: tuple[str, ...] = (
     "http://127.0.0.1:9119",   # hermes dashboard
 )
 
+# Windows-only flag; absent on POSIX where the agent branch detaches
+# via start_new_session instead.
+_NEW_CONSOLE = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
+
 
 def _model_line() -> str:
     try:
@@ -98,27 +102,94 @@ def run_cli_launcher() -> int:
         _launch_agent(app)
 
 
+def _active_spec():
+    """The active registry spec, or None when none is set."""
+    try:
+        from . import ctl
+
+        active = ctl.read_active()
+        if active:
+            return ctl.get_model(active)
+    except Exception:
+        return None
+    return None
+
+
+def _agent_argv(app: str, spec) -> list[str]:
+    """CLI args for an agent, mirroring the Textual launcher's plan."""
+    if not spec:
+        return []
+    if app == "opencode":
+        provider = f"tokirecur-{spec.name}"
+        return ["-m", f"{provider}/{spec.model_id}"]
+    if app == "openclaw":
+        return ["tui"]
+    if app == "hermes":
+        provider = f"tokirecur-{spec.name}"
+        return ["chat", "--tui", "--provider", provider, "-m", spec.model_id]
+    return []
+
+
+def _find_binary(app: str) -> str | None:
+    """Locate an agent executable, including Windows install dirs.
+
+    `shutil.which` handles PATH, but agents installed via `pipx`,
+    npm `-g`, or native installers often live outside it; probe the
+    usual user-local spots before giving up.
+    """
+    found = shutil.which(app)
+    if found:
+        return found
+    if os.name != "nt":
+        return None
+    exts = ("", ".exe", ".cmd", ".bat")
+    dirs = (
+        os.environ.get("APPDATA", "") + "/npm",
+        os.environ.get("LOCALAPPDATA", "") + "/Programs",
+        os.path.expanduser("~/.local/bin"),
+        os.path.expanduser("~/AppData/Roaming/npm"),
+    )
+    for d in dirs:
+        if not d:
+            continue
+        for ext in exts:
+            cand = os.path.join(d, app + ext)
+            if os.path.isfile(cand):
+                return cand
+    return None
+
+
 def _launch_agent(app: str) -> None:
-    binary = shutil.which(app)
+    binary = _find_binary(app)
     if not binary:
         print(f"not found in PATH: {app} — install it, or pick another entry.")
         return
-    try:
-        if os.name == "nt":
+    args = _agent_argv(app, _active_spec())
+    if os.name == "nt":
+        try:
+            if binary.lower().endswith((".cmd", ".bat")):
+                # .cmd/.bat wrappers (npm, pipx shims) need cmd.exe;
+                # CreateProcess cannot run them directly.
+                argv = ["cmd.exe", "/c", binary] + args
+            else:
+                argv = [binary] + args
             proc = subprocess.Popen(
-                [app],
+                argv,
                 stdin=subprocess.DEVNULL,
-                creationflags=subprocess.CREATE_NEW_CONSOLE,
+                creationflags=_NEW_CONSOLE,
             )
             print(f"launching {app} in a new console (pid {proc.pid}).")
-        else:
-            proc = subprocess.Popen(
-                [app],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
-            )
-            print(f"launching {app} in the background (pid {proc.pid}).")
+        except OSError as e:
+            print(f"failed to launch {app}: {e}")
+        return
+    try:
+        proc = subprocess.Popen(
+            [binary] + args,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        print(f"launching {app} in the background (pid {proc.pid}).")
     except OSError as e:
         print(f"failed to launch {app}: {e}")

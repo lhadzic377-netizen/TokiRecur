@@ -83,6 +83,83 @@ def test_missing_agent_warns(monkeypatch, quit_after, capsys):
     assert "not found in PATH: opencode" in capsys.readouterr().out
 
 
+def test_agent_argv_with_spec():
+    class S:
+        name = "qwen3"
+        model_id = "Qwen3-8B-GGUF"
+
+    spec = S()
+    assert clilauncher._agent_argv("opencode", spec) == ["-m", "tokirecur-qwen3/Qwen3-8B-GGUF"]
+    assert clilauncher._agent_argv("openclaw", spec) == ["tui"]
+    assert clilauncher._agent_argv("codex", spec) == []
+    assert clilauncher._agent_argv("hermes", spec) == [
+        "chat", "--tui", "--provider", "tokirecur-qwen3", "-m", "Qwen3-8B-GGUF",
+    ]
+
+
+def test_agent_argv_no_spec():
+    assert clilauncher._agent_argv("opencode", None) == []
+
+
+def test_find_binary_path(monkeypatch):
+    monkeypatch.setattr("shutil.which", lambda _: r"C:\tools\opencode.exe")
+    assert clilauncher._find_binary("opencode") == r"C:\tools\opencode.exe"
+
+
+def test_find_binary_windows_fallback(monkeypatch, tmp_path):
+    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setattr("shutil.which", lambda _: None)
+    npm = tmp_path / "npm"
+    npm.mkdir()
+    (npm / "codex.cmd").write_text("")
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    found = clilauncher._find_binary("codex")
+    assert found and found.endswith("codex.cmd")
+
+
+def test_agent_launch_cmd_wrapper(monkeypatch, capsys):
+    """npm/pipx .cmd shims must launch via cmd.exe, not CreateProcess."""
+    from tokirecur import clilauncher as cl
+    monkeypatch.setattr(cl.shutil, "which", lambda _: r"C:\npm\opencode.cmd")
+    monkeypatch.setattr(cl, "_active_spec", lambda: None)
+    monkeypatch.setattr(os, "name", "nt")
+    captured = {}
+
+    class FakeProc:
+        pid = 4242
+
+    def fake_popen(argv, **kw):
+        captured["argv"] = argv
+        captured["creationflags"] = kw.get("creationflags")
+        return FakeProc()
+
+    monkeypatch.setattr(cl.subprocess, "Popen", fake_popen)
+    cl._launch_agent("opencode")
+    assert captured["argv"] == ["cmd.exe", "/c", r"C:\npm\opencode.cmd"]
+    assert "pid 4242" in capsys.readouterr().out
+
+
+def test_agent_launch_exe(monkeypatch, capsys):
+    from tokirecur import clilauncher as cl
+    monkeypatch.setattr(cl.shutil, "which", lambda _: r"C:\bin\codex.exe")
+    monkeypatch.setattr(cl, "_active_spec", lambda: None)
+    monkeypatch.setattr(os, "name", "nt")
+    captured = {}
+
+    class FakeProc:
+        pid = 7
+
+    def fake_popen(argv, **kw):
+        captured["argv"] = argv
+        return FakeProc()
+
+    monkeypatch.setattr(cl.subprocess, "Popen", fake_popen)
+    cl._launch_agent("codex")
+    assert captured["argv"] == [r"C:\bin\codex.exe"]
+    assert "pid 7" in capsys.readouterr().out
+
+
 def test_windows_routing_in_selector(monkeypatch):
     """selector.run() on Windows must route to the CLI launcher."""
     from tokirecur import selector

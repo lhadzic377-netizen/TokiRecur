@@ -1069,6 +1069,42 @@ def _resolve_binary(spec: ModelSpec) -> str:
     return "llama-server"
 
 
+def _default_ngl() -> int:
+    """Best-effort GPU offload layers for llama-server.
+
+    ``TOKI_NGL`` wins; otherwise 99 when a GPU backend looks available
+    (NVIDIA CUDA, AMD ROCm/Vulkan, or macOS Metal — llama.cpp Metal
+    builds also run fine on CPU-only Macs), else 0. A GPU build with
+    ``-ngl 0`` silently runs everything on CPU, which is how models end
+    up "running on the Intel iGPU/CPU" with a CUDA build installed.
+    """
+    raw = os.environ.get("TOKI_NGL")
+    if raw is not None:
+        try:
+            return int(raw)
+        except ValueError:
+            pass
+    if sys.platform == "darwin":
+        return 99
+    if os.name == "nt":
+        if shutil.which("nvidia-smi") or os.environ.get("CUDA_PATH"):
+            return 99
+        if shutil.which("hipconfig") or os.path.exists(
+            "C:/Program Files/AMD/ROCm"
+        ):
+            return 99
+        if shutil.which("vulkaninfo"):
+            return 99
+        return 0
+    if shutil.which("hipconfig") or os.path.exists("/opt/rocm"):
+        return 99
+    if shutil.which("vulkaninfo") or os.path.exists(
+        "/usr/lib/x86_64-linux-gnu/libvulkan.so.1"
+    ):
+        return 99
+    return 0
+
+
 def _llama_args(spec: ModelSpec, ctx_override: int | None = None) -> list[str]:
     if not Path(spec.gguf).exists():
         raise FileNotFoundError(f"model file not found: {spec.gguf}")
@@ -1082,6 +1118,10 @@ def _llama_args(spec: ModelSpec, ctx_override: int | None = None) -> list[str]:
         "--parallel", str(spec.parallel),
         "-lv", "3",
     ]
+    # Offload to the GPU when one is present. Registry `extra_args` may
+    # already pin `-ngl` (or the long form); never duplicate it.
+    if not any(a in ("-ngl", "--n-gpu-layers") for a in spec.extra_args):
+        args += ["-ngl", str(_default_ngl())]
     if spec.kv != "f16":
         args += ["--cache-type-k", spec.kv, "--cache-type-v", spec.kv]
     if spec.reasoning == "off":

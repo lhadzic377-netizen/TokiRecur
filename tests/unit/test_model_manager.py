@@ -729,6 +729,37 @@ def test_llama_args_appends_reasoning_on_for_on_spec(seeded_env):
     assert args[args.index("--reasoning") + 1] == "on"
 
 
+def _ngl_spec(seeded_env):
+    gguf = seeded_env / "9b.gguf"
+    gguf.write_bytes(b"dummy")
+    raw = dict(ctl.load_registry()[0].raw)
+    raw["gguf"] = str(gguf)
+    return ctl.ModelSpec(raw=raw, **raw)
+
+
+def test_llama_args_ngl_honors_env(seeded_env, monkeypatch):
+    """TOKI_NGL wins over auto-detection."""
+    monkeypatch.setenv("TOKI_NGL", "17")
+    args = ctl._llama_args(_ngl_spec(seeded_env))
+    assert "-ngl" in args
+    assert args[args.index("-ngl") + 1] == "17"
+
+
+def test_llama_args_ngl_zero_runs_cpu(seeded_env, monkeypatch):
+    monkeypatch.setenv("TOKI_NGL", "0")
+    args = ctl._llama_args(_ngl_spec(seeded_env))
+    assert args[args.index("-ngl") + 1] == "0"
+
+
+def test_llama_args_ngl_skipped_when_pinned_in_extra_args(seeded_env):
+    """Registry `extra_args` already pinning -ngl is not duplicated."""
+    spec = _ngl_spec(seeded_env)
+    spec.extra_args = ["-ngl", "12"]
+    args = ctl._llama_args(spec)
+    assert args.count("-ngl") == 1
+    assert args[args.index("-ngl") + 1] == "12"
+
+
 # ── Registry repair (legacy pulled entries) ────────────────────────
 
 
