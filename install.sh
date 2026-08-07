@@ -2,13 +2,12 @@
 #
 # Toki Recur installer — two modes in one script:
 #
-#   Simple CLI install (normal user, from a git checkout):
+#   Full user install (normal user, from a git checkout):
 #     git clone https://github.com/lhadzic377-netizen/TokiRecur.git
 #     cd TokiRecur && ./install.sh
-#   Installs the `toki` CLI with pipx (or a venv fallback). No tokens
-#   needed — the clone already authenticated you. The embeddings extra
-#   (sentence-transformers + torch, used by the similarity index) is
-#   included by default; drop it with TOKI_EXTRAS= ./install.sh
+#   Installs the `toki` CLI with pipx (or a venv fallback) and fetches
+#   the llama-server binary. No tokens needed — the clone already
+#   authenticated you. Re-runnable.
 #
 #   System-daemon install (root, Linux systemd / macOS launchd):
 #     sudo ./install.sh          # from a checkout
@@ -16,10 +15,16 @@
 #   Bootstraps the full stack: /opt/toki-recur venv + package,
 #   llama-server binary, dedicated user, env file, service unit.
 #
+# Switches (all optional):
+#   TOKI_EXTRAS=         install without extras (faster, no torch)
+#   TOKI_EXTRAS=dev      install dev/test extras instead
+#   TOKI_SKIP_LLAMA=1    skip the llama-server download
+#   TOKI_VENV_DIR=<dir>  install into a venv at <dir> instead of pipx
+#
 set -euo pipefail
 
 if [[ $EUID -ne 0 ]]; then
-    # ── simple CLI mode ──────────────────────────────────────────────
+    # ── full user install ───────────────────────────────────────────
     cd "$(dirname "${BASH_SOURCE[0]}")"
 
     PYTHON="${PYTHON:-$(command -v python3 || command -v python)}"
@@ -50,17 +55,34 @@ if [[ $EUID -ne 0 ]]; then
     fi
 
     TOKI="${TOKI:-$(command -v toki || echo "$HOME/.local/bin/toki")}"
-    if [[ -x "$TOKI" ]]; then
-      echo ""
-      echo "Installed. Next steps:"
-      echo "  $TOKI model install-llama               # fetch the llama-server binary"
-      echo "  $TOKI model pull Qwen/Qwen3-8B-GGUF --name qwen3-8b"
-      echo "  $TOKI model use qwen3-8b && $TOKI tui   # first cached chat"
-    else
+    if [[ ! -x "$TOKI" ]]; then
       echo "Install finished, but the 'toki' binary was not found on PATH." >&2
       echo "Add $HOME/.local/bin to PATH, or re-run with TOKI_VENV_DIR=<dir>." >&2
       exit 1
     fi
+
+    if [[ "${TOKI_SKIP_LLAMA:-0}" != "1" ]]; then
+      echo ""
+      echo "Fetching llama-server for this machine ($TOKI model install-llama)…"
+      "$TOKI" model install-llama
+      if [[ $? -ne 0 ]]; then
+        echo "error: toki model install-llama failed. Fix the error above, or" >&2
+        echo "re-run with TOKI_SKIP_LLAMA=1 and retry later with:" >&2
+        echo "  $TOKI model install-llama" >&2
+        exit 1
+      fi
+    fi
+
+    echo ""
+    echo "Installed."
+    echo "  toki CLI:        $TOKI"
+    if [[ "${TOKI_SKIP_LLAMA:-0}" != "1" && -x "$HOME/.local/state/tokirecur/bin/llama-server" ]]; then
+      echo "  llama-server:    $HOME/.local/state/tokirecur/bin/llama-server"
+    fi
+    echo ""
+    echo "Next steps:"
+    echo "  $TOKI model pull Qwen/Qwen3-8B-GGUF --name qwen3-8b"
+    echo "  $TOKI model use qwen3-8b && $TOKI tui   # first cached chat"
     exit 0
 fi
 

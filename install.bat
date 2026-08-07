@@ -1,69 +1,104 @@
 @echo off
 rem
-rem Toki Recur installer (Windows) - run from a git checkout.
+rem Toki Recur installer (Windows) - full setup from a git checkout.
 rem
 rem   git clone https://github.com/lhadzic377-netizen/TokiRecur.git
 rem   cd TokiRecur
 rem   install.bat
 rem
-rem Installs the `toki` CLI with pipx (auto-installs pipx first if
-rem missing). No tokens needed - the clone already authenticated you.
+rem Does everything:
+rem   1. python 3.10+ check
+rem   2. venv at %%LOCALAPPDATA%%\tokirecur\venv + package (embeddings extra)
+rem   3. toki model install-llama (official llama-server.exe for this machine)
+rem   4. idempotent user-PATH hook so `toki` works from any terminal
+rem   5. verification: toki --version + llama-server --version
 rem
-rem Extras: TOKI_EXTRAS unset  -> embeddings (sentence-transformers+torch)
-rem         TOKI_EXTRAS set     -> those extras (e.g. "dev")
-rem         TOKI_EXTRAS empty   -> no extras (fast install)
-rem         TOKI_VENV_DIR set   -> install into that venv instead of pipx
+rem No tokens needed - the clone already authenticated you. Re-runnable.
+rem
+rem Switches (all optional):
+rem   TOKI_EXTRAS=         install without extras (faster, no torch)
+rem   TOKI_EXTRAS=dev      install dev/test extras instead
+rem   TOKI_SKIP_LLAMA=1    skip the llama-server download
+rem   TOKI_BASE=<dir>      install location instead of %%LOCALAPPDATA%%\tokirecur
 
-setlocal
+setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
+rem ── 1. python check ─────────────────────────────────────────────
 where python >nul 2>nul
 if errorlevel 1 (
   echo error: python not found on PATH. Install Python 3.10+ and tick "Add to PATH".
   exit /b 1
 )
 
-if defined TOKI_VENV_DIR (
-  echo Installing tokirecur into %TOKI_VENV_DIR% ...
-  python -m venv "%TOKI_VENV_DIR%"
-  if errorlevel 1 exit /b 1
-  "%TOKI_VENV_DIR%\Scripts\pip" install --upgrade pip >nul
-  if defined TOKI_EXTRAS (
-    "%TOKI_VENV_DIR%\Scripts\pip" install ".[%TOKI_EXTRAS%]"
-  ) else (
-    "%TOKI_VENV_DIR%\Scripts\pip" install ".[embeddings]"
-  )
-  if errorlevel 1 exit /b 1
-  echo.
-  echo Done. toki is at "%TOKI_VENV_DIR%\Scripts\toki.exe"
-  goto :next
+rem ── 2. venv + package ───────────────────────────────────────────
+if defined TOKI_BASE (set "BASE=%TOKI_BASE%") else (set "BASE=%LOCALAPPDATA%\tokirecur")
+set "VENV=%BASE%\venv"
+set "PIP=%VENV%\Scripts\pip.exe"
+set "TOKI=%VENV%\Scripts\toki.exe"
+
+if not exist "%VENV%\Scripts\python.exe" (
+  echo [+] creating venv at %VENV%
+  python -m venv "%VENV%"
+  if errorlevel 1 (echo error: venv creation failed & exit /b 1)
+)
+if not exist "%PIP%" (
+  echo error: venv missing pip at %PIP% & exit /b 1
 )
 
-where pipx >nul 2>nul
-if errorlevel 1 (
-  echo pipx not found - installing it to the user site first...
-  python -m pip install --user pipx
-  if errorlevel 1 exit /b 1
-)
-
+set "EXTRA=.[embeddings]"
 if defined TOKI_EXTRAS (
-  if "%TOKI_EXTRAS%"=="" (
-    set "EXTRA=."
-  ) else (
-    set "EXTRA=.[%TOKI_EXTRAS%]"
-  )
-) else (
-  set "EXTRA=.[embeddings]"
+  if not "%TOKI_EXTRAS%"=="" set "EXTRA=.[%TOKI_EXTRAS%]"
+  if "%TOKI_EXTRAS%"=="" set "EXTRA=."
 )
 
-echo Installing tokirecur (%EXTRA%)...
-python -m pipx install "%EXTRA%"
-if errorlevel 1 exit /b 1
+echo [+] installing tokirecur (%EXTRA%) into the venv...
+"%PIP%" install --upgrade pip >nul
+"%PIP%" install "%EXTRA%"
+if errorlevel 1 (echo error: package install failed & exit /b 1)
+if not exist "%TOKI%" (
+  echo error: toki.exe missing after install at %TOKI% & exit /b 1
+)
+
+rem ── 3. llama-server ─────────────────────────────────────────────
+if "%TOKI_SKIP_LLAMA%"=="1" goto :pathhook
+echo [+] fetching llama-server for this machine (toki model install-llama)...
+"%TOKI%" model install-llama
+if errorlevel 1 (
+  echo error: toki model install-llama failed. Fix the error above, or re-run
+  echo with TOKI_SKIP_LLAMA=1 and retry later with:  toki model install-llama
+  exit /b 1
+)
+
+rem ── 4. user-PATH hook (idempotent) ──────────────────────────────
+:pathhook
+set "SCRIPTS=%VENV%\Scripts"
+echo %PATH% | findstr /i /c:"%SCRIPTS%" >nul
+if errorlevel 1 (
+  for /f "tokens=2*" %%a in ('reg query "HKCU\Environment" /v PATH 2^>nul') do set "USERPATH=%%b"
+  echo [+] adding %SCRIPTS% to your user PATH
+  setx PATH "%SCRIPTS%;!USERPATH!" >nul
+)
+
+rem ── 5. verification ─────────────────────────────────────────────
+echo [+] verifying...
+"%TOKI%" --version
+set "LLAMA=%USERPROFILE%\.local\state\tokirecur\bin\llama-server.exe"
+if exist "%LLAMA%" (
+  "%LLAMA%" --version
+) else (
+  if "%TOKI_SKIP_LLAMA%"=="1" (
+    echo     llama-server skipped (TOKI_SKIP_LLAMA=1). Install later: toki model install-llama
+  ) else (
+    echo warning: llama-server not found at %LLAMA%
+  )
+)
 
 echo.
-echo Done. Next steps:
-echo   toki model install-llama
+echo Done.
+echo   toki CLI:        %TOKI%
+echo   llama-server:    %LLAMA%
+echo.
+echo Next steps (open a NEW terminal so PATH picks up toki):
 echo   toki model pull Qwen/Qwen3-8B-GGUF --name qwen3-8b
 echo   toki model use qwen3-8b ^&^& toki tui
-
-:next

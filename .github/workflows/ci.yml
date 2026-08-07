@@ -155,15 +155,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # The clone-and-run path from the README: TOKI_EXTRAS= skips the
-      # embeddings extra (torch) so CI stays fast while still exercising
-      # pipx auto-install, the local-checkout install, and PATH detection.
-      - name: Run the simple installer (no embeddings)
+      # embeddings extra (torch) and TOKI_SKIP_LLAMA=1 skips the llama-server
+      # download (covered by the install-llama matrix) so CI stays fast
+      # while still exercising pipx/venv install + PATH detection.
+      - name: Run the installer (CLI only)
         shell: bash
         run: |
           if [ "$RUNNER_OS" = "Windows" ]; then
-            TOKI_EXTRAS= cmd //c install.bat
+            TOKI_EXTRAS= TOKI_SKIP_LLAMA=1 cmd //c install.bat
           else
-            TOKI_EXTRAS= ./install.sh
+            TOKI_EXTRAS= TOKI_SKIP_LLAMA=1 ./install.sh
           fi
       - name: Verify the toki CLI
         shell: bash
