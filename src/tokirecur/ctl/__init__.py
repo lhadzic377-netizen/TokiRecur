@@ -638,6 +638,52 @@ def _gguf_sizes(api: Any, repo_id: str, files: list[str]) -> dict[str, int]:
     return {i.path: i.size for i in infos if getattr(i, "size", None)}
 
 
+_GGUF_SPLIT_RE = re.compile(
+    r"^(?P<base>.+)-(?P<idx>\d{3,5})-of-(?P<total>\d{3,5})\.gguf$"
+)
+
+
+def _gguf_split_siblings(filename: str) -> list[str] | None:
+    """All sibling parts of a multi-file GGUF split, or None if not split.
+
+    e.g. ``UD-Q4_K_M/Qwen3.5-122B-A10B-UD-Q4_K_M-00001-of-00003.gguf``
+    returns all three parts in numeric order; non-split paths return None.
+    The split pattern is the upstream llama.cpp convention:
+    ``<name>-<NNNN>-of-<NNNN>.gguf`` (3-5 digit indices, preserved).
+    """
+    m = _GGUF_SPLIT_RE.match(filename)
+    if not m:
+        return None
+    base = m.group("base")
+    idx = m.group("idx")
+    total = m.group("total")
+    idx_w = len(idx)
+    total_w = len(total)
+    n = int(total)
+    total_int = int(total)
+    return [
+        f"{base}-{i:0{idx_w}d}-of-{total_int:0{total_w}d}.gguf"
+        for i in range(1, n + 1)
+    ]
+
+
+def _expand_gguf_patterns(filename: str) -> list[str]:
+    """``allow_patterns`` for huggingface_hub covering ``filename`` and, if
+    it is part of a multi-file GGUF split, every sibling part as well.
+
+    Hugging Face splits (the ``-NNNN-of-NNNN.gguf`` convention used by
+    llama.cpp) require *every* part on disk: llama-server loads part 1,
+    dereferences parts 2..N, and fails with
+    ``failed to open GGUF file ... (No such file or directory)`` if any
+    is missing. We therefore download all siblings, not just the one the
+    user picked.
+    """
+    siblings = _gguf_split_siblings(filename)
+    if siblings is None:
+        return [f"*{filename}"]
+    return [f"*{p}" for p in siblings]
+
+
 def pull_model(
     repo_id: str,
     name: str | None = None,
@@ -727,7 +773,7 @@ def pull_model(
             os.environ["HF_ENDPOINT"] = endpoint
         snapshot_download(
             repo_id,
-            allow_patterns=[f"*{filename}"],
+            allow_patterns=_expand_gguf_patterns(filename),
             local_dir=str(local_dir),
             resume_download=True,
         )
@@ -1412,6 +1458,12 @@ def write_codex_config(
             # /v1/responses shim maps the Responses API onto the chat
             # pipeline.
             "wire_api": "responses",
+            # env_key tells codex which environment variable carries the
+            # bearer key — without it codex falls back to OPENAI_API_KEY
+            # and sends no Authorization header. The env map below only
+            # declares the variable name; codex requires the real var in
+            # its process environment (launcher injection, or exported).
+            "env_key": "TOKI_AUTH_TOKEN",
             "env": {"TOKI_AUTH_TOKEN": DEFAULT_AUTH},
         }
 

@@ -362,6 +362,62 @@ def test_recommend_quant_prefers_q4_k_m():
     assert ctl.recommend_quant(files) == "y-Q4_K_M.gguf"
     assert ctl.recommend_quant(["a-BF16.gguf"]) == "a-BF16.gguf"
 
+
+def test_gguf_split_siblings_returns_all_parts_in_order():
+    """Split-GGUF detection must list every sibling 1..N in numeric order."""
+    first = "UD-Q4_K_M/Qwen3.5-122B-A10B-UD-Q4_K_M-00001-of-00003.gguf"
+    assert ctl._gguf_split_siblings(first) == [
+        "UD-Q4_K_M/Qwen3.5-122B-A10B-UD-Q4_K_M-00001-of-00003.gguf",
+        "UD-Q4_K_M/Qwen3.5-122B-A10B-UD-Q4_K_M-00002-of-00003.gguf",
+        "UD-Q4_K_M/Qwen3.5-122B-A10B-UD-Q4_K_M-00003-of-00003.gguf",
+    ]
+    middle = "UD-Q4_K_M/Qwen3.5-122B-A10B-UD-Q4_K_M-00002-of-00003.gguf"
+    assert ctl._gguf_split_siblings(middle) == ctl._gguf_split_siblings(first)
+
+
+def test_gguf_split_siblings_none_for_non_split():
+    """Standalone GGUFs must not be detected as a split."""
+    assert ctl._gguf_split_siblings("model-Q4_K_M.gguf") is None
+    assert ctl._gguf_split_siblings("UD-Q4_K_M/Qwen3.5-122B-A10B-Q4_K_M.gguf") is None
+    # bad indices → not a split (the regex requires exactly 4-digit -NNNN-of-NNNN)
+    assert ctl._gguf_split_siblings("model-1-of-3.gguf") is None
+    assert ctl._gguf_split_siblings("model-00001-of-00003.bin") is None
+
+
+def test_expand_gguf_patterns_includes_all_siblings(env, hf):
+    """Picking one shard of a split must pull every sibling — otherwise
+    llama-server fails to load the model with
+    'failed to open GGUF file ... (No such file or directory)'."""
+    hf["repo_files"] = [
+        "UD-Q4_K_M/Qwen3.5-122B-A10B-UD-Q4_K_M-00001-of-00003.gguf",
+        "UD-Q4_K_M/Qwen3.5-122B-A10B-UD-Q4_K_M-00002-of-00003.gguf",
+        "UD-Q4_K_M/Qwen3.5-122B-A10B-UD-Q4_K_M-00003-of-00003.gguf",
+    ]
+    hf["sizes"] = {
+        "UD-Q4_K_M/Qwen3.5-122B-A10B-UD-Q4_K_M-00001-of-00003.gguf": 10_000_000,
+        "UD-Q4_K_M/Qwen3.5-122B-A10B-UD-Q4_K_M-00002-of-00003.gguf": 50_000_000_000,
+        "UD-Q4_K_M/Qwen3.5-122B-A10B-UD-Q4_K_M-00003-of-00003.gguf": 26_000_000_000,
+    }
+    # Caller picks the small first part — that's what users currently do.
+    picked = []
+    def pick(files):
+        picked.append(list(files))
+        return "UD-Q4_K_M/Qwen3.5-122B-A10B-UD-Q4_K_M-00001-of-00003.gguf"
+
+    ctl.pull_model("unsloth/Qwen3.5-122B-A10B-MTP-GGUF", "qwen122", choose_file=pick)
+
+    # All three patterns must have been requested from huggingface_hub.
+    patterns = hf["downloads"][0][1]
+    assert patterns == [
+        "*UD-Q4_K_M/Qwen3.5-122B-A10B-UD-Q4_K_M-00001-of-00003.gguf",
+        "*UD-Q4_K_M/Qwen3.5-122B-A10B-UD-Q4_K_M-00002-of-00003.gguf",
+        "*UD-Q4_K_M/Qwen3.5-122B-A10B-UD-Q4_K_M-00003-of-00003.gguf",
+    ]
+    # gguf points at the first part (the entry-point llama-server loads),
+    # not some random middle shard.
+    spec = ctl.get_model("qwen122")
+    assert spec.gguf.endswith("00001-of-00003.gguf")
+
 def test_cli_picker_interactive_and_eof_fallback():
     import click
     from click.testing import CliRunner
