@@ -575,6 +575,8 @@ footer {
 }
 
 .footer-bottom .accent { color: var(--fg); }
+.footer-bottom a { color: var(--dim); text-decoration: none; }
+.footer-bottom a:hover { color: var(--fg); text-decoration: underline; }
 
 /* ── animations ─────────────────────────────────────────── */
 
