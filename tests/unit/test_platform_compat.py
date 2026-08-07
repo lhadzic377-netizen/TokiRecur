@@ -7,6 +7,7 @@ Windows (process signalling, port->pid lookup, browser opening).
 from __future__ import annotations
 
 import signal
+import subprocess
 from types import SimpleNamespace
 
 from tokirecur import ctl, lifecycle, selector
@@ -37,6 +38,27 @@ def test_signal_proc_falls_back_to_kill_without_killpg(monkeypatch):
     monkeypatch.setattr(ctl.os, "kill", lambda pid, sig: seen.update(pid=pid, sig=sig))
     ctl._signal_proc(123, signal.SIGTERM)
     assert seen == {"pid": 123, "sig": signal.SIGTERM}
+
+
+def test_detach_kwargs_windows_uses_new_process_group(monkeypatch):
+    """start_new_session is a no-op on Windows, so spawned services must
+    get CREATE_NEW_PROCESS_GROUP instead — otherwise Ctrl+C in the
+    launching console kills llama-server/daemon with it (reported as
+    "exited during startup")."""
+    monkeypatch.setattr(ctl.os, "name", "nt")
+    if not hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
+        monkeypatch.setattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200, raising=False)
+    kw = ctl._detach_kwargs()
+    assert kw == {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+
+
+def test_detach_kwargs_posix_uses_start_new_session(monkeypatch):
+    monkeypatch.setattr(ctl.os, "name", "posix")
+    monkeypatch.setattr(ctl, "_DETACH", True)
+    assert ctl._detach_kwargs() == {"start_new_session": True}
+    monkeypatch.setattr(ctl, "_DETACH", False)
+    assert ctl._detach_kwargs() == {"start_new_session": False}
+
 
 
 def test_signal_proc_falls_back_to_kill_when_killpg_raises(monkeypatch):

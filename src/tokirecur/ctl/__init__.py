@@ -1061,6 +1061,24 @@ _UNDER_SYSTEMD = bool(os.environ.get("INVOCATION_ID"))
 _DETACH = not _UNDER_SYSTEMD
 
 
+def _detach_kwargs() -> dict[str, Any]:
+    """Popen kwargs that detach a spawned service from the launcher.
+
+    ``start_new_session`` (POSIX) breaks the child out of the process
+    group so Ctrl+C in the launching console can't kill the model
+    stack. On Windows it is a silent no-op: the child stays in the
+    console's process group and receives CTRL_C_EVENT with the
+    launcher — which shut the daemon down cleanly while the launch
+    thread still waited on it (reported as "exited during startup").
+    CREATE_NEW_PROCESS_GROUP is the Windows equivalent: the child no
+    longer receives console Ctrl+C events (stopping still works via
+    the pid, which is a hard TerminateProcess on Windows).
+    """
+    if os.name == "nt":
+        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    return {"start_new_session": _DETACH}
+
+
 def _log_tail(path: Path, n: int = 40) -> str:
     """Last ``n`` lines of a log file, for surfacing start failures."""
     try:
@@ -1136,7 +1154,7 @@ def start_model(spec: ModelSpec, wait: bool = True) -> None:
             stdout=log,
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
-            start_new_session=_DETACH,
+            **_detach_kwargs(),
             env={**os.environ, **spec.env} if spec.env else None,
         )
         (state / "llama.pid").write_text(str(proc.pid))
@@ -1174,7 +1192,7 @@ def start_model(spec: ModelSpec, wait: bool = True) -> None:
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
             env=env,
-            start_new_session=_DETACH,
+            **_detach_kwargs(),
         )
         (state / "daemon.pid").write_text(str(proc.pid))
         logger.info("%s: daemon started (pid=%d)", spec.name, proc.pid)
