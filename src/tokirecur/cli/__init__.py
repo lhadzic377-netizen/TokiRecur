@@ -1062,6 +1062,30 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
     # build (e.g. ROCm on arm64).
     patterns = requested_patterns or patterns
 
+    if backend == "cuda" and os_name == "windows":
+        from ..diagnose import (
+            CUDA_12_WINDOWS_DRIVER,
+            cuda_driver_verdict,
+            driver_version,
+        )
+
+        too_old, prefer_cuda12 = cuda_driver_verdict(driver_version())
+        if too_old:
+            click.echo(
+                "warning: NVIDIA driver is older than the "
+                f"{CUDA_12_WINDOWS_DRIVER[0]}.{CUDA_12_WINDOWS_DRIVER[1]} "
+                "floor for CUDA 12.4+ llama.cpp builds — this binary will "
+                "fail to load with 'CUDA driver version is insufficient'. "
+                "Update the NVIDIA driver first, then re-run this install.",
+                err=True,
+            )
+        if prefer_cuda12:
+            # Drivers below the 12.8/13.x floor run the CUDA 12.4 build
+            # fine; prefer that asset so installs don't fail at load time.
+            cuda12 = [p for p in patterns if "12.4" in p[1]]
+            if cuda12:
+                patterns = cuda12 + [p for p in patterns if p not in cuda12]
+
     state_dir = Path(os.environ.get(
         "TOKI_STATE_DIR", str(Path.home() / ".local" / "state" / "tokirecur"),
     ))

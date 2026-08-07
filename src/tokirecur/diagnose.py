@@ -20,6 +20,13 @@ import sys
 
 from . import ctl
 
+# Windows NVIDIA driver floors for llama.cpp CUDA builds: 12.4 needs
+# 551.61+, and 12.8/13.x-era builds need 570+ (13.x officially wants
+# ~590-610, but NVIDIA stopped publishing Windows minimums for 13.0+,
+# so 570 is the conservative cut for preferring the 12.4 asset).
+CUDA_12_WINDOWS_DRIVER = (551, 61)
+CUDA_13_WINDOWS_DRIVER = (570, 0)
+
 
 def _run(argv: list[str], timeout: float = 5.0) -> str | None:
     try:
@@ -29,6 +36,35 @@ def _run(argv: list[str], timeout: float = 5.0) -> str | None:
         return out.stdout.strip() if out.returncode == 0 else None
     except (OSError, subprocess.SubprocessError):
         return None
+
+
+def driver_version() -> tuple[int, ...] | None:
+    """Installed NVIDIA driver as a comparable tuple (e.g. (551, 61))."""
+    nvidia = shutil.which("nvidia-smi")
+    if not nvidia:
+        return None
+    out = _run([nvidia, "--query-gpu=driver_version", "--format=csv,noheader"])
+    if not out:
+        return None
+    parts: list[int] = []
+    for chunk in out.splitlines()[0].strip().split("."):
+        try:
+            parts.append(int(chunk))
+        except ValueError:
+            break
+    return tuple(parts) if parts else None
+
+
+def cuda_driver_verdict(driver: tuple[int, ...] | None) -> tuple[bool, bool]:
+    """(too_old_for_any_cuda_build, prefer_cuda12_asset) for a driver tuple.
+
+    ``too_old`` means the driver is below the CUDA 12.4 floor, so no
+    CUDA llama.cpp build will load at all. ``prefer_cuda12`` means the
+    driver can run the 12.4 build but not newer (12.8/13.x) builds.
+    """
+    if driver is None:
+        return False, False
+    return driver < CUDA_12_WINDOWS_DRIVER, driver < CUDA_13_WINDOWS_DRIVER
 
 
 def gpu_hardware() -> dict[str, str | None]:
@@ -159,6 +195,15 @@ def run() -> str:
         lines.append("gpu: " + " · ".join(bits))
     else:
         lines.append("gpu: none detected (CPU-only machine?)")
+    if hw["backend"] == "CUDA":
+        too_old, _ = cuda_driver_verdict(driver_version())
+        if too_old:
+            lines.append(
+                "gpu note: NVIDIA driver is older than the "
+                f"{CUDA_12_WINDOWS_DRIVER[0]}.{CUDA_12_WINDOWS_DRIVER[1]} floor "
+                "for CUDA 12.4+ llama.cpp builds — update the NVIDIA driver, "
+                "then run: toki model install-llama --backend cuda --name <model>"
+            )
 
     builds = installed_build()
     lines.append(f"llama-server (state bin): {builds['state_bin'] or 'not installed'}")

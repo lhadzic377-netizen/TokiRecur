@@ -114,6 +114,56 @@ def test_gpu_hardware_none(monkeypatch):
     assert hw["backend"] is None
 
 
+def test_driver_version_parses(monkeypatch):
+    monkeypatch.setattr(shutil, "which", lambda _: "/usr/bin/nvidia-smi")
+    monkeypatch.setattr(diagnose, "_run", lambda argv, timeout=5.0: "461.40")
+    assert diagnose.driver_version() == (461, 40)
+
+
+def test_driver_version_none_when_missing(monkeypatch):
+    monkeypatch.setattr(shutil, "which", lambda _: None)
+    assert diagnose.driver_version() is None
+
+
+def test_driver_version_none_on_query_failure(monkeypatch):
+    monkeypatch.setattr(shutil, "which", lambda _: "/usr/bin/nvidia-smi")
+    monkeypatch.setattr(diagnose, "_run", lambda argv, timeout=5.0: None)
+    assert diagnose.driver_version() is None
+
+
+@pytest.mark.parametrize(
+    "driver,expected",
+    [
+        ((461, 40), (True, True)),
+        ((551, 60), (True, True)),
+        ((551, 61), (False, True)),
+        ((569, 99), (False, True)),
+        ((570, 0), (False, False)),
+        ((610, 0), (False, False)),
+        (None, (False, False)),
+    ],
+)
+def test_cuda_driver_verdict(driver, expected):
+    assert diagnose.cuda_driver_verdict(driver) == expected
+
+
+def test_doctor_notes_old_driver(monkeypatch):
+    monkeypatch.setattr(diagnose, "gpu_hardware", lambda: {
+        "backend": "CUDA", "name": "GTX 1650", "vram": "4096 MiB",
+        "driver": "461.40",
+    })
+    monkeypatch.setattr(diagnose, "driver_version", lambda: (461, 40))
+    monkeypatch.setattr(
+        diagnose, "installed_build",
+        lambda: {"state_bin": "C:/bin/llama-server.exe", "registry": []},
+    )
+    monkeypatch.setattr(diagnose, "_active_spec", lambda: None)
+    report = diagnose.run()
+    assert "gpu note:" in report
+    assert "551.61" in report
+    assert "install-llama --backend cuda" in report
+
+
 def test_hint_no_gpu_returns_empty(monkeypatch):
     monkeypatch.setattr(diagnose, "gpu_hardware", lambda: {
         "backend": None, "name": None, "vram": None, "driver": None,
