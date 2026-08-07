@@ -227,11 +227,19 @@ def _gateway_up() -> bool:
 
 
 def run() -> int:
-    """Open the Ollama-style launcher and run the chosen client.
+    """Open the launcher and run the chosen client.
 
-    Delegates to :func:`tokirecur.tui.launcher.run`, which requires an
-    interactive terminal. Returns the process exit code.
+    On Linux/macOS this is the Ollama-style Textual launcher. The
+    classic Windows console renders Textual TUIs slowly and glitches,
+    so on Windows bare ``toki`` opens the plain CLI launcher menu
+    (``clilauncher``) instead — same apps, numbered pick, with Chat
+    running the CLI chat; Linux and macOS are unchanged.
     """
+    if os.name == "nt":
+        from .clilauncher import run_cli_launcher
+
+        return run_cli_launcher()
+
     from .tui.launcher import run as launcher_run
     return launcher_run()
 

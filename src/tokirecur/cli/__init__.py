@@ -199,14 +199,19 @@ def dashboard(reports: Path, host: str, port: int) -> None:
     help="Bearer token for the daemon. Defaults to $TOKI_AUTH_TOKEN.",
 )
 def tui(daemon_url: str, raw_url: str, auth_token: str | None) -> None:
-    """Launch the production TUI chat client.
+    """Launch the TUI chat client (Windows: the CLI chat instead).
 
     A terminal-based chat interface for talking to a local LLM through
     the toki daemon. Three modes (raw / cached / compare), live metrics,
     session pinning, and precision-check panel.
 
+    On Windows the Textual TUI is replaced by the plain Ollama-style
+    CLI chat (``clichat``): the classic Windows console renders TUIs
+    slowly and glitches. Linux and macOS keep the full TUI. (Bare
+    ``toki`` on Windows opens the CLI launcher menu — ``clilauncher``.)
+
     \b
-    Keys:
+    Keys (TUI):
       Ctrl+1  raw       Ctrl+L  clear chat    Ctrl+U  new session
       Ctrl+2  cached    Ctrl+R  reprobe       Ctrl+M  toggle panels
       Ctrl+3  compare   Ctrl+P  precision     Ctrl+C  quit
@@ -221,10 +226,22 @@ def tui(daemon_url: str, raw_url: str, auth_token: str | None) -> None:
         click.echo("error: toki tui requires an interactive terminal (TTY).", err=True)
         click.echo("hint: run from an interactive terminal.", err=True)
         raise SystemExit(2)
+    if os.name == "nt":
+        from ..clichat import run_cli_chat
+
+        click.echo(
+            "note: the TUI needs a capable terminal; on Windows you get "
+            "the CLI chat instead (Linux/macOS keep the full TUI).",
+            err=True,
+        )
+        try:
+            raise SystemExit(run_cli_chat(
+                daemon_url=daemon_url, raw_url=raw_url, auth_token=auth_token,
+            ))
+        except SystemExit:
+            raise
     try:
         from ..tui.app import run as tui_run
-        from ..tui.launcher import _warn_legacy_console
-        _warn_legacy_console()
         tui_run(
             daemon_url=daemon_url, raw_url=raw_url, auth_token=auth_token,
         )

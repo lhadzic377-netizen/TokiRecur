@@ -877,27 +877,5 @@ def run():
     if not __import__("sys").stdout.isatty():
         Console().print("error: toki requires an interactive terminal (TTY).", style="red")
         return 2
-    _warn_legacy_console()
     app = LauncherApp(on_launch=on_launch)
     return app.run() or 0
-
-
-def _warn_legacy_console() -> None:
-    """Hint when running a TUI on Windows outside a capable terminal.
-
-    The classic Windows console (conhost) renders TUIs slowly and can
-    glitch (broken alt-screen, size mismatch, leftover garbage after
-    exit). Windows Terminal sets WT_SESSION; without it, print a hint
-    once so the user knows the lag is the console, not the app.
-    """
-    import os
-
-    if os.name == "nt" and not (
-        os.environ.get("WT_SESSION") or os.environ.get("ConEmuANSI")
-    ):
-        print(
-            "note: the classic Windows console renders TUIs slowly and can "
-            "glitch. Install Windows Terminal "
-            "(winget install Microsoft.WindowsTerminal) and re-run for a "
-            "smooth experience."
-        )
