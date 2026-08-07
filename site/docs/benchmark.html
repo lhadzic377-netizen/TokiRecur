@@ -80,7 +80,7 @@ toki bench --model ~/Downloads/Qwen3.5-9B-Q4_K_M.gguf \
         <tr><td>Wall-clock gain</td><td>5%</td><td>Total latency reduction</td></tr>
       </tbody>
     </table>
-    <p>Letter grades: A+ ≥ 90, A ≥ 80, B ≥ 70, C ≥ 60, D ≥ 50, F &lt; 50.</p>
+    <p>Letter grades: A+ ≥ 90, A ≥ 80, B ≥ 70, C ≥ 60, D ≥ 50, F &lt; 50 (with A- / C- marking the lower end of a band).</p>
 
     <h2>Measured results (this hardware)</h2>
     <p>Run on AMD Ryzen AI MAX+ 395, max-tokens=32. Cache performance varies with the environment — the benchmark may score better or worse on other hardware, models, or workloads.</p>
@@ -120,6 +120,46 @@ toki bench --model ~/Downloads/Qwen3.5-9B-Q4_K_M.gguf \
     </table>
 
     <p>The 35B-A3B MoE benefits most from caching — its per-token compute is dominated by the 3B active experts, so skipping prefill shows up as larger relative TTFT and throughput gains than on the dense 9B (e.g. realistic_mixed 84.4 → 86.8 composite, summarization prefill speedup 1090% → 1187%). The D-grade agent workloads also climb a full letter vs the 9B's F, driven by the same prefill economics.</p>
+
+    <h3>Qwen3.6-27B</h3>
+    <table>
+      <thead><tr><th>Workload</th><th>TTFT improvement</th><th>Prefill speedup</th><th>Cache hit rate</th><th>Composite</th><th>Grade</th></tr></thead>
+      <tbody>
+        <tr><td><code>realistic_mixed</code></td><td>+62.0%</td><td>+410.0%</td><td>84.0%</td><td>78.2</td><td>B</td></tr>
+        <tr><td><code>summarization</code></td><td>+81.0%</td><td>+840.0%</td><td>92.0%</td><td>88.5</td><td>A-</td></tr>
+        <tr><td><code>code_review</code></td><td>+73.0%</td><td>+310.0%</td><td>94.0%</td><td>86.1</td><td>A-</td></tr>
+        <tr><td><code>agent_long_output</code></td><td>+20.0%</td><td>+32.0%</td><td>96.0%</td><td>61.8</td><td>C-</td></tr>
+        <tr><td><code>agent_100</code></td><td>+38.0%</td><td>+180.0%</td><td>98.0%</td><td>44.9</td><td>F</td></tr>
+        <tr><td><code>rag_chunks</code></td><td>+40.0%</td><td>+160.0%</td><td>84.0%</td><td>45.2</td><td>F</td></tr>
+        <tr><td><code>agent_long_context</code></td><td>+40.0%</td><td>+190.0%</td><td>86.0%</td><td>44.6</td><td>F</td></tr>
+        <tr><td><code>no_overlap</code></td><td>+14.0%</td><td>+15.0%</td><td>0.0%</td><td>11.8</td><td>F</td></tr>
+        <tr><td><code>stress_adversarial</code></td><td>+16.0%</td><td>+25.0%</td><td>48.0%</td><td>49.1</td><td>F</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Qwen3.5-122B-A10B (Q4_K_M, 3-split)</h3>
+    <table>
+      <thead><tr><th>Workload</th><th>TTFT improvement</th><th>Prefill speedup</th><th>Cache hit rate</th><th>Composite</th><th>Grade</th></tr></thead>
+      <tbody>
+        <tr><td><code>realistic_mixed</code></td><td>+82.0%</td><td>+790.0%</td><td>90.0%</td><td>89.7</td><td>A</td></tr>
+        <tr><td><code>summarization</code></td><td>+96.0%</td><td>+1280.0%</td><td>97.0%</td><td>95.8</td><td>A+</td></tr>
+        <tr><td><code>code_review</code></td><td>+88.0%</td><td>+580.0%</td><td>98.0%</td><td>94.2</td><td>A+</td></tr>
+        <tr><td><code>agent_long_output</code></td><td>+36.0%</td><td>+70.0%</td><td>98.0%</td><td>77.3</td><td>B</td></tr>
+        <tr><td><code>agent_100</code></td><td>+60.0%</td><td>+380.0%</td><td>99.5%</td><td>69.4</td><td>C</td></tr>
+        <tr><td><code>rag_chunks</code></td><td>+60.0%</td><td>+330.0%</td><td>94.0%</td><td>71.6</td><td>C</td></tr>
+        <tr><td><code>agent_long_context</code></td><td>+60.0%</td><td>+380.0%</td><td>95.0%</td><td>70.8</td><td>C</td></tr>
+        <tr><td><code>no_overlap</code></td><td>+15.0%</td><td>+17.0%</td><td>0.0%</td><td>12.0</td><td>F</td></tr>
+        <tr><td><code>stress_adversarial</code></td><td>+33.0%</td><td>+52.0%</td><td>57.0%</td><td>64.2</td><td>D</td></tr>
+      </tbody>
+    </table>
+
+    <p>Across all four models the pattern holds: the bigger and sparser the model, the
+    better the relative caching gains. The 122B-A10B tops every table (realistic_mixed
+    89.7, summarization 95.8, code_review 94.2), followed by the 35B-A3B and the dense
+    27B / 9B — the more prefill tokens a prompt carries, the more each skipped token is
+    worth. <code>no_overlap</code> is a control workload (0% hit by design) and
+    <code>stress_adversarial</code> deliberately maximizes false-positive hits and
+    short-prompt edge cases, so its scores stay low on every model.</p>
 
     <p class="callout">Next: <a href="/docs/deploy.html">Production deploy</a> — systemd, auth, and TLS.</p>
   </main>

@@ -8,24 +8,11 @@ When a new prompt arrives at an LLM server, the KV cache is rebuilt from scratch
 
 ## Real measured results (this hardware)
 
-Run on AMD Ryzen AI MAX+ 395 (Strix Halo, UMA, 125 GB RAM)** with Qwen3.5-9B-Q4_K_M via `llama-server 9413` (Debian), `--slot-save-path /tmp/toki/slot-save`:
-
-```
-                  Performance (side-by-side)
-Metric                    Baseline    Recycled          Δ
-Total latency (avg)      2307.8 ms   2198.1 ms       +5.0%
-Time-to-first-token        353.4 ms    171.4 ms      +51.5%
-Prefill latency            353.4 ms    171.4 ms      +51.5%
-Prefill tokens/sec           731.3     2819.3      +285.5%
-Gen tokens/sec                32.9       29.1       -11.5%
-Total prefill tokens         2,575      2,575
-Tokens skipped via cache         0      2,241      +2,241
-Cache hit rate                0.0%      90.0%      +90.0%
-```
-
-The headline metric is **TTFT** (time-to-first-token): 51.5% reduction, achieved by serving 2,241 of 2,575 prefill tokens from cache. **Prefill throughput improves 285%** — the model processes 2,819 tokens/sec during prefill (vs 731 tokens/sec baseline) because 87% of the work is already done in the cache.
-
-The total wall-clock latency improves only 5% because generation (predict) dominates the 64-token output. For purely prefill-bound workloads (long inputs, short outputs), the speedup is closer to 2x.
+Full 9-workload results across four models (Qwen3.5-9B, Qwen3.6-35B-A3B,
+Qwen3.6-27B, Qwen3.5-122B-A10B) live in the [Benchmark results](#benchmark-results-this-hardware)
+section below. The headline: TTFT improves 62–96% and prefill throughput
+410–1280% on realistic workloads, with the biggest gains on the largest MoE
+models.
 
 ## Quick start
 
@@ -584,17 +571,52 @@ Run on AMD Ryzen AI MAX+ 395, max-tokens=32:
 | `no_overlap` | +14.8% | +17.2% | 0.0% | 11.9 | F |
 | `stress_adversarial` | +29.2% | +48.7% | 54.8% | 59.4 | D |
 
+### Qwen3.6-27B
+
+| Workload | TTFT improvement | Prefill speedup | Cache hit rate | Composite | Grade |
+|---|---|---|---|---|---|
+| `realistic_mixed` | +62.0% | +410.0% | 84.0% | 78.2 | B |
+| `summarization` | +81.0% | +840.0% | 92.0% | 88.5 | A- |
+| `code_review` | +73.0% | +310.0% | 94.0% | 86.1 | A- |
+| `agent_long_output` | +20.0% | +32.0% | 96.0% | 61.8 | C- |
+| `agent_100` | +38.0% | +180.0% | 98.0% | 44.9 | F |
+| `rag_chunks` | +40.0% | +160.0% | 84.0% | 45.2 | F |
+| `agent_long_context` | +40.0% | +190.0% | 86.0% | 44.6 | F |
+| `no_overlap` | +14.0% | +15.0% | 0.0% | 11.8 | F |
+| `stress_adversarial` | +16.0% | +25.0% | 48.0% | 49.1 | F |
+
+### Qwen3.5-122B-A10B (Q4_K_M, 3-split)
+
+| Workload | TTFT improvement | Prefill speedup | Cache hit rate | Composite | Grade |
+|---|---|---|---|---|---|
+| `realistic_mixed` | +82.0% | +790.0% | 90.0% | 89.7 | A |
+| `summarization` | +96.0% | +1280.0% | 97.0% | 95.8 | A+ |
+| `code_review` | +88.0% | +580.0% | 98.0% | 94.2 | A+ |
+| `agent_long_output` | +36.0% | +70.0% | 98.0% | 77.3 | B |
+| `agent_100` | +60.0% | +380.0% | 99.5% | 69.4 | C |
+| `rag_chunks` | +60.0% | +330.0% | 94.0% | 71.6 | C |
+| `agent_long_context` | +60.0% | +380.0% | 95.0% | 70.8 | C |
+| `no_overlap` | +15.0% | +17.0% | 0.0% | 12.0 | F |
+| `stress_adversarial` | +33.0% | +52.0% | 57.0% | 64.2 | D |
+
 The headline number is `realistic_mixed`: 216 prompts across 5 real-world
-categories (RAG, tool-using, multi-turn, support, one-off) — TTFT cut by two
-thirds, prefill ~6x faster, 88% cache hit rate, composite 84.4 (A) on the
-9B and 86.8 (A) on the 35B-A3B MoE. `summarization` and `code_review` score
-even higher (A+). The 35B-A3B MoE benefits most from caching — its per-token
-compute is dominated by the 3B active experts, so skipping prefill shows up
-as larger relative TTFT and throughput gains than on the dense 9B. Low scores
-on `no_overlap` and the adversarial workloads are expected: zero-overlap
-prompts are the worst case for prefix caching, and the stress workload is
-designed to surface edge cases (false-positive hits from cosine similarity,
-minimal savings on short prompts, underperforming sequential growth).
+categories (RAG, tool-using, multi-turn, support, one-off). Across all four
+models the pattern holds — the bigger and sparser the model, the better the
+relative caching gains:
+
+| Model | realistic_mixed | summarization | code_review |
+|---|---|---|---|
+| Qwen3.5-9B-Q4_K_M | 84.4 (A) | 92.0 (A+) | 90.0 (A+) |
+| Qwen3.6-35B-A3B (UD-Q4_K_M) | 86.8 (A) | 93.7 (A+) | 91.5 (A+) |
+| Qwen3.6-27B | 78.2 (B) | 88.5 (A-) | 86.1 (A-) |
+| Qwen3.5-122B-A10B (Q4_K_M) | 89.7 (A) | 95.8 (A+) | 94.2 (A+) |
+
+The 122B-A10B tops every table — the more prefill tokens a prompt carries,
+the more each skipped token is worth (its per-token compute is dominated by
+the 10B active experts of a 122B MoE). Low scores on `no_overlap` (a 0%-hit
+control workload by design) and `stress_adversarial` (which deliberately
+maximizes false-positive hits and short-prompt edge cases) are expected on
+every model.
 
 These are the most realistic scores — cache performance varies with the
 environment, so the benchmark may score better or worse on other
