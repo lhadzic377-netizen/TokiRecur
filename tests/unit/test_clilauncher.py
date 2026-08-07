@@ -83,22 +83,101 @@ def test_menu_marks_missing_agents(monkeypatch, quit_after, capsys):
     assert "[not installed]" in out
 
 
-def test_agent_argv_with_spec():
-    class S:
-        name = "qwen3"
-        model_id = "Qwen3-8B-GGUF"
+def _stub_spec():
+    """Fake ModelSpec-shaped object sufficient for selector.launch_cmd."""
+    from types import SimpleNamespace
+    return SimpleNamespace(
+        name="qwen3",
+        model_id="Qwen3-8B-GGUF",
+        llama_url="http://127.0.0.1:8091",
+        daemon_url="http://127.0.0.1:8790",
+    )
 
-    spec = S()
-    assert clilauncher._agent_argv("opencode", spec) == ["-m", "tokirecur-qwen3/Qwen3-8B-GGUF"]
-    assert clilauncher._agent_argv("openclaw", spec) == ["tui"]
-    assert clilauncher._agent_argv("codex", spec) == []
-    assert clilauncher._agent_argv("hermes", spec) == [
-        "chat", "--tui", "--provider", "tokirecur-qwen3", "-m", "Qwen3-8B-GGUF",
+
+def test_launch_agent_uses_selector_launch_cmd(monkeypatch, capsys):
+    """The CLI launcher must route through selector.launch_cmd so it
+    can never drift from the Textual launcher."""
+    from tokirecur import clilauncher as cl
+
+    monkeypatch.setattr(cl, "_active_spec", _stub_spec)
+    monkeypatch.setattr(cl.shutil, "which", lambda _: r"C:\bin\opencode.exe")
+    monkeypatch.setattr(os, "name", "nt")
+    captured = {}
+
+    class FakeProc:
+        pid = 1
+
+    monkeypatch.setattr(
+        cl.subprocess, "Popen",
+        lambda argv, **kw: (captured.__setitem__("argv", argv), FakeProc())[1],
+    )
+
+    cl._launch_agent("opencode")
+    assert captured["argv"] == [
+        r"C:\bin\opencode.exe", "-m", "tokirecur-qwen3/Qwen3-8B-GGUF",
     ]
 
 
-def test_agent_argv_no_spec():
-    assert clilauncher._agent_argv("opencode", None) == []
+def test_launch_agent_openclaw_falls_back_to_chat_when_gateway_down(monkeypatch, capsys):
+    """openclaw TUI needs the gateway; fall back to local chat when it's down."""
+    from tokirecur import clilauncher as cl
+    from tokirecur import selector
+
+    monkeypatch.setattr(cl, "_active_spec", _stub_spec)
+    monkeypatch.setattr(cl.shutil, "which", lambda _: r"C:\bin\openclaw.exe")
+    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setattr(selector, "_gateway_up", lambda: False)
+    captured = {}
+
+    class FakeProc:
+        pid = 2
+
+    monkeypatch.setattr(
+        cl.subprocess, "Popen",
+        lambda argv, **kw: (captured.__setitem__("argv", argv), FakeProc())[1],
+    )
+
+    cl._launch_agent("openclaw")
+    assert captured["argv"] == [r"C:\bin\openclaw.exe", "chat"]
+    assert "falling back" in capsys.readouterr().out
+
+
+def test_launch_agent_openclaw_uses_tui_when_gateway_up(monkeypatch, capsys):
+    from tokirecur import clilauncher as cl
+    from tokirecur import selector
+
+    monkeypatch.setattr(cl, "_active_spec", _stub_spec)
+    monkeypatch.setattr(cl.shutil, "which", lambda _: r"C:\bin\openclaw.exe")
+    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setattr(selector, "_gateway_up", lambda: True)
+    captured = {}
+
+    class FakeProc:
+        pid = 3
+
+    monkeypatch.setattr(
+        cl.subprocess, "Popen",
+        lambda argv, **kw: (captured.__setitem__("argv", argv), FakeProc())[1],
+    )
+
+    cl._launch_agent("openclaw")
+    assert captured["argv"] == [r"C:\bin\openclaw.exe", "tui"]
+
+
+def test_launch_agent_no_active_spec(monkeypatch, capsys):
+    from tokirecur import clilauncher as cl
+
+    monkeypatch.setattr(cl, "_active_spec", lambda: None)
+    monkeypatch.setattr(os, "name", "nt")
+    called = {"popen": False}
+    monkeypatch.setattr(
+        cl.subprocess, "Popen",
+        lambda *a, **kw: called.__setitem__("popen", True),
+    )
+
+    cl._launch_agent("opencode")
+    assert called["popen"] is False
+    assert "no active model" in capsys.readouterr().out
 
 
 def test_find_binary_path(monkeypatch):
@@ -122,7 +201,7 @@ def test_agent_launch_cmd_wrapper(monkeypatch, capsys):
     """npm/pipx .cmd shims must launch via cmd.exe, not CreateProcess."""
     from tokirecur import clilauncher as cl
     monkeypatch.setattr(cl.shutil, "which", lambda _: r"C:\npm\opencode.cmd")
-    monkeypatch.setattr(cl, "_active_spec", lambda: None)
+    monkeypatch.setattr(cl, "_active_spec", _stub_spec)
     monkeypatch.setattr(os, "name", "nt")
     captured = {}
 
@@ -136,14 +215,15 @@ def test_agent_launch_cmd_wrapper(monkeypatch, capsys):
 
     monkeypatch.setattr(cl.subprocess, "Popen", fake_popen)
     cl._launch_agent("opencode")
-    assert captured["argv"] == ["cmd.exe", "/c", r"C:\npm\opencode.cmd"]
+    assert captured["argv"] == ["cmd.exe", "/c", r"C:\npm\opencode.cmd", "-m",
+                                "tokirecur-qwen3/Qwen3-8B-GGUF"]
     assert "pid 4242" in capsys.readouterr().out
 
 
 def test_agent_launch_exe(monkeypatch, capsys):
     from tokirecur import clilauncher as cl
     monkeypatch.setattr(cl.shutil, "which", lambda _: r"C:\bin\codex.exe")
-    monkeypatch.setattr(cl, "_active_spec", lambda: None)
+    monkeypatch.setattr(cl, "_active_spec", _stub_spec)
     monkeypatch.setattr(os, "name", "nt")
     captured = {}
 

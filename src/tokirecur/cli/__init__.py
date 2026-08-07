@@ -307,7 +307,11 @@ def diff(raw_url: str, daemon_url: str, system: str | None, max_tokens: int,
 
 
 @cli.command()
-def doctor() -> None:
+@click.option("--fix", is_flag=True,
+              help="Auto-repair detected issues: install the CUDA "
+                   "llama-server build when the bin dir is CPU but an "
+                   "NVIDIA GPU is present, and restart the active model.")
+def doctor(fix: bool) -> None:
     """Check GPU, llama-server build, and stack health."""
     from .. import diagnose
 
@@ -328,6 +332,157 @@ def doctor() -> None:
         rows.append(("toki daemon :8787", "not running"))
     for k, v in rows:
         click.echo(f"{k.ljust(24)}{v}")
+
+    if not fix:
+        return
+
+    # --- Auto-repair ---
+    from .. import ctl
+    from . import _detect_gpu_backend as _detect_gpu_backend  # noqa: F401
+
+    actions: list[str] = []
+
+    # 1) If the available llama-server is a CPU build but an NVIDIA GPU
+    #    is present, install the CUDA build and point the active model
+    #    at it (or install into the bin dir if no model is active).
+    from ..diagnose import binary_backend, gpu_hardware, installed_build
+    hw = gpu_hardware()
+    builds = installed_build()
+    state_bin = builds.get("state_bin")
+    if hw.get("backend") == "CUDA" and state_bin and binary_backend(state_bin) == "CPU":
+        from ..ctl import read_active
+        from . import install_llama
+        active = read_active()
+        try:
+            if active:
+                install_llama.callback(tag=None, dest=None, name=active,
+                                       backend="cuda", gfx=None)
+                actions.append(f"installed CUDA build for {active}")
+            else:
+                install_llama.callback(tag=None, dest=None, name=None,
+                                       backend="cuda", gfx=None)
+                actions.append("installed CUDA build into state bin")
+        except (RuntimeError, OSError, SystemExit) as e:
+            click.echo(f"fix: install-llama failed: {e}", err=True)
+
+    # 2) If the active model has a stale/empty stack, restart it with the
+    #    freshly installed build.
+    from ..ctl import model_status, read_active, use_model
+    active = read_active()
+    if active:
+        try:
+            spec = ctl.get_model(active)
+        except Exception:
+            spec = None
+        if spec is not None:
+            st = model_status(spec)
+            if not st["llama"]["reachable"]:
+                try:
+                    use_model(active)
+                    actions.append(f"restarted {active}")
+                except (KeyError, FileNotFoundError, RuntimeError, OSError) as e:
+                    click.echo(f"fix: use_model failed: {e}", err=True)
+
+    if actions:
+        click.echo("fix:")
+        for a in actions:
+            click.echo(f"  - {a}")
+        click.echo("rerun `toki doctor` to confirm.")
+    else:
+        click.echo("fix: nothing to do.")
+
+
+@cli.command()
+@click.option("--repo", default=None,
+              help="Path to the tokirecur git checkout (default: walk "
+                   "parents of the installed package until .git is found).")
+def self_upgrade(repo: str | None) -> None:
+    """Upgrade toki to the latest git HEAD: git pull + pip install.
+
+    Run from the repo directory on a Windows install that was created
+    via ``pip install`` from a git checkout. Collapses the standard
+    5-step recovery into one command:
+
+        git fetch origin && git reset --hard origin/master
+        pip install --force-reinstall .
+
+    Refuses to run if the installed package isn't a git checkout.
+    """
+    import subprocess
+    import sys
+
+    repo_path = Path(repo) if repo else _find_repo_dir()
+    if repo_path is None:
+        click.echo(
+            "error: cannot find a tokirecur git checkout. Pass --repo "
+            "<path> or run from inside the repo.",
+            err=True,
+        )
+        raise SystemExit(1) from None
+    if not (repo_path / ".git").is_dir():
+        click.echo(
+            f"error: {repo_path} is not a git checkout (no .git/)",
+            err=True,
+        )
+        raise SystemExit(1) from None
+    if not (repo_path / "pyproject.toml").is_file():
+        click.echo(
+            f"error: {repo_path} has no pyproject.toml",
+            err=True,
+        )
+        raise SystemExit(1) from None
+
+    def _run(cmd: list[str]) -> tuple[int, str]:
+        r = subprocess.run(cmd, cwd=repo_path, capture_output=True,
+                           text=True, timeout=120)
+        return r.returncode, (r.stdout + r.stderr).strip()
+
+    click.echo(f"repo: {repo_path}")
+    rc, out = _run(["git", "fetch", "origin"])
+    if rc != 0:
+        click.echo(f"git fetch failed: {out}", err=True)
+        raise SystemExit(1) from None
+    rc, out = _run(["git", "reset", "--hard", "origin/master"])
+    if rc != 0:
+        click.echo(f"git reset failed: {out}", err=True)
+        raise SystemExit(1) from None
+    rc, out = _run(["git", "rev-parse", "--short", "HEAD"])
+    new_head = out.splitlines()[-1] if out else "?"
+    click.echo(f"HEAD: {new_head}")
+
+    # Editable installs don't need a pip install (the .pth/egg-link
+    # already points at the source tree we just updated).
+    from ..ctl import STATE_ROOT  # noqa: F401  (imports side effects)
+    rc, out = _run([sys.executable, "-m", "pip", "show", "tokirecur"])
+    is_editable = "Editable project location" in out
+    if is_editable:
+        click.echo("install: editable — nothing to reinstall")
+    else:
+        rc, out = _run([sys.executable, "-m", "pip", "install",
+                        "--force-reinstall", "."])
+        if rc != 0:
+            click.echo(f"pip install failed: {out}", err=True)
+            raise SystemExit(1) from None
+        click.echo("pip install: ok")
+    click.echo(
+        "done. A new Python process is needed for the upgrade to "
+        "take effect — restart your shell or rerun toki."
+    )
+
+
+def _find_repo_dir() -> Path | None:
+    """Walk parents of this module looking for a directory containing
+    ``.git`` and a ``pyproject.toml`` named tokirecur."""
+    here = Path(__file__).resolve()
+    for parent in [here, *here.parents]:
+        if (parent / ".git").is_dir() and (parent / "pyproject.toml").is_file():
+            try:
+                text = (parent / "pyproject.toml").read_text()
+            except OSError:
+                continue
+            if "name = \"tokirecur\"" in text or "name = 'tokirecur'" in text:
+                return parent
+    return None
 
 
 @cli.command()

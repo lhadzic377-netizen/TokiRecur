@@ -258,3 +258,128 @@ def test_open_browser_linux_uses_xdg_open(monkeypatch):
     )
     selector._open_browser("http://127.0.0.1:7777")
     assert seen[0][0] == ["xdg-open", "http://127.0.0.1:7777"]
+
+
+def test_is_alive_zero_or_negative(monkeypatch):
+    assert ctl._is_alive(0) is False
+    assert ctl._is_alive(-1) is False
+
+
+def test_is_alive_posix_uses_kill(monkeypatch):
+    monkeypatch.setattr(ctl.os, "name", "posix")
+    seen = {}
+    monkeypatch.setattr(ctl.os, "kill",
+                        lambda pid, sig: seen.update(pid=pid, sig=sig))
+    assert ctl._is_alive(12345) is True
+    assert seen == {"pid": 12345, "sig": 0}
+
+
+def test_is_alive_posix_returns_false_on_oserror(monkeypatch):
+    monkeypatch.setattr(ctl.os, "name", "posix")
+
+    def fake_kill(pid, sig):
+        raise OSError("no such process")
+
+    monkeypatch.setattr(ctl.os, "kill", fake_kill)
+    assert ctl._is_alive(12345) is False
+
+
+def _patch_fake_ctypes(monkeypatch, open_proc, get_exit_code, close_handle):
+    """Inject a fake ctypes module whose kernel32 functions are the
+    supplied callables. Each callable is wrapped so it has the
+    argtypes/restype attributes `_is_alive` assigns.
+
+    The real ctypes WinDLL exposes functions whose attributes can be
+    set; on a plain Python class those become bound methods, which
+    reject attribute assignment. We attach the functions as INSTANCE
+    attributes to sidestep the descriptor protocol.
+    """
+    import sys as _sys
+
+    def _wrap(fn, argtypes, restype):
+        fn.argtypes = argtypes
+        fn.restype = restype
+        return fn
+
+    open_proc = _wrap(open_proc, [int, bool, int], int)
+    get_exit_code = _wrap(get_exit_code, [int, object], bool)
+    close_handle = _wrap(close_handle, [int], bool)
+
+    class FakeWintypes:
+        DWORD = _Ref
+        BOOL = bool
+        HANDLE = int
+
+    class FakeWinDLL:
+        pass
+
+    def _new_dll():
+        instance = FakeWinDLL()
+        instance.OpenProcess = open_proc
+        instance.GetExitCodeProcess = get_exit_code
+        instance.CloseHandle = close_handle
+        return instance
+
+    fake_ctypes = type("C", (), {
+        "WinDLL": lambda name, use_last_error=False: _new_dll(),
+        "wintypes": FakeWintypes(),
+        "byref": lambda x: x,
+        "POINTER": lambda t: t,
+    })
+    monkeypatch.setitem(_sys.modules, "ctypes", fake_ctypes)
+
+
+class _Ref:
+    """Minimal ctypes.DWORD stand-in: defaults to 0 and exposes a
+    mutable .value attribute so byref/GetExitCodeProcess interact with
+    it the way ctypes.c_uint would."""
+    __slots__ = ("value",)
+
+    def __init__(self, value: int = 0) -> None:
+        self.value = value
+
+
+def test_is_alive_windows_uses_open_process(monkeypatch):
+    """On Windows the probe must use OpenProcess + GetExitCodeProcess,
+    not os.kill(pid, 0), which can raise SystemError."""
+    monkeypatch.setattr(ctl.os, "name", "nt")
+
+    calls = []
+
+    def open_proc(access, inherit, pid):
+        calls.append(("OpenProcess", pid))
+        return 0xCAFE
+
+    def get_exit_code(handle, code_ref):
+        calls.append(("GetExitCodeProcess", handle))
+        code_ref.value = 259  # STILL_ACTIVE
+        return True
+
+    def close_handle(handle):
+        calls.append(("CloseHandle", handle))
+        return True
+
+    _patch_fake_ctypes(monkeypatch, open_proc, get_exit_code, close_handle)
+
+    assert ctl._is_alive(12345) is True
+    assert ("OpenProcess", 12345) in calls
+    assert ("CloseHandle", 0xCAFE) in calls
+
+
+def test_is_alive_windows_returns_false_when_open_process_fails(monkeypatch):
+    """OpenProcess returns 0 when the pid is gone or we lack access."""
+    monkeypatch.setattr(ctl.os, "name", "nt")
+    _patch_fake_ctypes(monkeypatch,
+                       lambda *a, **k: 0,
+                       lambda *a, **k: True,
+                       lambda *a, **k: True)
+    assert ctl._is_alive(99999) is False
+
+
+def test_is_alive_windows_returns_false_on_get_exit_code_failure(monkeypatch):
+    monkeypatch.setattr(ctl.os, "name", "nt")
+    _patch_fake_ctypes(monkeypatch,
+                       lambda *a, **k: 0xCAFE,
+                       lambda *a, **k: False,
+                       lambda *a, **k: True)
+    assert ctl._is_alive(12345) is False

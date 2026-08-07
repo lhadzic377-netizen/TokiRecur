@@ -876,12 +876,50 @@ def pull_model(
 
 
 def _is_alive(pid: int) -> bool:
+    """Is the pid still running?
+
+    On Windows, ``os.kill(pid, 0)`` can return with an exception set
+    (CPython wraps the underlying error as ``SystemError: <built-in
+    function kill> returned a result with an exception set``), which
+    the launcher catches in ``_header()`` and crashes the menu. Probe
+    via ``OpenProcess``/``GetExitCodeProcess`` instead.
+    """
     if pid <= 0:
         return False
+    if os.name == "nt":
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            STILL_ACTIVE = 259
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            OpenProcess = kernel32.OpenProcess
+            OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+            OpenProcess.restype = wintypes.HANDLE
+            GetExitCodeProcess = kernel32.GetExitCodeProcess
+            GetExitCodeProcess.argtypes = [wintypes.HANDLE,
+                                           ctypes.POINTER(wintypes.DWORD)]
+            GetExitCodeProcess.restype = wintypes.BOOL
+            CloseHandle = kernel32.CloseHandle
+            CloseHandle.argtypes = [wintypes.HANDLE]
+            CloseHandle.restype = wintypes.BOOL
+            handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+            if not handle:
+                return False
+            try:
+                code = wintypes.DWORD()
+                if not GetExitCodeProcess(handle, ctypes.byref(code)):
+                    return False
+                return code.value == STILL_ACTIVE
+            finally:
+                CloseHandle(handle)
+        except (OSError, SystemError):
+            return False
     try:
         os.kill(pid, 0)
         return True
-    except OSError:
+    except (OSError, SystemError):
         return False
 
 

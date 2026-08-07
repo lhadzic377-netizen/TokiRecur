@@ -222,21 +222,6 @@ def run_cli_launcher() -> int:
         _launch_agent(AGENTS[idx][0])
 
 
-def _agent_argv(app: str, spec) -> list[str]:
-    """CLI args for an agent, mirroring the Textual launcher's plan."""
-    if not spec:
-        return []
-    if app == "opencode":
-        provider = f"tokirecur-{spec.name}"
-        return ["-m", f"{provider}/{spec.model_id}"]
-    if app == "openclaw":
-        return ["tui"]
-    if app == "hermes":
-        provider = f"tokirecur-{spec.name}"
-        return ["chat", "--tui", "--provider", provider, "-m", spec.model_id]
-    return []
-
-
 def _find_binary(app: str) -> str | None:
     """Locate an agent executable, including Windows install dirs.
 
@@ -267,11 +252,38 @@ def _find_binary(app: str) -> str | None:
 
 
 def _launch_agent(app: str) -> None:
+    """Launch an agent using the same plan as the Textual launcher.
+
+    Routes through ``selector.launch_cmd`` so the CLI launcher and the
+    Textual launcher can never drift. openclaw's TUI mode needs the
+    gateway running; when it isn't, fall back to the local TUI the
+    same way the Textual launcher does.
+    """
+    spec = _active_spec()
+    if spec is None:
+        print("no active model — pick one with 2) Switch model first.")
+        return
+    try:
+        from .selector import launch_cmd
+        plan = launch_cmd("chat", app, spec)
+    except Exception as e:
+        print(f"failed to build launch plan for {app}: {e}")
+        return
+    argv = plan.get("argv") or []
+    if not argv:
+        print(f"no launch plan for {app}.")
+        return
+    # openclaw TUI needs the gateway; fall back to local chat when it's down.
+    if app == "openclaw" and argv[:2] == ["openclaw", "tui"]:
+        from .selector import _gateway_up
+        if not _gateway_up():
+            print("OpenClaw gateway is not running; falling back to local TUI.")
+            argv = ["openclaw", "chat"]
     binary = _find_binary(app)
     if not binary:
         print(f"not found in PATH: {app} — install it, or pick another entry.")
         return
-    args = _agent_argv(app, _active_spec())
+    args = argv[1:]
     if os.name == "nt":
         try:
             if binary.lower().endswith((".cmd", ".bat")):
