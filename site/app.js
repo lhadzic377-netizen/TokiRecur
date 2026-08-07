@@ -30,6 +30,30 @@ document.addEventListener("DOMContentLoaded", () => {
   );
   stagger(groups, 0.1);
 
+  const tabs = document.querySelectorAll(".bench-tab");
+  if (tabs.length) {
+    tabs.forEach((tab) => {
+      tab.addEventListener("click", () => {
+        tabs.forEach((t) => {
+          t.classList.remove("active");
+          t.setAttribute("aria-selected", "false");
+        });
+        tab.classList.add("active");
+        tab.setAttribute("aria-selected", "true");
+        document.querySelectorAll(".bench-panel").forEach((panel) => {
+          panel.classList.toggle("active", panel.id === tab.dataset.model);
+        });
+        const shown = document.getElementById(tab.dataset.model);
+        if (shown) {
+          shown.querySelectorAll(".reveal").forEach((el, i) => {
+            el.style.setProperty("--d", `${0.1 * i}s`);
+            el.classList.add("in-view");
+          });
+        }
+      });
+    });
+  }
+
   if (!("IntersectionObserver" in window)) {
     groups.forEach((el) => el.classList.add("in-view"));
     return;

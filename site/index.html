@@ -127,10 +127,15 @@
     <p class="overline reveal">Benchmarks</p>
     <h2 class="reveal">Cache-hit efficiency &amp; throughput.</h2>
     <p class="section-sub reveal">Measured on an AMD Ryzen AI MAX+ 395 via llama-server.</p>
-    <div class="bench-grid">
-      <div class="table-wrap">
+    <div class="bench-picker">
+      <div class="bench-tabs" role="tablist" aria-label="Benchmarked models">
+        <button type="button" class="bench-tab active" role="tab" aria-selected="true" data-model="m9b">Qwen3.5-9B-Q4_K_M</button>
+        <button type="button" class="bench-tab" role="tab" aria-selected="false" data-model="m35b">Qwen3.6-35B-A3B (UD-Q4_K_M)</button>
+        <button type="button" class="bench-tab" role="tab" aria-selected="false" data-model="m27b">Qwen3.6-27B</button>
+        <button type="button" class="bench-tab" role="tab" aria-selected="false" data-model="m122b">Qwen3.5-122B-A10B (Q4_K_M)</button>
+      </div>
+      <div class="table-wrap bench-panel active" id="m9b">
         <table>
-          <caption>Qwen3.5-9B-Q4_K_M</caption>
           <thead>
             <tr><th>Workload</th><th>TTFT&nbsp;Δ</th><th>Prefill&nbsp;Δ</th><th>Hit</th><th>Score</th><th>Grade</th></tr>
           </thead>
@@ -174,9 +179,8 @@
           </tbody>
         </table>
       </div>
-      <div class="table-wrap">
+      <div class="table-wrap bench-panel" id="m35b">
         <table>
-          <caption>Qwen3.6-35B-A3B (UD-Q4_K_M)</caption>
           <thead>
             <tr><th>Workload</th><th>TTFT&nbsp;Δ</th><th>Prefill&nbsp;Δ</th><th>Hit</th><th>Score</th><th>Grade</th></tr>
           </thead>
@@ -220,9 +224,8 @@
           </tbody>
         </table>
       </div>
-      <div class="table-wrap">
+      <div class="table-wrap bench-panel" id="m27b">
         <table>
-          <caption>Qwen3.6-27B</caption>
           <thead>
             <tr><th>Workload</th><th>TTFT&nbsp;Δ</th><th>Prefill&nbsp;Δ</th><th>Hit</th><th>Score</th><th>Grade</th></tr>
           </thead>
@@ -266,9 +269,8 @@
           </tbody>
         </table>
       </div>
-      <div class="table-wrap">
+      <div class="table-wrap bench-panel" id="m122b">
         <table>
-          <caption>Qwen3.5-122B-A10B (Q4_K_M, 3-split)</caption>
           <thead>
             <tr><th>Workload</th><th>TTFT&nbsp;Δ</th><th>Prefill&nbsp;Δ</th><th>Hit</th><th>Score</th><th>Grade</th></tr>
           </thead>
