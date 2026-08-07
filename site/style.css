@@ -377,6 +377,7 @@ td code { white-space: nowrap; }
 }
 
 .grade.bad { color: var(--bad); border-color: rgba(224, 122, 127, 0.4); }
+.grade.mid { color: #d9a05b; border-color: rgba(217, 160, 91, 0.4); }
 
 .note { color: var(--dim); font-size: 13.5px; margin-top: 16px; }
 

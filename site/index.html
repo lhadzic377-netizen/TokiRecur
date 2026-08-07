@@ -130,18 +130,44 @@
     <div class="table-wrap">
       <table>
         <thead>
-          <tr><th>Workload</th><th>Score</th><th>Grade</th><th>What it measures</th></tr>
+          <tr><th>Workload</th><th>TTFT improvement</th><th>Prefill speedup</th><th>Cache hit rate</th><th>Composite</th><th>Grade</th></tr>
         </thead>
         <tbody>
           <tr class="reveal">
             <td><code>realistic_mixed</code></td>
-            <td>82.4 / 100</td><td><span class="grade">A</span></td>
-            <td>216 prompts across 5 real-world categories — agent sessions, chat, code, docs, RAG</td>
+            <td>+66.8%</td><td>+560.9%</td><td>88.1%</td><td>84.4</td><td><span class="grade">A</span></td>
+          </tr>
+          <tr class="reveal">
+            <td><code>summarization</code></td>
+            <td>+90.7%</td><td>+1090.7%</td><td>95.0%</td><td>92.0</td><td><span class="grade">A+</span></td>
+          </tr>
+          <tr class="reveal">
+            <td><code>code_review</code></td>
+            <td>+77.8%</td><td>+379.5%</td><td>96.7%</td><td>90.0</td><td><span class="grade">A+</span></td>
+          </tr>
+          <tr class="reveal">
+            <td><code>agent_long_output</code></td>
+            <td>+22.9%</td><td>+41.2%</td><td>98.0%</td><td>64.4</td><td><span class="grade mid">C</span></td>
+          </tr>
+          <tr class="reveal">
+            <td><code>agent_100</code></td>
+            <td>+45.0%</td><td>+264.0%</td><td>99.0%</td><td>47.3</td><td><span class="grade bad">F</span></td>
+          </tr>
+          <tr class="reveal">
+            <td><code>rag_chunks</code></td>
+            <td>+47.0%</td><td>+226.0%</td><td>87.5%</td><td>47.7</td><td><span class="grade bad">F</span></td>
+          </tr>
+          <tr class="reveal">
+            <td><code>agent_long_context</code></td>
+            <td>+47.7%</td><td>+264.6%</td><td>90.0%</td><td>47.1</td><td><span class="grade bad">F</span></td>
+          </tr>
+          <tr class="reveal">
+            <td><code>no_overlap</code></td>
+            <td>+16.7%</td><td>+18.0%</td><td>0.0%</td><td>12.0</td><td><span class="grade bad">F</span></td>
           </tr>
           <tr class="reveal">
             <td><code>stress_adversarial</code></td>
-            <td>39.2 / 100</td><td><span class="grade bad">F</span></td>
-            <td>301 prompts with overlapping-but-adversarial patterns (worst case for prefix caching)</td>
+            <td>+20.4%</td><td>+33.1%</td><td>52.2%</td><td>52.3</td><td><span class="grade mid">D</span></td>
           </tr>
         </tbody>
       </table>

@@ -556,45 +556,30 @@ Letter grades: A+ ≥ 90, A ≥ 80, B ≥ 70, C ≥ 60, D ≥ 50, F < 50.
 
 Run on AMD Ryzen AI MAX+ 395, Qwen3.5-9B-Q4_K_M, max-tokens=32:
 
+| Workload | TTFT improvement | Prefill speedup | Cache hit rate | Composite | Grade |
+|---|---|---|---|---|---|
+| `realistic_mixed` | +66.8% | +560.9% | 88.1% | 84.4 | A |
+| `summarization` | +90.7% | +1090.7% | 95.0% | 92.0 | A+ |
+| `code_review` | +77.8% | +379.5% | 96.7% | 90.0 | A+ |
+| `agent_long_output` | +22.9% | +41.2% | 98.0% | 64.4 | C |
+| `agent_100` | +45.0% | +264.0% | 99.0% | 47.3 | F |
+| `rag_chunks` | +47.0% | +226.0% | 87.5% | 47.7 | F |
+| `agent_long_context` | +47.7% | +264.6% | 90.0% | 47.1 | F |
+| `no_overlap` | +16.7% | +18.0% | 0.0% | 12.0 | F |
+| `stress_adversarial` | +20.4% | +33.1% | 52.2% | 52.3 | D |
+
+The headline number is `realistic_mixed`: 216 prompts across 5 real-world
+categories (RAG, tool-using, multi-turn, support, one-off) — TTFT cut by two
+thirds, prefill nearly 6x faster, 88% cache hit rate, composite 84.4 (A).
+`summarization` and `code_review` score even higher (A+). Low scores on
+`no_overlap` and the adversarial workloads are expected: zero-overlap prompts
+are the worst case for prefix caching, and the stress workload is designed to
+surface edge cases (false-positive hits from cosine similarity, minimal
+savings on short prompts, underperforming sequential growth).
+
 These are the most realistic scores — cache performance varies with the
 environment, so the benchmark may score better or worse on other
 hardware, models, or workloads.
-
-### realistic_mixed (216 prompts, 5 categories)
-
-**Composite: 82.4 / 100 (A)**
-
-| Category | N | Hit rate | Avg reuse | TTFT Δ | Prefill skip |
-|---|---|---|---|---|---|
-| rag | 60 | 98% | 573 tok | +61.9% | 48.5% |
-| tool | 51 | 98% | 443 tok | +33.2% | 48.0% |
-| multiturn | 40 | 100% | 1 tok | +23.6% | 0.3% |
-| support | 30 | 100% | 1 tok | +25.6% | 0.4% |
-| oneoff | 20 | 60% | 1 tok | +12.2% | 4.5% |
-
-| Metric | Baseline | Recycled | Δ |
-|---|---|---|---|
-| Total latency | 1370 ms | 1221 ms | **+12.2%** |
-| TTFT | 435 ms | 251 ms | **+42.4%** |
-| Prefill throughput | 808 tok/s | 3880 tok/s | **+380%** |
-| Tokens skipped | 0 | **57,058** | — |
-| Cache hit rate | 0% | **95.0%** | — |
-
-Output divergence: 46.8% byte-identical, median first-diff at char 15 (tail-end divergence, not prefix-level).
-
-### stress_adversarial (301 prompts, 5 patterns)
-
-**Composite: 39.2 / 100 (F)**
-
-| Category | N | Hit rate | Avg reuse | TTFT Δ | Prefill skip |
-|---|---|---|---|---|---|
-| burst | 60 | 98% | 55 tok | +5.7% | 42.9% |
-| novel | 90 | 93% | 3 tok | +24.6% | 18.0% |
-| near_miss | 50 | 98% | 48 tok | +14.9% | 40.9% |
-| sequential | 50 | 98% | 14 tok | -12.3% | 2.8% |
-| tiny | 51 | 98% | 2 tok | +1.5% | 9.3% |
-
-The stress workload surfaces edge cases: many `novel` prompts get classified as hits (false positives from cosine similarity), short prompts have minimal savings, sequential growth underperforms vs single-shot reuse. This is exactly the diagnostic value a hard test should provide.
 
 ## Repository layout
 
