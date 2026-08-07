@@ -903,30 +903,66 @@ _PORT_PID_CACHE: dict[int, tuple[float, int | None]] = {}
 
 
 def _pid_on_port(port: int) -> int | None:
-    """Find the pid listening on `port` via `ss` (Linux).
+    """Find the pid listening on `port` (best effort, per platform).
 
-    Cached for ~1 s so a busy poll loop doesn't shell out per model per
-    tick. The TTL is short enough that newly-spawned processes are
-    picked up promptly while the daemon is still probing.
+    Linux uses ``ss -tlnp``, macOS ``lsof -iTCP``, Windows
+    ``netstat -ano -p TCP``; returns None when the tool is missing or
+    nothing is listening. Cached for ~1 s so a busy poll loop doesn't
+    shell out per model per tick. The TTL is short enough that
+    newly-spawned processes are picked up promptly while the daemon is
+    still probing.
     """
     now = time.time()
     cached = _PORT_PID_CACHE.get(port)
     if cached and now - cached[0] < 1.0:
         return cached[1]
     try:
-        out = subprocess.run(
-            ["ss", "-tlnp"], capture_output=True, text=True, timeout=5.0
-        ).stdout
+        if sys.platform.startswith("linux"):
+            out = subprocess.run(
+                ["ss", "-tlnp"], capture_output=True, text=True, timeout=5.0
+            ).stdout
+            pid = None
+            for line in out.splitlines():
+                if f":{port} " not in line and not line.endswith(f":{port}"):
+                    continue
+                m = re.search(r"pid=(\d+)", line)
+                if m:
+                    pid = int(m.group(1))
+                    break
+        elif sys.platform == "darwin":
+            out = subprocess.run(
+                ["lsof", "-nP", "-iTCP", f":{port}", "-sTCP:LISTEN"],
+                capture_output=True, text=True, timeout=5.0,
+            ).stdout
+            pid = None
+            for line in out.splitlines()[1:]:
+                parts = line.split()
+                if len(parts) >= 2 and parts[0] != "COMMAND":
+                    try:
+                        pid = int(parts[1])
+                        break
+                    except ValueError:
+                        continue
+        elif sys.platform.startswith("win"):
+            out = subprocess.run(
+                ["netstat", "-ano", "-p", "TCP"],
+                capture_output=True, text=True, timeout=5.0,
+            ).stdout
+            pid = None
+            for line in out.splitlines():
+                if "LISTENING" not in line:
+                    continue
+                parts = line.split()
+                if len(parts) >= 5 and parts[1].endswith(f":{port}"):
+                    try:
+                        pid = int(parts[-1])
+                        break
+                    except ValueError:
+                        continue
+        else:
+            return None
     except Exception:
         return None
-    pid = None
-    for line in out.splitlines():
-        if f":{port} " not in line and not line.endswith(f":{port}"):
-            continue
-        m = re.search(r"pid=(\d+)", line)
-        if m:
-            pid = int(m.group(1))
-            break
     _PORT_PID_CACHE[port] = (now, pid)
     return pid
 
@@ -1112,28 +1148,35 @@ def start_model(spec: ModelSpec, wait: bool = True) -> None:
             )
 
 
+def _signal_proc(pid: int, sig: int) -> None:
+    """Send ``sig`` to the process — to its whole process group on POSIX,
+    and to the single process on Windows (where ``os.killpg`` does not
+    exist and the pid is the only handle we have)."""
+    if hasattr(os, "killpg") and hasattr(os, "getpgid"):
+        try:
+            os.killpg(os.getpgid(pid), sig)
+            return
+        except OSError:
+            pass
+    try:
+        os.kill(pid, sig)
+    except OSError:
+        pass
+
+
 def _stop_pidfile(path: Path, grace: float = 8.0) -> bool:
     pid = _read_pid(path)
     if pid is None or not _is_alive(pid):
         path.unlink(missing_ok=True)
         return False
-    try:
-        os.killpg(os.getpgid(pid), signal.SIGTERM)
-    except OSError:
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except OSError:
-            return False
+    _signal_proc(pid, signal.SIGTERM)
     deadline = time.time() + grace
     while time.time() < deadline:
         if not _is_alive(pid):
             path.unlink(missing_ok=True)
             return True
         time.sleep(0.2)
-    try:
-        os.killpg(os.getpgid(pid), signal.SIGKILL)
-    except OSError:
-        pass
+    _signal_proc(pid, signal.SIGKILL)
     path.unlink(missing_ok=True)
     return True
 

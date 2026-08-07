@@ -215,6 +215,22 @@ def start_daemon(
     return proc.pid
 
 
+def _signal_proc(pid: int, sig: int) -> None:
+    """Send ``sig`` to the process — to its whole process group on POSIX,
+    and to the single process on Windows (where ``os.killpg`` does not
+    exist and the pid is the only handle we have)."""
+    if hasattr(os, "killpg") and hasattr(os, "getpgid"):
+        try:
+            os.killpg(os.getpgid(pid), sig)
+            return
+        except OSError:
+            pass
+    try:
+        os.kill(pid, sig)
+    except OSError:
+        pass
+
+
 def stop_pid(pid_file: Path, name: str, grace: float = 5.0) -> bool:
     pid = _read_pid(pid_file)
     if pid is None:
@@ -224,10 +240,7 @@ def stop_pid(pid_file: Path, name: str, grace: float = 5.0) -> bool:
         logger.info("%s: pid=%d not alive, cleaning up", name, pid)
         pid_file.unlink(missing_ok=True)
         return False
-    try:
-        os.killpg(os.getpgid(pid), signal.SIGTERM)
-    except (ProcessLookupError, PermissionError, OSError) as e:
-        logger.warning("%s: killpg failed: %s", name, e)
+    _signal_proc(pid, signal.SIGTERM)
     # Wait for graceful shutdown
     started = time.time()
     while time.time() - started < grace:
@@ -236,11 +249,8 @@ def stop_pid(pid_file: Path, name: str, grace: float = 5.0) -> bool:
             logger.info("%s: stopped (pid=%d)", name, pid)
             return True
         time.sleep(0.2)
-    try:
-        os.killpg(os.getpgid(pid), signal.SIGKILL)
-        logger.warning("%s: force-killed (pid=%d)", name, pid)
-    except (ProcessLookupError, PermissionError, OSError):
-        pass
+    _signal_proc(pid, signal.SIGKILL)
+    logger.warning("%s: force-killed (pid=%d)", name, pid)
     pid_file.unlink(missing_ok=True)
     return True
 

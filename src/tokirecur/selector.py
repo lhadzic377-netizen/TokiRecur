@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import shlex
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -207,6 +208,9 @@ def _open_browser(url: str) -> None:
     try:
         if os.name == "nt":
             os.startfile(url)
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", url], start_new_session=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         else:
             subprocess.Popen(["xdg-open", url], start_new_session=True,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
