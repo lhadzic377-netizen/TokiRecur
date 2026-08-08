@@ -1876,35 +1876,63 @@ def write_hermes_config(
     spec: ModelSpec, specs: list[ModelSpec] | None = None,
     path: Path | None = None,
 ) -> Path:
-    """Write a provider entry for every registry spec + set the active."""
+    """Write a single ``llamacpp`` custom provider pointing at the active
+    model, and purge stale ``tokirecur-*`` entries from a previous toki
+    version that hermes can no longer resolve.
+
+    hermes's ``resolve_provider`` only accepts built-in provider IDs
+    (``openrouter``, ``custom``) and the aliases it ships (``llamacpp``,
+    ``ollama``, ``vllm``, ...). A custom key like ``tokirecur-<name>``
+    raises "Unknown provider" and the chat fails. The legacy
+    ``custom_providers`` list is read natively, so we register one
+    ``llamacpp`` entry that points at the active model's daemon and
+    list every registry model_id under ``models`` so hermes can pick
+    any of them via ``--model``.
+    """
     cfg_path = path or Path(os.environ.get(
         "HERMES_CONFIG", str(Path.home() / ".hermes/config.yaml")))
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     cfg: dict[str, Any] = yaml.safe_load(cfg_path.read_text()) if cfg_path.exists() else {}
 
+    # Drop any legacy tokirecur-* provider keys left by a previous toki
+    # version. The user may keep their own (ollama, anthropic, ...) keys.
     providers = cfg.setdefault("providers", {})
-    # Purge stale tokirecur-* entries from a previous toki version so
-    # a renamed or removed model doesn't leave a dangling key that
-    # hermes later refuses to resolve.
     for stale in [k for k in providers if k.startswith("tokirecur-")]:
         providers.pop(stale, None)
+
     all_specs = specs if specs is not None else load_registry()
     model_ids = [s.model_id for s in all_specs]
-    for s in all_specs:
-        providers[f"tokirecur-{s.name}"] = {
-            "api": f"{s.daemon_url}/v1",
-            "api_key": DEFAULT_AUTH,
-            "default_model": s.model_id,
-            "models": list(model_ids),
-            "name": f"Toki Recur ({s.label})",
-        }
+
+    # Write/overwrite a single "llamacpp" custom_providers entry. Any
+    # user-defined custom_providers entries (e.g. an ollama-local) are
+    # preserved; only the toki-owned "llamacpp" entry is replaced.
+    custom = cfg.setdefault("custom_providers", [])
+    if not isinstance(custom, list):
+        custom = []
+        cfg["custom_providers"] = custom
+    entry = {
+        "name": "llamacpp",
+        "base_url": f"{spec.daemon_url}/v1",
+        "api_key": DEFAULT_AUTH,
+        "models": list(model_ids),
+        "default_model": spec.model_id,
+        "_toki": True,  # marker so a future re-write can find it
+    }
+    has_entry = False
+    for i, c in enumerate(custom):
+        if isinstance(c, dict) and c.get("name") == "llamacpp" and c.get("_toki"):
+            custom[i] = entry
+            has_entry = True
+            break
+    if not has_entry:
+        custom.append(entry)
 
     cfg.setdefault("model", {}).update(
         {
             "api_key": DEFAULT_AUTH,
             "base_url": f"{spec.daemon_url}/v1",
             "default": spec.model_id,
-            "provider": f"tokirecur-{spec.name}",
+            "provider": "llamacpp",
         }
     )
 

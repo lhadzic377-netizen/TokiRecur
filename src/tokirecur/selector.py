@@ -113,7 +113,11 @@ def launch_cmd(interface: str, client: str, spec: Any) -> dict:
             return {"argv": ["openclaw", "tui"], "detach": False, "url": None,
                     "env": env}
         if client == "hermes":
-            return {"argv": ["hermes", "chat", "--tui", "--provider", provider,
+            # hermes recognizes "llamacpp" as a built-in alias for the
+            # custom local-server provider; the actual base_url lives
+            # in ~/.hermes/config.yaml's custom_providers list, written
+            # by ctl.write_hermes_config on every `toki model use`.
+            return {"argv": ["hermes", "chat", "--tui", "--provider", "llamacpp",
                              "-m", spec.model_id],
                     "detach": False, "url": None, "env": env}
         if client == "codex":
@@ -133,7 +137,7 @@ def launch_cmd(interface: str, client: str, spec: Any) -> dict:
             return {"argv": ["openclaw", "chat"], "detach": False, "url": None,
                     "env": env}
         if client == "hermes":
-            return {"argv": ["hermes", "--tui", "chat", "--provider", provider,
+            return {"argv": ["hermes", "--tui", "chat", "--provider", "llamacpp",
                              "-m", spec.model_id],
                     "detach": False, "url": None, "env": env}
         if client == "codex":

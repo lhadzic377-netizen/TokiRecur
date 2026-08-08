@@ -140,22 +140,25 @@ def test_hermes_config_writer(env, with_pulled_model):
     out = ctl.write_hermes_config(spec, path=cfg_path)
     cfg = yaml.safe_load(out.read_text())
     assert cfg["memory"]["memory_enabled"] is True  # untouched
+    # The user's other providers are preserved.
     assert cfg["providers"]["ollama-launch"]["api"] == "http://127.0.0.1:11434/v1"
-    assert cfg["providers"]["tokirecur-9b"]["api"] == "http://127.0.0.1:8787/v1"
-    # Hermes lists every spec's model_id under every provider (legacy).
+    # No tokirecur-* keys are written — hermes's resolve_provider
+    # rejects them. The active model is registered under the
+    # built-in "llamacpp" alias via the legacy custom_providers list.
+    assert "tokirecur-9b" not in cfg["providers"]
+    custom = cfg.get("custom_providers") or []
+    names = [c.get("name") for c in custom]
+    assert "llamacpp" in names
+    entry = next(c for c in custom if c.get("name") == "llamacpp")
+    assert entry["base_url"] == "http://127.0.0.1:8787/v1"
     expected_ids = {s.model_id for s in ctl.load_registry()}
-    assert set(cfg["providers"]["tokirecur-9b"]["models"]) == expected_ids
+    assert set(entry["models"]) == expected_ids
     assert cfg["model"] == {
         "api_key": "demo-token",
         "base_url": "http://127.0.0.1:8787/v1",
         "default": "qwen3.5-9b",
-        "provider": "tokirecur-9b",
+        "provider": "llamacpp",
     }
-    # Pulled model also wired.
-    pulled = with_pulled_model["pulled"]
-    pulled_prov = cfg["providers"][f"tokirecur-{pulled.name}"]
-    assert pulled_prov["api"] == f"{pulled.daemon_url}/v1"
-    assert pulled_prov["default_model"] == pulled.model_id
     assert cfg_path.with_suffix(".yaml.bak-model").exists()
 
 
@@ -173,7 +176,15 @@ def test_sync_cli_configs_writes_all(env, with_pulled_model, monkeypatch):
     cla = json.loads(paths["openclaw"].read_text())
     assert f"tokirecur-{pulled_name}" in cla["models"]["providers"]
     h = yaml.safe_load(paths["hermes"].read_text())
-    assert f"tokirecur-{pulled_name}" in h["providers"]
+    # hermes writer uses the built-in "llamacpp" alias (resolve_provider
+    # rejects custom keys like "tokirecur-<name>"); the custom_providers
+    # list carries the model registry.
+    custom = h.get("custom_providers") or []
+    assert any(c.get("name") == "llamacpp" for c in custom)
+    llama_entry = next(c for c in custom if c.get("name") == "llamacpp")
+    pulled_model_id = with_pulled_model["pulled"].model_id
+    assert pulled_model_id in llama_entry["models"]
+    assert h["model"]["provider"] == "llamacpp"
     with paths["codex"].open("rb") as fh:
         codex = toml_load(fh)
     assert f"tokirecur-{pulled_name}" in codex["model_providers"]
@@ -992,12 +1003,20 @@ def test_use_model_syncs_cli_configs(env, hf, monkeypatch):
     h = _yaml.safe_load(her_path.read_text())
     assert f"tokirecur-{pulled.name}" in oc["provider"]
     assert f"tokirecur-{pulled.name}" in cla["models"]["providers"]
-    assert f"tokirecur-{pulled.name}" in h["providers"]
+    # hermes uses the built-in "llamacpp" alias instead of a custom
+    # provider key, so the pulled spec is registered via the legacy
+    # custom_providers list.
+    custom = h.get("custom_providers") or []
+    llama_entry = next(
+        (c for c in custom if c.get("name") == "llamacpp"), None,
+    )
+    assert llama_entry is not None
+    assert pulled.model_id in llama_entry["models"]
     # And the active model line points at the pulled spec.
     assert oc["model"] == f"tokirecur-{pulled.name}/{pulled.model_id}"
     assert cla["agents"]["defaults"]["model"]["primary"] == \
         f"tokirecur-{pulled.name}/{pulled.model_id}"
-    assert h["model"]["provider"] == f"tokirecur-{pulled.name}"
+    assert h["model"]["provider"] == "llamacpp"
 
 
 # ── Daemon reasoning headroom ────────────────────────────────────────
@@ -1276,7 +1295,6 @@ def test_writable_dir_falls_back_to_macos_app_support(tmp_path, monkeypatch):
         from tokirecur.ctl import _writable_dir
         # Override Path.home so the macOS fallback resolves into tmp_path.
         mac_root = tmp_path / "mac"
-        mac_app = mac_root / "Library" / "Application Support" / "tokirecur"
         monkeypatch.setattr(
             "pathlib.Path.home", classmethod(lambda cls: mac_root),
         )
@@ -1336,13 +1354,14 @@ def test_default_paths_falls_back_when_xdg_not_writable(tmp_path, monkeypatch):
 
 
 def test_write_hermes_config_purges_stale_tokirecur_keys(env, monkeypatch, tmp_path):
-    """Old toki versions wrote short keys like 'tokirecur-9b'. The new
-    code uses 'tokirecur-<full-name>'. A leftover 'tokirecur-9b' would
-    linger if we just setdefault'd, so the writer must purge."""
-    from tokirecur.ctl import write_hermes_config
-    from tokirecur import ctl
+    """Old toki versions wrote 'tokirecur-*' provider keys that hermes's
+    resolve_provider now rejects. The writer must purge them so the
+    next launch doesn't trip on a stale 'Unknown provider' error."""
     from types import SimpleNamespace
+
     import yaml
+
+    from tokirecur.ctl import write_hermes_config
 
     cfg = tmp_path / "config.yaml"
     cfg.write_text(yaml.safe_dump({
@@ -1361,15 +1380,19 @@ def test_write_hermes_config_purges_stale_tokirecur_keys(env, monkeypatch, tmp_p
     write_hermes_config(spec, specs=[spec], path=cfg)
     out = yaml.safe_load(cfg.read_text())
     assert "tokirecur-9b" not in out["providers"], out["providers"]
-    assert "tokirecur-qwen3.5-0.8b-gguf" in out["providers"], out["providers"]
-    # Other providers (ollama) must be preserved.
+    # The new code doesn't write a 'tokirecur-*' key at all — it uses
+    # the built-in 'llamacpp' alias via the custom_providers list.
+    custom = out.get("custom_providers") or []
+    assert any(c.get("name") == "llamacpp" for c in custom)
+    # The user's other providers (ollama) are preserved.
     assert "ollama-launch" in out["providers"]
 
 
 def test_write_opencode_config_purges_stale_tokirecur_keys(env, monkeypatch, tmp_path):
-    from tokirecur.ctl import write_opencode_config
-    from types import SimpleNamespace
     import json
+    from types import SimpleNamespace
+
+    from tokirecur.ctl import write_opencode_config
 
     cfg = tmp_path / "opencode.json"
     cfg.write_text(json.dumps({
@@ -1396,9 +1419,10 @@ def test_write_opencode_config_purges_stale_tokirecur_keys(env, monkeypatch, tmp
 
 
 def test_write_openclaw_config_purges_stale_tokirecur_keys(env, monkeypatch, tmp_path):
-    from tokirecur.ctl import write_openclaw_config
-    from types import SimpleNamespace
     import json
+    from types import SimpleNamespace
+
+    from tokirecur.ctl import write_openclaw_config
 
     cfg = tmp_path / "openclaw.json"
     cfg.write_text(json.dumps({
@@ -1424,3 +1448,65 @@ def test_write_openclaw_config_purges_stale_tokirecur_keys(env, monkeypatch, tmp
     providers = out["models"]["providers"]
     assert "tokirecur-9b" not in providers, providers
     assert "tokirecur-qwen3.5-0.8b-gguf" in providers
+
+
+def test_write_hermes_config_uses_llamacpp_alias(env, monkeypatch, tmp_path):
+    """The hermes writer must register the model under 'llamacpp' (a
+    built-in hermes alias) so resolve_provider doesn't reject it."""
+    from types import SimpleNamespace
+
+    import yaml
+
+    from tokirecur.ctl import write_hermes_config
+
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(yaml.safe_dump({"providers": {}}))
+
+    spec = SimpleNamespace(
+        name="qwen3.5-0.8b-gguf", model_id="qwen3.5-0.8b",
+        daemon_url="http://127.0.0.1:8787", label="Qwen3.5-0.8B",
+    )
+
+    write_hermes_config(spec, specs=[spec], path=cfg)
+    out = yaml.safe_load(cfg.read_text())
+
+    # model.provider is the name hermes's resolve_provider must accept.
+    assert out["model"]["provider"] == "llamacpp"
+    # base_url points at the active daemon (with /v1 for OpenAI compat).
+    assert out["model"]["base_url"] == "http://127.0.0.1:8787/v1"
+    # The legacy custom_providers list has a "llamacpp" entry.
+    custom = out.get("custom_providers") or []
+    names = [c.get("name") for c in custom]
+    assert "llamacpp" in names
+    entry = next(c for c in custom if c.get("name") == "llamacpp")
+    assert entry["base_url"] == "http://127.0.0.1:8787/v1"
+    assert entry["models"] == ["qwen3.5-0.8b"]
+
+
+def test_write_hermes_config_preserves_user_custom_providers(env, tmp_path):
+    """Switching models must NOT clobber the user's own custom_providers
+    entries (e.g. an ollama-launch entry)."""
+    from types import SimpleNamespace
+
+    import yaml
+
+    from tokirecur.ctl import write_hermes_config
+
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(yaml.safe_dump({
+        "custom_providers": [
+            {"name": "ollama-local", "base_url": "http://x:11434/v1",
+             "models": ["llama3"]},
+        ],
+    }))
+
+    spec = SimpleNamespace(
+        name="qwen3.5-0.8b-gguf", model_id="qwen3.5-0.8b",
+        daemon_url="http://127.0.0.1:8787", label="Qwen3.5-0.8B",
+    )
+
+    write_hermes_config(spec, specs=[spec], path=cfg)
+    out = yaml.safe_load(cfg.read_text())
+    names = [c.get("name") for c in out["custom_providers"]]
+    assert "ollama-local" in names
+    assert "llamacpp" in names

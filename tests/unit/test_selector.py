@@ -29,7 +29,7 @@ def spec(name: str = "laguna", model_id: str = "laguna-s-2.1") -> FakeSpec:
 
 def test_chat_hermes_interactive():
     plan = launch_cmd("chat", "hermes", spec())
-    assert plan["argv"] == ["hermes", "chat", "--tui", "--provider", "tokirecur-laguna",
+    assert plan["argv"] == ["hermes", "chat", "--tui", "--provider", "llamacpp",
                             "-m", "laguna-s-2.1"]
     assert not plan["detach"]
 
@@ -65,7 +65,7 @@ def test_tui_opencode_preselects_model():
 
 def test_tui_hermes_uses_provider():
     plan = launch_cmd("tui", "hermes", spec())
-    assert plan["argv"] == ["hermes", "--tui", "chat", "--provider", "tokirecur-laguna",
+    assert plan["argv"] == ["hermes", "--tui", "chat", "--provider", "llamacpp",
                             "-m", "laguna-s-2.1"]
     assert not plan["detach"]
 
