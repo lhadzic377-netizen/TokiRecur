@@ -82,6 +82,50 @@ def _max_context_ceiling() -> int | None:
     return value if value > 0 else None
 
 
+def _max_slots_ceiling() -> int | None:
+    """The server's real ``--parallel`` slot count (TOKI_MAX_SLOTS, set
+    by the stack's fit planner). The recycling engine round-robins over
+    the client-requested slot range; a request above the real count
+    would 400 on llama-server, so the daemon clamps."""
+    try:
+        value = int(os.environ.get("TOKI_MAX_SLOTS", ""))
+    except (TypeError, ValueError):
+        return None
+    return value if 1 <= value <= 32 else None
+
+
+def _resolve_max_slots(requested: int) -> int:
+    """Clamp the client's slot request to the server's real slot count."""
+    ceiling = _max_slots_ceiling()
+    if ceiling and requested > ceiling:
+        return ceiling
+    return requested
+
+
+def _context_overflow_status(e: Exception) -> int | None:
+    """413 for llama.cpp's context-window overflow errors, else None.
+
+    Clients (opencode, hermes) surface the status + detail to the user;
+    a bare llama.cpp 400 "not enough tokens" was the old behavior that
+    read as a generic failure and sent hermes into a compress/retry
+    loop against a window it believed to be 256k.
+    """
+    msg = str(e)
+    if "not enough tokens in the context window" in msg or "exceeds the context window" in msg:
+        return 413
+    return None
+
+
+def _overflow_detail() -> str:
+    """Human + machine-parseable explanation for a context overflow."""
+    ceiling = _max_context_ceiling()
+    window = f"{ceiling} tokens" if ceiling else "the daemon's configured window"
+    return (
+        f"request exceeds the model's real context window ({window}). "
+        "The daemon only advertises what the KV cache actually fits."
+    )
+
+
 def _active_model_id() -> str | None:
     """The model_id of the currently-active spec, or None if no model
     is active. Used to normalize the ``model`` field on incoming
@@ -442,6 +486,43 @@ def create_app(
             pass
         return {"status": "unreachable"}
 
+    # ---- OpenAI model metadata (context discovery) ----
+
+    def _model_info_entry() -> dict:
+        """OpenAI-format model entry advertising the REAL context window.
+
+        Clients probe GET /v1/models (hermes's model_metadata detector,
+        vLLM-style tools) to learn how much context they may use. The
+        daemon answers with the effective slot context (TOKI_MAX_CONTEXT
+        _TOKENS), never the registry's raw ctx_size — that mismatch is
+        what made hermes believe 256k and send oversized prompts.
+        Top-level `max_model_len`/`context_length` are used because
+        llama.cpp's own `meta.n_ctx` field is ignored by those probes.
+        """
+        ctx = _max_context_ceiling()
+        entry: dict[str, Any] = {
+            "id": _active_model_id() or "default",
+            "object": "model",
+            "created": int(app.state.started_at),
+            "owned_by": "tokirecur",
+        }
+        if ctx:
+            entry.update({
+                "max_model_len": ctx,
+                "context_length": ctx,
+                "max_tokens": ctx,
+                "meta": {"n_ctx": ctx},
+            })
+        return entry
+
+    @app.get("/v1/models")
+    async def models_list() -> dict:
+        return {"object": "list", "data": [_model_info_entry()]}
+
+    @app.get("/v1/models/{model}")
+    async def models_get(model: str) -> dict:
+        return _model_info_entry()
+
     @app.post("/v1/precision")
     async def precision_check(req: PrecisionRequest) -> dict:
         """Run the precision retention check against llama-server directly."""
@@ -658,11 +739,15 @@ def create_app(
                         result = item["result"]
             except Exception as e:
                 logger.exception("streaming chat completion failed")
+                if _context_overflow_status(e):
+                    err_msg = f"[context overflow: {_overflow_detail()}]"
+                else:
+                    err_msg = f"[daemon error: {e}]"
                 yield chunk_with(
                     {"content": ""}, finish_reason="error",
                 )
                 yield chunk_with(
-                    {"content": f"[daemon error: {e}]"},
+                    {"content": err_msg},
                 )
                 yield "data: [DONE]\n\n"
                 return
@@ -933,7 +1018,7 @@ def create_app(
                 max_tokens=_resolve_max_tokens(max_tokens,
                                                reasoning=reasoning_mode),
                 temperature=req.temperature,
-                max_slots=req.max_slots,
+                max_slots=_resolve_max_slots(req.max_slots),
                 session_id=req.session_id,
                 chat_template_kwargs=ctk,
                 tools=_normalize_responses_tools(req.tools),
@@ -1123,7 +1208,7 @@ def create_app(
                         None,
                         req.max_tokens,
                         req.temperature,
-                        req.max_slots,
+                        _resolve_max_slots(req.max_slots),
                         req.session_id,
                         req.model,
                         completion_id,
@@ -1136,7 +1221,7 @@ def create_app(
                 req.prompt,
                 max_tokens=_resolve_max_tokens(req.max_tokens, reasoning="off"),
                 temperature=req.temperature,
-                max_slots=req.max_slots,
+                max_slots=_resolve_max_slots(req.max_slots),
                 session_id=req.session_id,
             )
             # Record metrics.
@@ -1185,6 +1270,9 @@ def create_app(
                 },
             )
         except Exception as e:
+            if _context_overflow_status(e):
+                raise HTTPException(status_code=413,
+                                    detail=_overflow_detail()) from e
             logger.exception("completion failed")
             raise HTTPException(status_code=500, detail=str(e)) from e
 
@@ -1217,7 +1305,7 @@ def create_app(
                         messages,
                         req.max_tokens,
                         req.temperature,
-                        req.max_slots,
+                        _resolve_max_slots(req.max_slots),
                         req.session_id,
                         req.model,
                         completion_id,
@@ -1238,7 +1326,7 @@ def create_app(
                 messages,
                 max_tokens=_resolve_max_tokens(req.max_tokens, reasoning=default_reasoning),
                 temperature=req.temperature,
-                max_slots=req.max_slots,
+                max_slots=_resolve_max_slots(req.max_slots),
                 session_id=req.session_id,
                 chat_template_kwargs=ctk,
                 tools=req.tools,
@@ -1302,6 +1390,9 @@ def create_app(
                 },
             )
         except Exception as e:
+            if _context_overflow_status(e):
+                raise HTTPException(status_code=413,
+                                    detail=_overflow_detail()) from e
             logger.exception("chat completion failed")
             raise HTTPException(status_code=500, detail=str(e)) from e
 
@@ -1337,7 +1428,7 @@ def create_app(
                 max_tokens=_resolve_max_tokens(max_tokens,
                                                reasoning=reasoning_mode),
                 temperature=req.temperature,
-                max_slots=req.max_slots,
+                max_slots=_resolve_max_slots(req.max_slots),
                 session_id=req.session_id,
                 chat_template_kwargs=ctk,
                 tools=_normalize_responses_tools(req.tools),
@@ -1398,6 +1489,9 @@ def create_app(
                 media_type="application/json",
             )
         except Exception as e:
+            if _context_overflow_status(e):
+                raise HTTPException(status_code=413,
+                                    detail=_overflow_detail()) from e
             logger.exception("responses completion failed")
             raise HTTPException(status_code=500, detail=str(e)) from e
 

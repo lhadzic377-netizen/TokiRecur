@@ -121,7 +121,12 @@ def test_openclaw_config_writer(env, with_pulled_model):
     assert prov["timeoutSeconds"] == 3600
     assert prov["baseUrl"] == "http://127.0.0.1:8789/v1"
     assert prov["models"][0]["id"] == "laguna-s-2.1"
-    assert prov["models"][0]["contextWindow"] == 64000
+    # contextWindow must advertise the model's EFFECTIVE context (the
+    # old bug wrote max_tokens here — the lie that made openclaw
+    # overfill the slot and hang).
+    assert prov["models"][0]["contextWindow"] == 131072
+    assert prov["models"][0]["cost"] == {"cacheRead": 0, "cacheWrite": 0,
+                                         "input": 0, "output": 0}
     assert cfg["agents"]["defaults"]["model"]["primary"] == "tokirecur-laguna/laguna-s-2.1"
     assert cfg["agents"]["defaults"]["timeoutSeconds"] == 3600
     # Pulled model also has a provider entry.
@@ -159,6 +164,10 @@ def test_hermes_config_writer(env, with_pulled_model):
         "base_url": "http://127.0.0.1:8787/v1",
         "default": "qwen3.5-9b",
         "provider": "llamacpp",
+        # Explicit context_length is hermes's authoritative context
+        # source (resolution step 0) — without it a failed probe of the
+        # daemon falls back to a 256k default.
+        "context_length": 200000,
     }
     assert cfg_path.with_suffix(".yaml.bak-model").exists()
 
@@ -189,6 +198,120 @@ def test_sync_cli_configs_writes_all(env, with_pulled_model, monkeypatch):
     with paths["codex"].open("rb") as fh:
         codex = toml_load(fh)
     assert f"tokirecur-{pulled_name}" in codex["model_providers"]
+
+
+def test_hermes_models_dict_carries_context_length(env, with_pulled_model):
+    """hermes's authoritative context source: per-model dict entries.
+
+    Without explicit context_length hermes falls back to a 256k default
+    after a failed (< 64k) probe of the daemon — the "request sent,
+    never answered" class on small-RAM machines.
+    """
+    spec = with_pulled_model["9b"]
+    out = ctl.write_hermes_config(spec, path=env / "config.yaml")
+    cfg = yaml.safe_load(out.read_text())
+    entry = next(c for c in cfg["custom_providers"]
+                 if c.get("name") == "llamacpp")
+    for s in ctl.load_registry():
+        model = entry["models"][s.model_id]
+        assert model["context_length"] == ctl._effective_ctx(s)
+    # The active model is defaulted.
+    assert cfg["model"]["default"] == spec.model_id
+
+
+def test_hermes_purges_stale_context_cache(env, with_pulled_model, tmp_path):
+    """context_length_cache.yaml entries for daemon URLs must go.
+
+    A 256k default cached while the daemon 404'd /v1/models would keep
+    hermes believing a window that isn't there even after the config
+    override lands (display paths / model switches read the cache).
+    """
+    cache = env / "hermes" / "context_length_cache.yaml"
+    cache.parent.mkdir(parents=True)
+    cache.write_text(yaml.safe_dump({
+        "context_lengths": {
+            "qwen3.5-9b@http://127.0.0.1:8787/v1": 256000,
+            "other@http://127.0.0.1:11434/v1": 131072,
+        },
+    }))
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setenv("HERMES_HOME", str(env / "hermes"))
+    try:
+        spec = with_pulled_model["9b"]
+        ctl.write_hermes_config(spec, path=env / "config.yaml")
+        fresh = yaml.safe_load(cache.read_text())
+        urls = fresh["context_lengths"]
+        # The daemon-URL entry (live or dead port) is gone; the foreign
+        # ollama one stays.
+        assert all("@http://127.0.0.1:8787" not in u for u in urls)
+        assert "other@http://127.0.0.1:11434/v1" in urls
+    finally:
+        monkeypatch.undo()
+
+
+def test_mode_persisted_and_threaded(env, with_pulled_model, monkeypatch):
+    """Per-client raw/managed modes: persisted, then honored by sync."""
+    spec = with_pulled_model["9b"]
+    assert ctl.client_mode("opencode") == "managed"
+    ctl.write_client_mode("opencode", "raw")
+    assert ctl.client_mode("opencode") == "raw"
+    # Explicit --mode overrides the persisted value.
+    assert ctl._resolve_mode("opencode", "managed") == "managed"
+    assert ctl._resolve_mode("opencode", None) == "raw"
+
+    # sync_cli_configs picks up the persisted mode: raw opencode points
+    # straight at llama-server (no daemon in the path).
+    paths = ctl.sync_cli_configs(spec)
+    oc = json.loads(paths["opencode"].read_text())
+    assert oc["provider"]["tokirecur-9b"]["options"]["baseURL"] == \
+        f"{spec.llama_url}/v1"
+    # The others stayed managed (their mode was never changed).
+    cla = json.loads(paths["openclaw"].read_text())
+    assert cla["models"]["providers"]["tokirecur-9b"]["baseUrl"] == \
+        f"{spec.daemon_url}/v1"
+    h = yaml.safe_load(paths["hermes"].read_text())
+    entry = next(c for c in h["custom_providers"]
+                 if c.get("name") == "llamacpp")
+    assert entry["base_url"] == f"{spec.daemon_url}/v1"
+
+
+def test_write_codex_config_stays_managed(env, with_pulled_model, monkeypatch):
+    """codex always routes through the daemon (Responses API shim)."""
+    spec = with_pulled_model["9b"]
+    monkeypatch.setenv("CODEX_HOME", str(env / "codex-home"))
+    ctl.write_client_mode("codex", "raw")
+    out = ctl.write_codex_config(spec)
+    with out.open("rb") as fh:
+        codex = toml_load(fh)
+    prov = codex["model_providers"]["tokirecur-9b"]
+    assert prov["base_url"] == f"{spec.daemon_url}/v1"
+
+
+def test_codex_purges_stale_tokirecur_providers(env, with_pulled_model,
+                                                monkeypatch):
+    """A provider pointing at a dead toki era port must not survive."""
+    spec = with_pulled_model["9b"]
+    monkeypatch.setenv("CODEX_HOME", str(env / "codex-home"))
+    home = Path(env / "codex-home")
+    home.mkdir(parents=True)
+    (home / "config.toml").write_text(
+        "[model]\n"
+        'model_provider = "tokirecur-old"\n'
+        'model = "tokirecur-old/qwen3.5-9b"\n\n'
+        "[model_providers.tokirecur-old]\n"
+        'name = "tokirecur-old"\n'
+        'base_url = "http://127.0.0.1:18002/v1"\n'
+        'env_key = "TOKI_AUTH"\n'
+        'wire_api = "responses"\n'
+    )
+    ctl.write_codex_config(spec)
+    with (home / "config.toml").open("rb") as fh:
+        codex = toml_load(fh)
+    # Stale entry gone; only the live registry providers remain.
+    assert "tokirecur-old" not in codex["model_providers"]
+    assert "tokirecur-9b" in codex["model_providers"]
+    assert codex["model_providers"]["tokirecur-9b"]["base_url"] == \
+        f"{spec.daemon_url}/v1"
 
 
 def test_model_status_down(env):
@@ -1500,7 +1623,7 @@ def test_write_hermes_config_purges_stale_tokirecur_keys(env, monkeypatch, tmp_p
 
     spec = SimpleNamespace(
         name="qwen3.5-0.8b-gguf", model_id="qwen3.5-0.8b",
-        daemon_url="http://127.0.0.1:8787", label="Qwen3.5-0.8B",
+        daemon_url="http://127.0.0.1:8787", label="Qwen3.5-0.8B", ctx_size=32768,
     )
 
     write_hermes_config(spec, specs=[spec], path=cfg)
@@ -1530,9 +1653,8 @@ def test_write_opencode_config_purges_stale_tokirecur_keys(env, monkeypatch, tmp
 
     spec = SimpleNamespace(
         name="qwen3.5-0.8b-gguf", model_id="qwen3.5-0.8b",
-        daemon_url="http://127.0.0.1:8787", label="Qwen3.5-0.8B",
-        max_tokens=32768,
-        ctx_size=32768,
+        daemon_url="http://127.0.0.1:8787", llama_url="http://127.0.0.1:8088",
+        label="Qwen3.5-0.8B", ctx_size=32768, max_tokens=32768,
         always_on=False,
         state_dir=lambda: tmp_path / "state",
     )
@@ -1562,9 +1684,8 @@ def test_write_openclaw_config_purges_stale_tokirecur_keys(env, monkeypatch, tmp
 
     spec = SimpleNamespace(
         name="qwen3.5-0.8b-gguf", model_id="qwen3.5-0.8b",
-        daemon_url="http://127.0.0.1:8787", label="Qwen3.5-0.8B",
-        max_tokens=32768,
-        ctx_size=32768,
+        daemon_url="http://127.0.0.1:8787", llama_url="http://127.0.0.1:8088",
+        label="Qwen3.5-0.8B", ctx_size=32768, max_tokens=32768,
         always_on=False,
         state_dir=lambda: tmp_path / "state",
     )
@@ -1590,7 +1711,8 @@ def test_write_hermes_config_uses_llamacpp_alias(env, monkeypatch, tmp_path):
 
     spec = SimpleNamespace(
         name="qwen3.5-0.8b-gguf", model_id="qwen3.5-0.8b",
-        daemon_url="http://127.0.0.1:8787", label="Qwen3.5-0.8B",
+        daemon_url="http://127.0.0.1:8787", llama_url="http://127.0.0.1:8088",
+        ctx_size=32768,
     )
 
     write_hermes_config(spec, specs=[spec], path=cfg)
@@ -1606,14 +1728,15 @@ def test_write_hermes_config_uses_llamacpp_alias(env, monkeypatch, tmp_path):
     assert "llamacpp" in names
     entry = next(c for c in custom if c.get("name") == "llamacpp")
     assert entry["base_url"] == "http://127.0.0.1:8787/v1"
-    assert entry["models"] == ["qwen3.5-0.8b"]
+    assert entry["models"] == {"qwen3.5-0.8b": {"context_length": 32768}}
     # The newer providers: dict has the same entry — hermes scans this
     # FIRST, so a stale user entry must not shadow the daemon.
     prov = out.get("providers") or {}
     assert "llamacpp" in prov
     assert prov["llamacpp"]["api"] == "http://127.0.0.1:8787/v1"
     assert prov["llamacpp"]["default_model"] == "qwen3.5-0.8b"
-    assert prov["llamacpp"]["models"] == ["qwen3.5-0.8b"]
+    assert prov["llamacpp"]["models"] == {
+        "qwen3.5-0.8b": {"context_length": 32768}}
 
 
 def test_write_hermes_config_takes_over_stale_providers_llamacpp(env, tmp_path):
@@ -1644,7 +1767,8 @@ def test_write_hermes_config_takes_over_stale_providers_llamacpp(env, tmp_path):
 
     spec = SimpleNamespace(
         name="qwen3.5-0.8b-gguf", model_id="qwen3.5-0.8b-q4_k_m",
-        daemon_url="http://127.0.0.1:8787", label="Qwen3.5-0.8B",
+        daemon_url="http://127.0.0.1:8787", llama_url="http://127.0.0.1:8088",
+        ctx_size=32768,
     )
 
     write_hermes_config(spec, specs=[spec], path=cfg)
@@ -1677,7 +1801,8 @@ def test_write_hermes_config_preserves_user_custom_providers(env, tmp_path):
 
     spec = SimpleNamespace(
         name="qwen3.5-0.8b-gguf", model_id="qwen3.5-0.8b",
-        daemon_url="http://127.0.0.1:8787", label="Qwen3.5-0.8B",
+        daemon_url="http://127.0.0.1:8787", llama_url="http://127.0.0.1:8088",
+        ctx_size=32768,
     )
 
     write_hermes_config(spec, specs=[spec], path=cfg)
@@ -1724,7 +1849,7 @@ def test_normalize_model_ids_skips_already_short_ids(env, tmp_path):
     reg = env / "models.yaml"
     spec = SimpleNamespace(
         name="qwen3.5-9b", gguf="/m/qwen3.5-9b.gguf",
-        llama_port=8091, daemon_port=8790, ctx_size=32768,
+        llama_port=8088, daemon_port=8787, ctx_size=200000,
         parallel=2, kv="f16", max_tokens=16384,
         model_id="qwen3.5-9b",  # already short
         always_on=False, boot=False, binary="/b/llama-server",
@@ -1907,8 +2032,8 @@ def test_sync_cli_configs_fault_isolated(env, monkeypatch, tmp_path):
 
     spec = SimpleNamespace(
         name="qwen3.5-0.8b-gguf", model_id="qwen3.5-0.8b",
-        daemon_url="http://127.0.0.1:8787", label="Qwen3.5-0.8B",
-        max_tokens=32768, ctx_size=32768, always_on=False,
+        daemon_url="http://127.0.0.1:8787", llama_url="http://127.0.0.1:8088",
+        ctx_size=32768,
         state_dir=lambda: cfg_dir / "state",
     )
     monkeypatch.setenv("OPENCODE_CONFIG", str(corrupt))
@@ -1937,8 +2062,8 @@ def test_write_opencode_config_migrates_string_provider(env, tmp_path):
 
     spec = SimpleNamespace(
         name="qwen3.5-0.8b-gguf", model_id="qwen3.5-0.8b",
-        daemon_url="http://127.0.0.1:8787", label="Qwen3.5-0.8B",
-        max_tokens=32768, ctx_size=32768, always_on=False,
+        daemon_url="http://127.0.0.1:8787", llama_url="http://127.0.0.1:8088",
+        label="Qwen3.5-0.8B", ctx_size=32768, always_on=False,
         state_dir=lambda: tmp_path / "state",
     )
     write_opencode_config(spec, specs=[spec], path=cfg)
@@ -1960,7 +2085,8 @@ def test_write_hermes_config_migrates_string_model_key(env, tmp_path):
 
     spec = SimpleNamespace(
         name="qwen3.5-0.8b-gguf", model_id="qwen3.5-0.8b",
-        daemon_url="http://127.0.0.1:8787", label="Qwen3.5-0.8B",
+        daemon_url="http://127.0.0.1:8787", llama_url="http://127.0.0.1:8088",
+        ctx_size=32768,
     )
     write_hermes_config(spec, specs=[spec], path=cfg)
     out = yaml.safe_load(cfg.read_text())

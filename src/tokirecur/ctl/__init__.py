@@ -340,24 +340,34 @@ _KV_BYTES_PER_ELEM = {"f16": 2.0, "q8_0": 1.0625, "q4_0": 0.5625,
 _CTX_FLOOR = 512
 
 
-def _kv_bytes_per_token(spec: ModelSpec) -> float | None:
+def _kv_bytes_per_token(spec: ModelSpec, kv_type: str | None = None,
+                        parallel: int | None = None) -> float | None:
     """llama.cpp KV cache bytes per token across all layers/slots.
 
     Exact math: per layer, k+v each hold ``head_dim * n_head_kv``
     values, with ``head_dim = n_embd / n_head``. Requires the model's
     GGUF metadata; ``None`` when unreadable (caller skips clamping).
+    ``kv_type``/``parallel`` override the spec's own KV precision and
+    slot count (used by the fit planner to find a config that fits).
     """
-    meta = read_gguf_meta(spec.gguf)
+    gguf = getattr(spec, "gguf", None)
+    if not gguf:
+        return None
+    meta = read_gguf_meta(gguf)
     if not meta.complete or meta.n_head == 0:
         return None
     head_dim = meta.n_embd / meta.n_head
-    per_layer = head_dim * meta.n_head_kv * 2.0 * _KV_BYTES_PER_ELEM.get(spec.kv, 2.0)
-    return per_layer * meta.n_layer * spec.parallel
+    kv_bytes = _KV_BYTES_PER_ELEM.get(kv_type or spec.kv, 2.0)
+    per_layer = head_dim * meta.n_head_kv * 2.0 * kv_bytes
+    return per_layer * meta.n_layer * (parallel if parallel is not None else spec.parallel)
 
 
 def _model_max_ctx(spec: ModelSpec) -> int | None:
     """The model's own max context (from GGUF metadata), or ``None``."""
-    meta = read_gguf_meta(spec.gguf)
+    gguf = getattr(spec, "gguf", None)
+    if not gguf:
+        return None
+    meta = read_gguf_meta(gguf)
     if meta and meta.context_length:
         return meta.context_length
     return None
@@ -386,24 +396,94 @@ def _clamp_ctx(spec: ModelSpec, avail_gb: float | None = None,
     if weight_gb is None:
         try:
             weight_gb = resolve_gguf_path(spec).stat().st_size / 1e9
-        except FileNotFoundError:
+        except (AttributeError, FileNotFoundError, OSError):
             weight_gb = 0.0
     budget = avail_gb - weight_gb * 1.2 - 4.0
-    if budget <= 0 or not math.isfinite(budget):
-        return cap  # unknown RAM or weights alone don't fit
+    if not math.isfinite(budget):
+        # RAM can't be measured (inf) or the measurement is garbage:
+        # keep the configured window and let llama-server's own
+        # auto-reduction apply — a silent shrink, but not a lie.
+        return cap
+    if budget <= 0:
+        # Weights + headroom alone don't fit the measured RAM. The old
+        # behavior passed the full ctx to llama.cpp, which then silently
+        # auto-reduced the KV cache to whatever fit — every client was
+        # told a window that never existed. Return the smallest honest
+        # value instead; `_check_ram` raises before launch anyway.
+        return _CTX_FLOOR
     max_fit = int(budget * 1e9 / kv_per_token)
     return max(_CTX_FLOOR, min(cap, max_fit))
+
+
+# KV precision ladder for the fit planner: quality order, best first.
+_KV_QUALITY_ORDER = ("f16", "q8_0", "q4_1", "q4_0")
+
+
+def _fit_plan(spec: ModelSpec, avail_gb: float | None = None,
+              weight_gb: float | None = None) -> tuple[int, str, int]:
+    """The launch config ``(ctx, kv, parallel)`` that best fits RAM.
+
+    Computes the largest context each (kv precision, slot count)
+    combination can hold under the same budget as ``_clamp_ctx``
+    (weights * 1.2 + 4 GB headroom, capped at the model's own max ctx)
+    and picks the biggest window. Ties prefer the spec's own
+    kv/parallel (no quality surprise on machines with plenty of RAM),
+    then higher-quality KV, then more slots.
+
+    On the 16 GB class this is the difference between a ~8-16k window
+    (f16, 2 slots) and a ~64k+ window (q8_0, 1 slot) for a 9B — the
+    memory is identical, only the advertised window changes.
+    """
+    cap = spec.ctx_size
+    model_max = _model_max_ctx(spec)
+    if model_max:
+        cap = min(cap, model_max)
+    if avail_gb is None:
+        avail_gb = _available_gb()
+    if weight_gb is None:
+        try:
+            weight_gb = resolve_gguf_path(spec).stat().st_size / 1e9
+        except (AttributeError, FileNotFoundError, OSError):
+            weight_gb = 0.0
+    budget = avail_gb - weight_gb * 1.2 - 4.0
+    if _kv_bytes_per_token(spec) is None or not math.isfinite(budget) or budget <= 0:
+        # Unknown metadata/RAM (or weights alone don't fit — `_check_ram`
+        # raises before launch): keep the spec's own config untouched.
+        return (cap, spec.kv, spec.parallel)
+    candidates = []
+    for kv in _KV_QUALITY_ORDER:
+        for par in (spec.parallel, 1):
+            per = _kv_bytes_per_token(spec, kv_type=kv, parallel=par)
+            if per is None:
+                continue
+            ctx = max(_CTX_FLOOR, min(cap, int(budget * 1e9 / per)))
+            candidates.append((ctx, kv, par))
+    return max(
+        candidates,
+        key=lambda c: (
+            c[0],                       # biggest window wins
+            c[1] == spec.kv,            # …then the spec's own kv
+            c[2] == spec.parallel,      # …then the spec's own slots
+            -_KV_QUALITY_ORDER.index(c[1]),  # …then higher KV quality
+            c[2],                       # …then more slots
+        ),
+    )
 
 
 def _effective_ctx(spec: ModelSpec) -> int:
     """The context llama-server actually runs with (clamped, then
     corrected to the real slot size after start). Falls back to the
-    configured ``ctx_size`` before the first start."""
-    state = spec.state_dir() / "effective_ctx.txt"
-    try:
-        return int(state.read_text().strip())
-    except (OSError, ValueError):
-        return spec.ctx_size
+    RAM-clamped value before the first start — never the raw registry
+    ``ctx_size``, which clients would overfill against a window the
+    server can't provide (the 0.2.16 "not enough context" class)."""
+    sd = getattr(spec, "state_dir", None)
+    if callable(sd):
+        try:
+            return int((sd() / "effective_ctx.txt").read_text().strip())
+        except (OSError, ValueError):
+            pass
+    clamped = _clamp_ctx(spec)
+    return clamped if clamped < spec.ctx_size else spec.ctx_size
 
 
 def _check_ram(spec: ModelSpec) -> None:
@@ -1395,7 +1475,9 @@ def _model_aliases(spec: ModelSpec) -> list[str]:
     return sorted(a for a in aliases if a)
 
 
-def _llama_args(spec: ModelSpec, ctx_override: int | None = None) -> list[str]:
+def _llama_args(spec: ModelSpec, ctx_override: int | None = None,
+                kv_override: str | None = None,
+                parallel_override: int | None = None) -> list[str]:
     # MLX has a different invocation: mlx_lm.server takes a model
     # directory and exposes an OpenAI-compatible API on a port.
     binary = _resolve_binary(spec)
@@ -1410,21 +1492,23 @@ def _llama_args(spec: ModelSpec, ctx_override: int | None = None) -> list[str]:
             "--port", str(spec.llama_port),
         ]
     ctx = spec.ctx_size if ctx_override is None else ctx_override
+    kv = spec.kv if kv_override is None else kv_override
+    parallel = spec.parallel if parallel_override is None else parallel_override
     args = [
         binary,
         "-m", str(gguf),
         "--host", "127.0.0.1",
         "--port", str(spec.llama_port),
         "-c", str(ctx),
-        "--parallel", str(spec.parallel),
+        "--parallel", str(parallel),
         "-lv", "3",
     ]
     # Offload to the GPU when one is present. Registry `extra_args` may
     # already pin `-ngl` (or the long form); never duplicate it.
     if not any(a in ("-ngl", "--n-gpu-layers") for a in spec.extra_args):
         args += ["-ngl", str(_default_ngl())]
-    if spec.kv != "f16":
-        args += ["--cache-type-k", spec.kv, "--cache-type-v", spec.kv]
+    if kv != "f16":
+        args += ["--cache-type-k", kv, "--cache-type-v", kv]
     if spec.reasoning == "off":
         args += ["--reasoning", "off"]
     elif spec.reasoning == "on":
@@ -1522,6 +1606,22 @@ def _real_slot_ctx(url: str) -> int | None:
         return None
 
 
+def _real_slot_count(url: str) -> int | None:
+    """How many slots the running llama-server actually exposes.
+
+    Used to size the daemon's ``max_slots`` clamp when the server was
+    launched with a reduced ``--parallel`` (fit planner) — the daemon
+    must never round-robin onto a slot that doesn't exist (400s).
+    """
+    try:
+        r = httpx.get(f"{url}/slots", timeout=3.0)
+        r.raise_for_status()
+        slots = r.json()
+        return len(slots) if isinstance(slots, list) else None
+    except Exception:
+        return None
+
+
 def start_model(spec: ModelSpec, wait: bool = True) -> None:
     """Bring up the model's llama-server + daemon (idempotent)."""
     state = spec.state_dir()
@@ -1547,15 +1647,17 @@ def start_model(spec: ModelSpec, wait: bool = True) -> None:
             raise FileNotFoundError(f"model file not found: {spec.gguf}")
         resolve_gguf_path(spec)  # raises a one-command hint when missing
         _check_ram(spec)
-        ctx = _clamp_ctx(spec)
-        if ctx < spec.ctx_size:
+        ctx, kv, parallel = _fit_plan(spec)
+        if ctx < spec.ctx_size or kv != spec.kv or parallel != spec.parallel:
             logger.warning(
-                "%s: context clamped %d -> %d (KV cache must fit in RAM)",
-                spec.name, spec.ctx_size, ctx,
+                "%s: launch plan adjusted — ctx %d (spec %d), kv %s (spec %s), "
+                "slots %d (spec %d) so the KV cache fits in RAM",
+                spec.name, ctx, spec.ctx_size, kv, spec.kv, parallel, spec.parallel,
             )
         log = open(state / "llama.log", "ab")
         proc = subprocess.Popen(
-            _llama_args(spec, ctx_override=ctx),
+            _llama_args(spec, ctx_override=ctx, kv_override=kv,
+                        parallel_override=parallel),
             stdout=log,
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
@@ -1577,11 +1679,14 @@ def start_model(spec: ModelSpec, wait: bool = True) -> None:
 
     if not daemon_reachable(spec):
         effective = _effective_ctx(spec)
+        real_slots = _real_slot_count(spec.llama_url)
+        slots = real_slots if real_slots else spec.parallel
         log = open(state / "daemon.log", "ab")
         env = {
             **os.environ,
             "TOKI_BACKEND_URL": spec.llama_url,
             "TOKI_MAX_CONTEXT_TOKENS": str(effective),
+            "TOKI_MAX_SLOTS": str(slots),
             "TOKI_REASONING": spec.reasoning,
         }
         proc = subprocess.Popen(
@@ -1926,23 +2031,102 @@ def use_model(
 # ── CLI config writers ─────────────────────────────────────────────────
 
 
+def _client_modes_path(root: Path | None = None) -> Path:
+    return (root or STATE_ROOT) / "client-modes.json"
+
+
+def read_client_modes(root: Path | None = None) -> dict[str, str]:
+    """Per-client inference mode (``raw`` | ``managed``), persisted so
+    the launcher and ``toki model use`` agree. Unknown clients default
+    to ``managed`` — the mode where the daemon owns context truth."""
+    try:
+        path = _client_modes_path(root)
+        data = json.loads(path.read_text()) if path.exists() else {}
+        return {k: v for k, v in data.items() if v in ("raw", "managed")}
+    except (OSError, ValueError):
+        return {}
+
+
+def write_client_mode(client: str, mode: str,
+                      root: Path | None = None) -> dict[str, str]:
+    modes = read_client_modes(root)
+    if mode not in ("raw", "managed"):
+        raise ValueError(f"invalid mode {mode!r}: must be raw or managed")
+    modes[client] = mode
+    path = _client_modes_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _atomic_write_text(path, json.dumps(modes, indent=2) + "\n")
+    return modes
+
+
+def client_mode(client: str, root: Path | None = None) -> str:
+    return read_client_modes(root).get(client, "managed")
+
+
+def _resolve_mode(client: str, mode: str | None,
+                  root: Path | None = None) -> str:
+    """Explicit ``--mode`` wins; otherwise the persisted per-client mode."""
+    return mode if mode in ("raw", "managed") else client_mode(client, root)
+
+
 def _backup(path: Path) -> None:
     if path.exists():
         shutil.copy2(path, path.with_suffix(path.suffix + ".bak-model"))
 
 
-def _provider_entry(spec: ModelSpec) -> dict[str, Any]:
+def _known_daemon_ports(specs: list[ModelSpec]) -> set[int]:
+    """The daemon ports every registry spec can be serving on.
+
+    Used to purge stale ``tokirecur-*`` providers whose baseUrl points
+    at a dead daemon port — the 0.2.16 "openclaw default model on port
+    18002 with contextWindow 90" class, where an old sync (or a
+    hand-setup wizard) left every client pointing at a server that no
+    longer exists.
+    """
+    return {s.daemon_port for s in specs}
+
+
+def _purge_stale_tokirecur_providers(
+    providers: dict[str, Any], specs: list[ModelSpec],
+) -> int:
+    """Drop ``tokirecur-*`` provider keys whose baseUrl points at a port
+    no registry spec serves. Returns the number of purged entries."""
+    live = _known_daemon_ports(specs)
+    purged = 0
+    for key in [k for k in providers if k.startswith("tokirecur-")]:
+        entry = providers[key]
+        urls = []
+        if isinstance(entry, dict):
+            if isinstance(entry.get("options"), dict):
+                urls.append(entry["options"].get("baseURL"))
+            for url_key in ("baseUrl", "base_url"):
+                if isinstance(entry.get(url_key), str):
+                    urls.append(entry[url_key])
+        base = next((u for u in urls if isinstance(u, str)), "")
+        port = None
+        try:
+            port = int(base.rsplit(":", 1)[1].split("/", 1)[0])
+        except (ValueError, IndexError):
+            port = None
+        if port is not None and port not in live:
+            providers.pop(key, None)
+            purged += 1
+    return purged
+
+
+def _provider_entry(spec: ModelSpec, mode: str = "managed") -> dict[str, Any]:
     # Advertise the context the model ACTUALLY runs with (clamped to
     # fit RAM, corrected to the live slot size after start) — never the
     # registry max_tokens. Advertising a bigger window than the slot
     # exists makes opencode overfill the context and hit llama-server's
     # 400 "not enough tokens".
     ctx = _effective_ctx(spec)
+    base = spec.llama_url if mode == "raw" else spec.daemon_url
     return {
         "name": f"Toki Recur ({spec.label})",
         "npm": "@ai-sdk/openai-compatible",
         "options": {
-            "baseURL": f"{spec.daemon_url}/v1",
+            "baseURL": f"{base}/v1",
             "apiKey": DEFAULT_AUTH,
         },
         "models": {
@@ -1969,12 +2153,15 @@ def _small_model_ref(specs: list[ModelSpec]) -> str:
 
 def write_opencode_config(
     spec: ModelSpec, specs: list[ModelSpec] | None = None,
-    path: Path | None = None,
+    path: Path | None = None, mode: str | None = None,
 ) -> Path:
     """Write a provider entry for every registry spec + set the active.
 
     `specs` may be passed in to avoid re-reading the registry; if it's
     None the registry is loaded once and threaded through the call.
+    `mode` selects the inference path: ``managed`` (default) points at
+    the toki daemon (context truth, KV recycling, /v1/models); ``raw``
+    points straight at llama-server.
     """
     cfg_path = path or Path(os.environ.get(
         "OPENCODE_CONFIG", str(Path.home() / ".config/opencode/opencode.json")))
@@ -1993,8 +2180,9 @@ def write_opencode_config(
     for stale in [k for k in providers if k.startswith("tokirecur-")]:
         providers.pop(stale, None)
     all_specs = specs if specs is not None else load_registry()
+    mode = _resolve_mode("opencode", mode)
     for s in all_specs:
-        providers[f"tokirecur-{s.name}"] = _provider_entry(s)
+        providers[f"tokirecur-{s.name}"] = _provider_entry(s, mode=mode)
 
     small = _small_model_ref(all_specs)
     cfg["small_model"] = small
@@ -2007,9 +2195,14 @@ def write_opencode_config(
 
 def write_openclaw_config(
     spec: ModelSpec, specs: list[ModelSpec] | None = None,
-    path: Path | None = None,
+    path: Path | None = None, mode: str | None = None,
 ) -> Path:
-    """Write a provider entry for every registry spec + set the active."""
+    """Write a provider entry for every registry spec + set the active.
+
+    ``mode=raw`` points the providers at llama-server directly (no
+    daemon); ``managed`` (default) routes through the daemon. Either
+    way ``contextWindow`` is the model's effective context.
+    """
     cfg_path = path or Path(os.environ.get(
         "OPENCLAW_CONFIG", str(Path.home() / ".openclaw/openclaw.json")))
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2030,17 +2223,22 @@ def write_openclaw_config(
     for stale in [k for k in providers if k.startswith("tokirecur-")]:
         providers.pop(stale, None)
     all_specs = specs if specs is not None else load_registry()
+    mode = _resolve_mode("openclaw", mode)
     for s in all_specs:
+        base = s.llama_url if mode == "raw" else s.daemon_url
         providers[f"tokirecur-{s.name}"] = {
             "api": "openai-completions",
-            "baseUrl": f"{s.daemon_url}/v1",
+            "baseUrl": f"{base}/v1",
             "apiKey": DEFAULT_AUTH,
             "timeoutSeconds": 3600,
             "models": [
                 {
                     "id": s.model_id,
                     "name": f"{s.label} (Toki Recur)",
-                    "contextWindow": s.max_tokens,
+                    # Advertise the context the model ACTUALLY runs with —
+                    # never max_tokens (a lie that made openclaw overfill
+                    # the slot and hang on "request sent, no response").
+                    "contextWindow": _effective_ctx(s),
                     "cost": {"cacheRead": 0, "cacheWrite": 0, "input": 0, "output": 0},
                 }
             ],
@@ -2058,7 +2256,7 @@ def write_openclaw_config(
 
 def write_hermes_config(
     spec: ModelSpec, specs: list[ModelSpec] | None = None,
-    path: Path | None = None,
+    path: Path | None = None, mode: str | None = None,
 ) -> Path:
     """Write a single ``llamacpp`` custom provider pointing at the active
     model, and purge stale ``tokirecur-*`` entries from a previous toki
@@ -2099,7 +2297,8 @@ def write_hermes_config(
         providers.pop(stale, None)
 
     all_specs = specs if specs is not None else load_registry()
-    model_ids = [s.model_id for s in all_specs]
+    mode = _resolve_mode("hermes", mode)
+    base = spec.llama_url if mode == "raw" else spec.daemon_url
 
     # Write/overwrite a single "llamacpp" custom_providers entry. Any
     # user-defined custom_providers entries (e.g. an ollama-local) are
@@ -2108,11 +2307,21 @@ def write_hermes_config(
     if not isinstance(custom, list):
         custom = []
         cfg["custom_providers"] = custom
+    # Per-model `context_length` in dict form is hermes's authoritative
+    # context source (get_custom_provider_context_length — resolution
+    # step 0, before any probe). Without it hermes's probe of the daemon
+    # fails (or reports < 64k, hermes's probe minimum) and it defaults
+    # to 256k — the root cause of the "request sent, never answered"
+    # class on small-RAM machines.
+    models_with_ctx: dict[str, dict[str, Any]] = {
+        s.model_id: {"context_length": _effective_ctx(s)}
+        for s in all_specs
+    }
     entry = {
         "name": "llamacpp",
-        "base_url": f"{spec.daemon_url}/v1",
+        "base_url": f"{base}/v1",
         "api_key": DEFAULT_AUTH,
-        "models": list(model_ids),
+        "models": models_with_ctx,
         "default_model": spec.model_id,
         "_toki": True,  # marker so a future re-write can find it
     }
@@ -2129,9 +2338,9 @@ def write_hermes_config(
     # scans before ``custom_providers``. Without this a stale user/legacy
     # "llamacpp" key would keep pointing requests at llama-server.
     providers["llamacpp"] = {
-        "api": f"{spec.daemon_url}/v1",
+        "api": f"{base}/v1",
         "api_key": DEFAULT_AUTH,
-        "models": list(model_ids),
+        "models": models_with_ctx,
         "default_model": spec.model_id,
         "name": "Toki Recur (llamacpp)",
         "_toki": True,
@@ -2146,20 +2355,59 @@ def write_hermes_config(
     model_cfg.update(
         {
             "api_key": DEFAULT_AUTH,
-            "base_url": f"{spec.daemon_url}/v1",
+            "base_url": f"{base}/v1",
             "default": spec.model_id,
             "provider": "llamacpp",
+            # Explicit context override for the active model (resolution
+            # step 0) — the only channel that beats hermes's 64k probe
+            # minimum on small-RAM machines.
+            "context_length": _effective_ctx(spec),
         }
     )
+
+    _purge_stale_hermes_context_cache(all_specs)
 
     _backup(cfg_path)
     _atomic_write_text(cfg_path, yaml.safe_dump(cfg, sort_keys=False))
     return cfg_path
 
 
+def _purge_stale_hermes_context_cache(specs: list[ModelSpec]) -> None:
+    """Drop hermes ``context_length_cache.yaml`` entries for toki daemons.
+
+    Entries are keyed ``model@base_url``. A stale cache (a 256k default
+    cached before the daemon advertised /v1/models, or an entry for a
+    daemon port that no longer exists) would keep hermes believing a
+    window that isn't there, even with the config override in place
+    (display paths and /model switches read the cache). Only toki-owned
+    base URLs are removed; user caches (ollama, ...) survive.
+    """
+    try:
+        home = Path(os.environ.get(
+            "HERMES_HOME", str(Path.home() / ".hermes")))
+        path = home / "context_length_cache.yaml"
+        if not path.exists():
+            return
+        data = yaml.safe_load(path.read_text()) or {}
+        cache = data.get("context_lengths") or {}
+        if not isinstance(cache, dict):
+            return
+        daemon_urls = {f"{s.daemon_url}/v1" for s in specs}
+        stale = {k for k in cache if k.rsplit("@", 1)[-1] in daemon_urls}
+        if not stale:
+            return
+        for k in stale:
+            cache.pop(k, None)
+        logger.info("purged %d stale hermes context-length cache entries", len(stale))
+        _atomic_write_text(path, yaml.safe_dump(
+            {"context_lengths": cache}, sort_keys=False))
+    except Exception as e:  # noqa: BLE001 — cache purge is best-effort
+        logger.warning("could not purge hermes context cache: %s", e)
+
+
 def write_codex_config(
     spec: ModelSpec, specs: list[ModelSpec] | None = None,
-    path: Path | None = None,
+    path: Path | None = None, mode: str | None = None,
 ) -> Path:
     """Write a provider entry for every registry spec + set the active.
 
@@ -2169,6 +2417,11 @@ def write_codex_config(
     entry pointing at the toki daemon's OpenAI-compatible API.
     Existing keys are preserved (scalar keys are re-emitted before the
     table sections, as TOML requires).
+
+    ``mode`` is accepted for interface parity but codex ALWAYS routes
+    through the daemon: it speaks the Responses API (``wire_api =
+    "responses"``), which llama-server does not serve — a ``raw`` codex
+    provider would fail every request.
     """
     cfg_path = path or Path(os.environ.get(
         "CODEX_HOME", str(Path.home() / ".codex"))) / "config.toml"
@@ -2182,6 +2435,11 @@ def write_codex_config(
     tables = {k: v for k, v in cfg.items() if isinstance(v, dict)}
     providers = tables.setdefault("model_providers", {})
     all_specs = specs if specs is not None else load_registry()
+    # Drop tokirecur-* entries pointing at daemon ports that no longer
+    # exist (stale syncs leave codex on a dead 18002-style server — the
+    # "request sent, never answered" class for codex too).
+    if _purge_stale_tokirecur_providers(providers, all_specs):
+        logger.info("purged stale tokirecur-* providers from codex config")
     for s in all_specs:
         providers[f"tokirecur-{s.name}"] = {
             "name": f"Toki Recur ({s.label})",
@@ -2207,13 +2465,18 @@ def write_codex_config(
     return cfg_path
 
 
-def sync_cli_configs(spec: ModelSpec) -> dict[str, Path]:
+def sync_cli_configs(spec: ModelSpec, mode: str | None = None) -> dict[str, Path]:
     """Write the active model into all four CLI configs.
 
     Reads the registry once and threads the loaded specs through each
     writer — the previous version re-parsed the YAML four times per
     switch (once per writer plus a second `load_registry` inside
     `_small_model_ref`).
+
+    `mode` is the inference path for the sync: ``raw`` (straight to
+    llama-server), ``managed`` (through the daemon), or ``None`` to
+    use each client's persisted mode. Codex always stays managed (its
+    Responses-API shim only exists on the daemon).
 
     Each writer is fault-isolated: a corrupt/foreign config for one CLI
     must never block the other three (that failure mode silently left
@@ -2228,7 +2491,8 @@ def sync_cli_configs(spec: ModelSpec) -> dict[str, Path]:
         ("codex", write_codex_config),
     ):
         try:
-            out[tool] = writer(spec, specs)
+            tool_mode = _resolve_mode(tool, mode)
+            out[tool] = writer(spec, specs, mode=tool_mode)
         except Exception as e:  # defensive: one bad config never blocks the rest
             logger.warning("could not write %s config: %s", tool, e)
     return out

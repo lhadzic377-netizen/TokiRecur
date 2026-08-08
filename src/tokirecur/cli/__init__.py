@@ -893,9 +893,19 @@ def status() -> None:  # noqa: F811
     help="Only rewrite the opencode/openclaw/hermes/codex configs; do "
          "not start or stop any stack (installer-friendly heal).",
 )
-def use(name: str, keep_others: bool, wait: bool, sync_only: bool) -> None:
+@click.option(
+    "--mode", type=click.Choice(["raw", "managed"]), default=None,
+    help="Inference path for all four clients: managed (through the "
+         "toki daemon — context truth, KV recycling) or raw (direct "
+         "llama-server). Persisted; default is managed.",
+)
+def use(name: str, keep_others: bool, wait: bool, sync_only: bool,
+        mode: str | None) -> None:
     """Start the model stack and select it in opencode/openclaw/hermes."""
-    from ..ctl import _effective_ctx, sync_cli_configs, use_model
+    from ..ctl import _effective_ctx, sync_cli_configs, use_model, write_client_mode
+    if mode:
+        for tool in ("opencode", "openclaw", "hermes", "codex"):
+            write_client_mode(tool, mode)
     try:
         spec = use_model(name, stop_others=not keep_others, sync_only=sync_only)
     except (KeyError, FileNotFoundError, RuntimeError) as e:
@@ -908,12 +918,20 @@ def use(name: str, keep_others: bool, wait: bool, sync_only: bool) -> None:
             f"note: context clamped to {effective} tokens (fits this "
             f"machine's RAM; configured {spec.ctx_size})"
         )
+    if effective < 24000:
+        click.echo(
+            "note: effective context is under 24k — on a small-RAM box "
+            "consider `toki model use laguna` (or 0.8b) instead of a "
+            "9B-class model at full window"
+        )
     if sync_only:
         click.echo(f"model '{name}' configs synced (stack not started)")
     else:
         click.echo(f"model '{name}' is up: llama :{spec.llama_port}  daemon :{spec.daemon_port}")
     for tool, path in paths.items():
         click.echo(f"  {tool:9s} -> {path}")
+    if mode:
+        click.echo(f"mode: {mode} for all clients (codex stays on the daemon)")
     click.echo("switched. per-run override: opencode --model, openclaw agent --model, "
                "hermes -m --provider")
     if wait:
@@ -934,6 +952,21 @@ def use(name: str, keep_others: bool, wait: bool, sync_only: bool) -> None:
             signal.signal(signal.SIGCHLD, signal.SIG_IGN)
         while True:
             time.sleep(3600)
+
+
+@model.command("mode")
+@click.argument("client", type=click.Choice(["opencode", "openclaw", "hermes", "codex"]))
+@click.argument("mode", type=click.Choice(["raw", "managed"]))
+def model_mode(client: str, mode: str) -> None:
+    """Set one client's inference path.
+
+    managed = through the toki daemon (context truth + KV recycling;
+    required by codex, which speaks the Responses API the daemon shims).
+    raw = straight to llama-server (no daemon in the path).
+    """
+    from ..ctl import write_client_mode
+    write_client_mode(client, mode)
+    click.echo(f"client '{client}' -> {mode} (applied on next sync/stack start)")
 
 
 @model.command()

@@ -74,6 +74,73 @@ def test_clamp_ctx_keeps_floor(env, monkeypatch):
     assert ctl._clamp_ctx(spec, avail_gb=4.1, weight_gb=0.0) == ctl._CTX_FLOOR
 
 
+def test_clamp_ctx_zero_budget_keeps_floor(env, monkeypatch):
+    spec = _spec(env)
+    monkeypatch.setattr(ctl, "read_gguf_meta", lambda p: GgufMeta(
+        n_embd=4096, n_layer=32, n_head=16, n_head_kv=4))
+    # Weights + headroom alone (16.8 GB) exceed the machine: the old code
+    # returned the raw 200k cap and let llama.cpp silently shrink the
+    # window — every client was told a context that never existed. The
+    # smallest honest value wins instead; `_check_ram` raises before
+    # launch anyway.
+    assert ctl._clamp_ctx(spec, avail_gb=16.0, weight_gb=14.0) == ctl._CTX_FLOOR
+
+
+# ── fit planner (ctx / kv / parallel that best fits RAM) ─────────────
+
+
+def test_fit_plan_picks_biggest_window(env, monkeypatch):
+    spec = _spec(env, ctx=200000, parallel=2)
+    monkeypatch.setattr(ctl, "read_gguf_meta", lambda p: GgufMeta(
+        n_embd=4096, n_layer=32, n_head=16, n_head_kv=4))
+    # 12 GB budget: f16@2 slots fits 45776, q4_1@1 slot reaches the full
+    # 200k. The planner must trade KV precision/slots for the window —
+    # on the 16 GB class that's the difference between "not enough
+    # context" and a usable model.
+    assert ctl._fit_plan(spec, avail_gb=16.0, weight_gb=0.0) == (
+        200000, "q4_1", 1)
+
+
+def test_fit_plan_prefers_spec_kv_on_tie(env, monkeypatch):
+    spec = _spec(env, ctx=200000, parallel=2)
+    spec.kv = "q4_0"
+    monkeypatch.setattr(ctl, "read_gguf_meta", lambda p: GgufMeta(
+        n_embd=4096, n_layer=32, n_head=16, n_head_kv=4))
+    # q4_1 and q4_0 both reach the 200k cap; the spec's own kv wins the
+    # tie (no quality surprise on machines with plenty of RAM).
+    assert ctl._fit_plan(spec, avail_gb=16.0, weight_gb=0.0) == (
+        200000, "q4_0", 1)
+
+
+def test_fit_plan_noop_unknown_ram(env, monkeypatch):
+    spec = _spec(env)
+    monkeypatch.setattr(ctl, "read_gguf_meta", lambda p: GgufMeta(
+        n_embd=4096, n_layer=32, n_head=16, n_head_kv=4))
+    # Unbounded/unknown RAM: spec's own config, untouched.
+    assert ctl._fit_plan(spec, avail_gb=float("inf"), weight_gb=0.0) == (
+        spec.ctx_size, spec.kv, spec.parallel)
+
+
+def test_fit_plan_noop_zero_budget(env, monkeypatch):
+    spec = _spec(env)
+    monkeypatch.setattr(ctl, "read_gguf_meta", lambda p: GgufMeta(
+        n_embd=4096, n_layer=32, n_head=16, n_head_kv=4))
+    # Weights alone don't fit — `_check_ram` refuses the launch, so the
+    # planner leaves the spec config alone (never a lying cap).
+    assert ctl._fit_plan(spec, avail_gb=16.0, weight_gb=14.0) == (
+        spec.ctx_size, spec.kv, spec.parallel)
+
+
+def test_effective_ctx_falls_back_to_clamped(env, monkeypatch):
+    spec = _spec(env, ctx=200000)
+    monkeypatch.setattr(ctl, "read_gguf_meta", lambda p: GgufMeta(
+        n_embd=4096, n_layer=32, n_head=16, n_head_kv=4))
+    monkeypatch.setattr(ctl, "_available_gb", lambda: 16.0)
+    # Pre-start, the effective context must be the RAM-clamped window
+    # (45776), never the raw 200000 that clients would overfill.
+    assert ctl._effective_ctx(spec) == 45776
+
+
 # ── effective ctx plumbing ──────────────────────────────────────────
 
 

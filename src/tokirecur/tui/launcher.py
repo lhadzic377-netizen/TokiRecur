@@ -24,7 +24,7 @@ from textual.reactive import reactive
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, Select, Static
 
-from ..ctl import load_registry, model_status
+from ..ctl import load_registry, model_status, read_client_modes, write_client_mode
 from . import art
 
 
@@ -127,6 +127,7 @@ class LauncherApp(App[dict | None]):
         Binding("ctrl+c", "quit_app", "Quit", show=False, priority=True),
         Binding("q", "quit_app", "quit", show=False, priority=True),
         Binding("s", "settings", "Settings", priority=True),
+        Binding("m", "toggle_mode", "Mode", priority=True),
     ]
 
     focus_pane: reactive[str] = reactive("launchers")  # launchers | models | settings
@@ -147,6 +148,7 @@ class LauncherApp(App[dict | None]):
         self._statuses: dict[str, Any] = {}
         self._error: str | None = None
         self._launching: str | None = None
+        self._client_modes: dict[str, str] = {}
 
     # ── Compose ───────────────────────────────────────────────────────
 
@@ -155,6 +157,7 @@ class LauncherApp(App[dict | None]):
         if not self.specs:
             self._error = "no models in registry — run `toki model list`"
         self._refresh_pinned()
+        self._client_modes = read_client_modes()
         self.set_interval(3.0, self._poll_statuses)
 
     def compose(self) -> ComposeResult:
@@ -311,6 +314,37 @@ class LauncherApp(App[dict | None]):
         )
         self._refresh += 1
 
+    def action_toggle_mode(self) -> None:
+        """m: cycle the highlighted client's inference mode raw <-> managed.
+
+        codex is pinned to managed: its Responses API shim only exists on
+        the daemon, so a raw provider would fail every request.
+        """
+        if self.focus_pane != "launchers":
+            self.action_back()
+            return
+        app = LAUNCH_APPS[self.launch_idx]
+        if not app.model_binding or app.client == "codex":
+            self.notify(
+                f"{app.title}: always uses the daemon (managed)", timeout=3
+            )
+            return
+        cur = self._client_modes.get(app.client, "managed")
+        nxt = "raw" if cur == "managed" else "managed"
+        self._client_modes = write_client_mode(app.client, nxt)
+        if self.pinned:
+            try:
+                from ..ctl import get_model, sync_cli_configs
+                sync_cli_configs(get_model(self.pinned))
+                self.notify(f"{app.client}: {cur} -> {nxt} (configs synced)",
+                            timeout=3)
+            except (KeyError, RuntimeError, OSError):
+                self.notify(f"{app.client}: {cur} -> {nxt} (re-sync on "
+                            f"next start)", timeout=3)
+        else:
+            self.notify(f"{app.client}: {cur} -> {nxt}", timeout=3)
+        self._refresh += 1
+
     def action_pin(self) -> None:
         """space: pin the highlighted model (or open the picker)."""
         if self.focus_pane == "launchers":
@@ -411,7 +445,7 @@ class LauncherApp(App[dict | None]):
         else:
             line.append("no model pinned", style="dim")
         line.append("    ", style="dim")
-        line.append("1-5 jump · enter launch · esc quit", style="dim")
+        line.append("1-5 jump · m mode · enter launch · esc quit", style="dim")
         return line
 
     def _render_launchers(self, width: int) -> list[Text]:
@@ -423,6 +457,14 @@ class LauncherApp(App[dict | None]):
                 if (app.model_binding and self.pinned)
                 else ""
             )
+            mode_tag = ""
+            if app.model_binding and app.client in ("opencode", "openclaw",
+                                                    "hermes", "codex"):
+                mode = self._client_modes.get(app.client, "managed")
+                if app.client == "codex":
+                    mode_tag = " · daemon"
+                else:
+                    mode_tag = f" · {mode}"
 
             if active:
                 # Active row: yellow accent + bold title + chip pinned
@@ -438,7 +480,9 @@ class LauncherApp(App[dict | None]):
                 out.append(row)
                 # Description: tight under the title, aligned to the gutter
                 # so the `▌` bar stays the visual anchor.
-                out.append(Text(self._GUT + app.description, style="dim"))
+                out.append(
+                    Text(self._GUT + app.description + mode_tag, style="dim")
+                )
             else:
                 row = Text(self._GUT, end="")
                 row.append(app.title, style=art.MUTED)
