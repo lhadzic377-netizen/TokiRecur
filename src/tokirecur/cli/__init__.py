@@ -1195,7 +1195,8 @@ def _rocm_env(gfx: str | None) -> dict[str, str]:
 @click.option("--name", default=None,
               help="Registry model to point at the installed binary, e.g. 35b.")
 @click.option("--backend", default="auto",
-              type=click.Choice(["auto", "rocm", "cuda", "vulkan", "metal", "cpu"]),
+              type=click.Choice(["auto", "rocm", "cuda", "vulkan",
+                                 "metal", "mlx", "cpu"]),
               help="GPU backend to install (default: auto-detect).")
 @click.option("--gfx", "gfx", default=None,
               help="HSA_OVERRIDE_GFX_VERSION for ROCm builds, e.g. 11.5.1 "
@@ -1261,6 +1262,10 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
         click.echo("error: --backend cuda is only available on Windows "
                    "(llama.cpp ships no Linux CUDA assets)", err=True)
         raise SystemExit(1) from None
+    elif backend == "mlx" and os_name != "macos":
+        click.echo("error: --backend mlx is only available on macOS "
+                   "(Apple's MLX framework)", err=True)
+        raise SystemExit(1) from None
     else:
         click.echo(f"backend: {backend} ({os_name}/{arch})")
 
@@ -1301,6 +1306,47 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
     bin_dir = Path(dest) if dest else state_dir / "bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
     exe_name = "llama-server.exe" if os_name == "windows" else "llama-server"
+
+    # MLX has no release binary — it's a pip package. Install it, write
+    # a shim into the bin dir, and point the registry at mlx_lm.server.
+    if backend == "mlx":
+        click.echo("installing mlx-lm (Apple MLX inference server)...")
+        proc = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--upgrade", "mlx-lm"],
+            capture_output=True, text=True, timeout=300,
+        )
+        if proc.returncode != 0:
+            click.echo(
+                f"mlx-lm install failed: {proc.stderr.strip() or proc.stdout.strip()}",
+                err=True,
+            )
+            raise SystemExit(1) from None
+        click.echo("mlx-lm: ok")
+        # Write a small launcher shim so binary_backend's path probe
+        # finds something on disk; mlx_lm.server is also resolved via
+        # `shutil.which` for the actual spawn.
+        shim = bin_dir / "mlx_lm.server"
+        shim.write_text(
+            "#!/usr/bin/env sh\n"
+            f"exec {sys.executable} -m mlx_lm.server \"$@\"\n"
+        )
+        if os.name != "nt":
+            shim.chmod(0o755)
+        click.echo(f"shim: {shim}")
+        if name:
+            try:
+                spec = set_binary(name, "mlx_lm.server", env=None)
+                click.echo(f"registry: '{spec.name}' now uses mlx_lm.server")
+            except KeyError as e:
+                click.echo(f"error: {e}", err=True)
+                raise SystemExit(1) from None
+        else:
+            click.echo(
+                f"registry: pass --name <model> to point a model at it "
+                f"(or edit `binary:` in "
+                f"{os.environ.get('TOKI_MODEL_REGISTRY', str(Path.home() / '.config/tokirecur/models.yaml'))})"
+            )
+        return
 
     api = httpx.Client(timeout=30.0, follow_redirects=True)
     # Authenticate when a token is available (CI provides GITHUB_TOKEN;

@@ -128,8 +128,15 @@ def binary_backend(binary: str | None) -> str | None:
     Deterministic per binary, unlike log parsing which newer builds
     suppress at default verbosity. Windows: CUDA/ROCm/Vulkan DLLs sit
     next to llama-server.exe in the release zip. POSIX: `ldd`.
+
+    A bare ``mlx_lm.server`` (the Apple MLX inference server) is
+    reported as ``MLX`` — it's a Python module, not a shared object.
     """
-    if not binary or not os.path.exists(binary):
+    if not binary:
+        return None
+    if binary.endswith("mlx_lm.server") or binary == "mlx_lm.server":
+        return "MLX"
+    if not os.path.exists(binary):
         return None
     if os.name == "nt":
         try:

@@ -1172,6 +1172,21 @@ def gpu_state(spec: ModelSpec) -> dict[str, str | None]:
     """
     empty: dict[str, str | None] = {"backend": None, "device": None,
                                     "layers": None}
+    # MLX has no llama.cpp log format. If the registry points at the
+    # mlx_lm.server entry point, report the backend from the binary
+    # build instead of parsing the log.
+    try:
+        from .. import diagnose
+        if spec.binary and "mlx_lm" in spec.binary:
+            kind = diagnose.binary_backend(spec.binary)
+            if kind:
+                # mlx_lm.server doesn't print a device name; pick a
+                # sensible default for Apple Silicon.
+                device = "Apple GPU" if sys.platform == "darwin" else None
+                return {"backend": "MLX", "device": device, "layers": None}
+    except Exception:  # noqa: BLE001
+        pass
+
     log = spec.state_dir() / "llama.log"
     if not log.exists():
         return empty
@@ -1259,11 +1274,23 @@ def _default_ngl() -> int:
 
 
 def _llama_args(spec: ModelSpec, ctx_override: int | None = None) -> list[str]:
+    # MLX has a different invocation: mlx_lm.server takes a model
+    # directory and exposes an OpenAI-compatible API on a port.
+    binary = _resolve_binary(spec)
+    if binary == "mlx_lm.server" or binary.endswith("/mlx_lm.server"):
+        if not Path(spec.gguf).exists():
+            raise FileNotFoundError(f"model directory not found: {spec.gguf}")
+        return [
+            sys.executable, "-m", "mlx_lm.server",
+            "--model", str(spec.gguf),
+            "--host", "127.0.0.1",
+            "--port", str(spec.llama_port),
+        ]
     if not Path(spec.gguf).exists():
         raise FileNotFoundError(f"model file not found: {spec.gguf}")
     ctx = spec.ctx_size if ctx_override is None else ctx_override
     args = [
-        _resolve_binary(spec),
+        binary,
         "-m", spec.gguf,
         "--host", "127.0.0.1",
         "--port", str(spec.llama_port),

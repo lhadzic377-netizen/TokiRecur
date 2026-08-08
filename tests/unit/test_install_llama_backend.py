@@ -296,3 +296,74 @@ def test_install_pulls_cudart_runtime_for_cuda_13_3(tmp_path, monkeypatch):
     assert any("cudart.zip" in u for u in urls), (
         f"cudart runtime archive not downloaded: {urls}"
     )
+
+
+def test_binary_backend_reports_mlx_for_module_name():
+    from tokirecur import diagnose
+    # Bare string identifier (no real file) is what the registry stores
+    # when install-llama --backend mlx rewrites the binary field.
+    assert diagnose.binary_backend("mlx_lm.server") == "MLX"
+
+
+def test_binary_backend_reports_mlx_for_path_to_shim(tmp_path):
+    from tokirecur import diagnose
+    shim = tmp_path / "mlx_lm.server"
+    shim.write_text("#!/bin/sh\nexec python -m mlx_lm.server \"$@\"\n")
+    assert diagnose.binary_backend(str(shim)) == "MLX"
+
+
+def test_mlx_backend_choice_in_install_llama():
+    """--backend mlx is now a valid choice for install-llama."""
+    from click.testing import CliRunner
+
+    from tokirecur.cli import cli
+    runner = CliRunner()
+    # Just verify the choice is accepted (--help would also work but
+    # this avoids printing all the help text).
+    res = runner.invoke(cli, ["model", "install-llama", "--help"])
+    assert "mlx" in res.output
+
+
+def test_mlx_backend_rejected_on_linux(monkeypatch):
+    """--backend mlx must refuse to run off macOS."""
+    from click.testing import CliRunner
+
+    from tokirecur.cli import cli as _cli
+
+    monkeypatch.setattr("sys.platform", "linux")
+
+    runner = CliRunner()
+    res = runner.invoke(_cli, ["model", "install-llama", "--backend", "mlx"])
+    assert res.exit_code != 0
+    assert "mlx is only available on macOS" in res.output
+
+
+def test_llama_args_use_mlx_for_mlx_binary():
+    """When spec.binary is mlx_lm.server, _llama_args should build
+    the mlx_lm.server invocation, not the llama-server one."""
+    import sys
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from tokirecur.ctl import _llama_args
+
+    model_dir = Path("/tmp/fake-mlx-model")
+    spec = SimpleNamespace(
+        name="mlx-test", gguf=str(model_dir),
+        llama_port=8091, ctx_size=4096, parallel=1,
+        kv="f16", reasoning="default", extra_args=[],
+        binary="mlx_lm.server",
+    )
+    # Pretend the model directory exists so the function doesn't bail.
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        spec.gguf = td
+        args = _llama_args(spec)
+    assert args[:3] == [sys.executable, "-m", "mlx_lm.server"]
+    assert "--model" in args
+    assert td in args
+    assert "--port" in args
+    assert "8091" in args
+    # And NOT the llama-server flag set:
+    assert "-c" not in args
+    assert "-ngl" not in args
