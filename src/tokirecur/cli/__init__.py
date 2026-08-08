@@ -902,7 +902,8 @@ def status() -> None:  # noqa: F811
 def use(name: str, keep_others: bool, wait: bool, sync_only: bool,
         mode: str | None) -> None:
     """Start the model stack and select it in opencode/openclaw/hermes."""
-    from ..ctl import _effective_ctx, sync_cli_configs, use_model, write_client_mode
+    from ..ctl import (_effective_ctx, model_status, sync_cli_configs,
+                       use_model, write_client_mode)
     if mode:
         for tool in ("opencode", "openclaw", "hermes", "codex"):
             write_client_mode(tool, mode)
@@ -913,6 +914,18 @@ def use(name: str, keep_others: bool, wait: bool, sync_only: bool,
         raise SystemExit(1) from None
     paths = sync_cli_configs(spec)
     effective = _effective_ctx(spec)
+    if not sync_only:
+        try:
+            live_slot = model_status(spec)["llama"].get("slot_ctx")
+        except Exception:
+            live_slot = None
+        if live_slot and live_slot != effective:
+            click.echo(
+                f"note: llama is already serving {live_slot} tokens and "
+                f"will keep doing so until restarted — run `toki model "
+                f"stop {name}` then `toki model use {name}` to apply "
+                f"{effective}"
+            )
     if effective < spec.ctx_size:
         click.echo(
             f"note: context clamped to {effective} tokens (fits this "
