@@ -133,11 +133,17 @@ DEFAULT_AUTH = os.environ.get("TOKI_AUTH_TOKEN", "demo-token")
 # "default") are treated as user-configured and never rewritten by
 # backfill_binary_env. They are NOT preloaded — a fresh install starts
 # with an empty registry.
+#
+# Portable by construction: `gguf` is a bare FILENAME (never an absolute
+# path) resolved at use time against `~/models/<name>/` — the directory
+# `toki model pull` and the installers' starter block download into. No
+# `binary` is pinned here (the local build is not everyone's build); the
+# installed binary resolves via `_resolve_binary`/`_installed_binary`.
 DEFAULT_MODELS: list[dict[str, Any]] = [
     {
         "name": "9b",
         "label": "Qwen3.5 9B (Q4_K_M)",
-        "gguf": str(Path.home() / "Downloads/Qwen3.5-9B-Q4_K_M.gguf"),
+        "gguf": "Qwen3.5-9B-Q4_K_M.gguf",
         "llama_port": 8088,
         "daemon_port": 8787,
         "ctx_size": 200000,
@@ -152,7 +158,7 @@ DEFAULT_MODELS: list[dict[str, Any]] = [
     {
         "name": "35b",
         "label": "Qwen3.6 35B-A3B (UD-Q4_K_M)",
-        "gguf": str(Path.home() / "models/Qwen3.6-35B-A3B-GGUF/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf"),
+        "gguf": "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf",
         "llama_port": 8089,
         "daemon_port": 8788,
         "ctx_size": 200000,
@@ -166,7 +172,7 @@ DEFAULT_MODELS: list[dict[str, Any]] = [
     {
         "name": "laguna",
         "label": "Laguna S 2.1 (Q4_K_M, 64k ctx)",
-        "gguf": str(Path.home() / "models/laguna/laguna-s-2.1-Q4_K_M.gguf"),
+        "gguf": "laguna-s-2.1-Q4_K_M.gguf",
         "llama_port": 8090,
         "daemon_port": 8789,
         "ctx_size": 131072,
@@ -176,7 +182,6 @@ DEFAULT_MODELS: list[dict[str, Any]] = [
         "model_id": "laguna-s-2.1",
         "always_on": False,
         "boot": False,
-        "binary": str(Path.home() / "llama.cpp/build/bin/llama-server"),
         "source": "default",
     },
 ]
@@ -224,6 +229,39 @@ class ModelSpec:
         return (root or STATE_ROOT) / "model" / self.name
 
 
+def resolve_gguf_path(spec: ModelSpec) -> Path:
+    """The on-disk location of a spec's model weights.
+
+    Absolute paths (user registry entries, pulled models) are used as-is
+    when they exist. Anything else — including bare filenames from the
+    portable DEFAULT_MODELS and absolute paths whose file has moved —
+    resolves against ``~/models/<name>/``, the directory `toki model
+    pull` and the installers' starter block download into. When the
+    directory holds GGUFs but none match, the first one is used (best
+    effort). Raises FileNotFoundError with a one-command hint.
+    """
+    gguf = Path(spec.gguf)
+    candidates: list[Path] = []
+    if gguf.is_absolute():
+        if gguf.exists():
+            return gguf
+        candidates.append(Path.home() / "models" / spec.name / gguf.name)
+    else:
+        candidates.append(Path.home() / "models" / spec.name / gguf)
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    model_dir = Path.home() / "models" / spec.name
+    if model_dir.is_dir():
+        fallback = sorted(model_dir.glob("*.gguf"))
+        if fallback:
+            return fallback[0]
+    raise FileNotFoundError(
+        f"model file not found: {spec.gguf} — run `toki model install "
+        "starter` (or `toki model pull <hf-repo>`), then retry"
+    )
+
+
 def _ensure_registry() -> Path:
     DEFAULT_REGISTRY.parent.mkdir(parents=True, exist_ok=True)
     if not DEFAULT_REGISTRY.exists():
@@ -238,7 +276,10 @@ def _ensure_registry() -> Path:
 
 def _estimate_need(spec: ModelSpec) -> float:
     """Rough resident footprint (GB): weights + KV + workspace headroom."""
-    weight_gb = Path(spec.gguf).stat().st_size / 1e9 if Path(spec.gguf).exists() else 0.0
+    try:
+        weight_gb = resolve_gguf_path(spec).stat().st_size / 1e9
+    except FileNotFoundError:
+        weight_gb = 0.0
     return weight_gb * 1.2 + 4.0
 
 
@@ -343,7 +384,10 @@ def _clamp_ctx(spec: ModelSpec, avail_gb: float | None = None,
     if avail_gb is None:
         avail_gb = _available_gb()
     if weight_gb is None:
-        weight_gb = Path(spec.gguf).stat().st_size / 1e9 if Path(spec.gguf).exists() else 0.0
+        try:
+            weight_gb = resolve_gguf_path(spec).stat().st_size / 1e9
+        except FileNotFoundError:
+            weight_gb = 0.0
     budget = avail_gb - weight_gb * 1.2 - 4.0
     if budget <= 0 or not math.isfinite(budget):
         return cap  # unknown RAM or weights alone don't fit
@@ -438,7 +482,8 @@ def get_model(name: str, registry: Path | None = None) -> ModelSpec:
             return spec
     if not load_registry(registry):
         raise KeyError(
-            "no models installed — pull one first (`toki model pull <hf-repo>`)"
+            "no models installed — run `toki model install starter` "
+            "(or `toki model pull <hf-repo>`) to set up your first model"
         )
     raise KeyError(f"unknown model '{name}' (see `toki model list`)")
 
@@ -681,9 +726,22 @@ def _slugify_name(name: str) -> str:
 
 def _reference_spec(specs: list[ModelSpec]) -> ModelSpec | None:
     """Pick a 'good' existing spec to inherit binary/env from (preferring
-    a custom ROCm build over the Debian default)."""
-    custom = [s for s in specs if s.binary and s.binary != "llama-server"]
-    return custom[0] if custom else None
+    a custom ROCm build over the Debian default).
+
+    A spec whose ``binary`` is an absolute path that no longer exists on
+    this machine (e.g. a registry shipped from another box) is skipped —
+    inheriting it would hand every new pull a binary that Popen can't
+    start. Bare ``llama-server`` names are kept (they resolve via PATH /
+    ``_installed_binary`` at launch).
+    """
+    for s in specs:
+        if not s.binary or s.binary == "llama-server":
+            continue
+        pinned = Path(s.binary)
+        if pinned.is_absolute() and not pinned.exists():
+            continue
+        return s
+    return None
 
 
 def _installed_binary() -> str | None:
@@ -1269,7 +1327,12 @@ def _resolve_binary(spec: ModelSpec) -> str:
     name is not on PATH and Popen would fail with WinError 2.
     """
     if spec.binary and spec.binary != "llama-server":
-        return spec.binary
+        # A binary pinned to a path that no longer exists on THIS machine
+        # (e.g. a registry shipped from another box) is dead weight —
+        # fall through to the installed build instead of failing Popen.
+        pinned = Path(spec.binary)
+        if not pinned.is_absolute() or pinned.exists():
+            return spec.binary
     installed = _installed_binary()
     if installed:
         return installed
@@ -1336,6 +1399,7 @@ def _llama_args(spec: ModelSpec, ctx_override: int | None = None) -> list[str]:
     # MLX has a different invocation: mlx_lm.server takes a model
     # directory and exposes an OpenAI-compatible API on a port.
     binary = _resolve_binary(spec)
+    gguf = resolve_gguf_path(spec) if not (binary == "mlx_lm.server" or binary.endswith("/mlx_lm.server")) else Path(spec.gguf)
     if binary == "mlx_lm.server" or binary.endswith("/mlx_lm.server"):
         if not Path(spec.gguf).exists():
             raise FileNotFoundError(f"model directory not found: {spec.gguf}")
@@ -1345,12 +1409,10 @@ def _llama_args(spec: ModelSpec, ctx_override: int | None = None) -> list[str]:
             "--host", "127.0.0.1",
             "--port", str(spec.llama_port),
         ]
-    if not Path(spec.gguf).exists():
-        raise FileNotFoundError(f"model file not found: {spec.gguf}")
     ctx = spec.ctx_size if ctx_override is None else ctx_override
     args = [
         binary,
-        "-m", spec.gguf,
+        "-m", str(gguf),
         "--host", "127.0.0.1",
         "--port", str(spec.llama_port),
         "-c", str(ctx),
@@ -1481,8 +1543,9 @@ def start_model(spec: ModelSpec, wait: bool = True) -> None:
             pass  # best-effort; _clamp_ctx still caps at launch
 
     if not llama_reachable(spec):
-        if not Path(spec.gguf).exists():
+        if not spec.gguf or spec.gguf == "llama-server":
             raise FileNotFoundError(f"model file not found: {spec.gguf}")
+        resolve_gguf_path(spec)  # raises a one-command hint when missing
         _check_ram(spec)
         ctx = _clamp_ctx(spec)
         if ctx < spec.ctx_size:
@@ -1728,7 +1791,22 @@ def backfill_binary_env(specs: list[ModelSpec] | None = None) -> list[str]:
     new_specs: list[ModelSpec] = []
     for s in specs:
         if s.name in default_names:
-            new_specs.append(s)
+            # Built-in defaults are reference shapes, but a default whose
+            # binary is an absolute path missing on this machine (registry
+            # shipped from another box) must be repaired — `_resolve_binary`
+            # handles it at launch, and we persist the fix so pulled models
+            # stop inheriting the dead path via `_reference_spec`.
+            dead = s.binary and Path(s.binary).is_absolute() and not Path(s.binary).exists()
+            if dead:
+                new_raw = dict(s.raw)
+                new_raw["binary"] = binary
+                new_raw["env"] = dict(env)
+                new_s = ModelSpec(raw=new_raw, **new_raw)
+                if new_s.binary != s.binary or dict(new_s.env) != dict(s.env):
+                    updated.append(s.name)
+                new_specs.append(new_s)
+            else:
+                new_specs.append(s)
             continue
         needs_binary = not s.binary or s.binary == "llama-server"
         needs_env = not s.env

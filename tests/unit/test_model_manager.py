@@ -582,15 +582,53 @@ def test_pull_model_network_error(env, hf, monkeypatch):
 # ── pull defaults (binary / env inheritance) ────────────────────────
 
 
-def test_pull_defaults_inherit_reference_spec_binary(seeded_env, monkeypatch):
-    """The in-code default registry points laguna at the tuned llama.cpp
-    build; pulled models should pick that up instead of the PATH default."""
+def test_defaults_are_portable(seeded_env, monkeypatch):
+    """Shipped DEFAULT_MODELS must never reference another machine: no
+    absolute gguf paths and no pinned binaries (the local tuned build is
+    not everyone's build)."""
+    for m in ctl.DEFAULT_MODELS:
+        assert not Path(m["gguf"]).is_absolute(), f"{m['name']} pins a path"
+        assert "binary" not in m, f"{m['name']} pins a binary"
+        assert Path(m["gguf"]).name == m["gguf"]
+        assert m["name"] and m["model_id"] and m["llama_port"] and m["daemon_port"]
+
+
+def test_pull_defaults_reference_spec_binary(seeded_env, tmp_path, monkeypatch):
+    """With a registry holding a spec whose binary exists, pulls inherit
+    that binary (instead of the PATH default)."""
     monkeypatch.delenv("TOKI_LLAMA_SERVER", raising=False)
-    expected_binary = ctl.DEFAULT_MODELS[2]["binary"]
-    binary, env_vars = ctl.pull_defaults(ctl.load_registry())
-    assert binary == expected_binary
-    # Default registry has no ROCm env block (users add their own); a
-    # blank dict is the correct inherited value.
+    ref_bin = tmp_path / "bin" / "llama-server"
+    ref_bin.parent.mkdir(parents=True)
+    ref_bin.write_text("#!/bin/sh\n")
+    reg = seeded_env / "models.yaml"
+    reg.write_text(yaml.safe_dump({"models": [
+        {"name": "laguna", "gguf": "/tmp/lag.gguf", "llama_port": 1,
+         "daemon_port": 2, "ctx_size": 100, "max_tokens": 90,
+         "model_id": "laguna-s-2.1", "binary": str(ref_bin),
+         "env": {}, "source": "default"},
+    ]}))
+    binary, env_vars = ctl.pull_defaults(ctl.load_registry(reg))
+    assert binary == str(ref_bin)
+    assert env_vars == {}
+
+
+def test_pull_defaults_skips_dead_reference_binary(seeded_env, monkeypatch):
+    """A reference spec whose binary path does not exist on this machine
+    (registry shipped from another box) must NOT be inherited — new pulls
+    fall through to the installed binary or PATH default."""
+    monkeypatch.delenv("TOKI_LLAMA_SERVER", raising=False)
+    monkeypatch.delenv("TOKI_STATE_DIR", raising=False)
+    reg = seeded_env / "models.yaml"
+    reg.write_text(yaml.safe_dump({"models": [
+        {"name": "laguna", "gguf": "/tmp/lag.gguf", "llama_port": 1,
+         "daemon_port": 2, "ctx_size": 100, "max_tokens": 90,
+         "model_id": "laguna-s-2.1",
+         "binary": "/home/someone-else/llama.cpp/build/bin/llama-server",
+         "env": {"HSA_OVERRIDE_GFX_VERSION": "11.5.1"}, "source": "default"},
+    ]}))
+    binary, env_vars = ctl.pull_defaults(ctl.load_registry(reg))
+    assert binary != "/home/someone-else/llama.cpp/build/bin/llama-server"
+    # Nothing sensible left to inherit: env must not carry a dead build's vars.
     assert env_vars == {}
 
 
@@ -601,21 +639,24 @@ def test_pull_defaults_env_override_takes_precedence(env, monkeypatch):
     assert env_vars == {}
 
 
-def test_pull_defaults_env_inherited_when_reference_has_env(env, monkeypatch):
+def test_pull_defaults_env_inherited_when_reference_has_env(env, tmp_path, monkeypatch):
     """A reference spec that defines ROCm env (e.g. the user's real
     registry) propagates those vars to the new spec."""
     monkeypatch.delenv("TOKI_LLAMA_SERVER", raising=False)
+    ref_bin = tmp_path / "bin" / "llama-server"
+    ref_bin.parent.mkdir(parents=True)
+    ref_bin.write_text("#!/bin/sh\n")
     reg = env / "models.yaml"
     reg.write_text(yaml.safe_dump({"models": [
         {"name": "laguna", "gguf": "/tmp/lag.gguf", "llama_port": 1,
          "daemon_port": 2, "ctx_size": 100, "max_tokens": 90,
          "model_id": "laguna-s-2.1",
-         "binary": "/usr/local/bin/llama-server",
+         "binary": str(ref_bin),
          "env": {"HSA_OVERRIDE_GFX_VERSION": "11.5.1",
                  "GGML_CUDA_ENABLE_UNIFIED_MEMORY": "1"}},
     ]}))
     binary, env_vars = ctl.pull_defaults(ctl.load_registry(reg))
-    assert binary == "/usr/local/bin/llama-server"
+    assert binary == str(ref_bin)
     assert env_vars.get("HSA_OVERRIDE_GFX_VERSION") == "11.5.1"
     assert env_vars.get("GGML_CUDA_ENABLE_UNIFIED_MEMORY") == "1"
 
@@ -671,35 +712,53 @@ def test_backfill_heals_bare_binary_to_installed(env, monkeypatch):
     assert healed.binary == str(bin_dir / exe_name)
 
 
-def test_resolve_binary_prefers_custom_then_installed(env, monkeypatch):
+def test_resolve_binary_prefers_custom_then_installed(env, tmp_path, monkeypatch):
     """Launch-time resolution: a custom binary wins; a bare PATH default
-    falls back to the installed build; bare name only as last resort."""
+    falls back to the installed build; bare name only as last resort; a
+    dead absolute path is skipped like the bare default."""
     monkeypatch.delenv("TOKI_LLAMA_SERVER", raising=False)
     bin_dir = ctl.STATE_ROOT / "bin"
     bin_dir.mkdir(parents=True)
     exe_name = "llama-server.exe" if os.name == "nt" else "llama-server"
     installed = str(bin_dir / exe_name)
     (bin_dir / exe_name).write_bytes(b"")
+    live_custom = tmp_path / "custom-llama-server"
+    live_custom.write_bytes(b"")
     reg = env / "models.yaml"
     reg.write_text(yaml.safe_dump({"models": [
         {"name": "custom", "gguf": "/tmp/c.gguf", "llama_port": 1,
          "daemon_port": 2, "ctx_size": 100, "max_tokens": 90,
-         "model_id": "c", "binary": "/opt/llama-server"},
+         "model_id": "c", "binary": str(live_custom)},
+        {"name": "dead", "gguf": "/tmp/d.gguf", "llama_port": 5,
+         "daemon_port": 6, "ctx_size": 100, "max_tokens": 90,
+         "model_id": "d", "binary": "/opt/llama-server"},
         {"name": "bare", "gguf": "/tmp/b.gguf", "llama_port": 3,
          "daemon_port": 4, "ctx_size": 100, "max_tokens": 90,
          "model_id": "b", "binary": "llama-server"},
     ]}))
     specs = ctl.load_registry(reg)
     by_name = {s.name: s for s in specs}
-    assert ctl._resolve_binary(by_name["custom"]) == "/opt/llama-server"
+    assert ctl._resolve_binary(by_name["custom"]) == str(live_custom)
+    # Dead absolute path → falls back to the installed build, not Popen failure.
+    assert ctl._resolve_binary(by_name["dead"]) == installed
     assert ctl._resolve_binary(by_name["bare"]) == installed
     (bin_dir / exe_name).unlink()
     assert ctl._resolve_binary(by_name["bare"]) == "llama-server"
 
 
-def test_pull_model_inherits_binary(seeded_env, hf):
-    spec = ctl.pull_model("acme/My-Model-GGUF", "inherits")
-    assert spec.binary == ctl.DEFAULT_MODELS[2]["binary"]
+def test_pull_model_inherits_binary(seeded_env, hf, tmp_path):
+    ref_bin = tmp_path / "bin" / "llama-server"
+    ref_bin.parent.mkdir(parents=True)
+    ref_bin.write_bytes(b"")
+    reg = seeded_env / "models.yaml"
+    reg.write_text(yaml.safe_dump({"models": [
+        {"name": "laguna", "gguf": "/tmp/lag.gguf", "llama_port": 1,
+         "daemon_port": 2, "ctx_size": 100, "max_tokens": 90,
+         "model_id": "laguna-s-2.1", "binary": str(ref_bin),
+         "env": {}, "source": "default"},
+    ]}))
+    spec = ctl.pull_model("acme/My-Model-GGUF", "inherits", registry=reg)
+    assert spec.binary == str(ref_bin)
     # No reference env → empty.
     assert spec.env == {}
 
@@ -774,28 +833,40 @@ def test_llama_args_ngl_skipped_when_pinned_in_extra_args(seeded_env):
 # ── Registry repair (legacy pulled entries) ────────────────────────
 
 
-def test_backfill_binary_env_inherits_reference(seeded_env, hf, monkeypatch):
+def test_backfill_binary_env_inherits_reference(seeded_env, hf, tmp_path, monkeypatch):
     """A pulled entry missing binary/env inherits the reference spec's
     values; the repair returns the names it updated."""
     monkeypatch.delenv("TOKI_LLAMA_SERVER", raising=False)
+    ref_bin = tmp_path / "bin" / "llama-server"
+    ref_bin.parent.mkdir(parents=True)
+    ref_bin.write_bytes(b"")
+    # Give the laguna default a live tuned binary so it's a valid reference.
+    reg = ctl.DEFAULT_REGISTRY
+    data = yaml.safe_load(reg.read_text())
+    for entry in data["models"]:
+        if entry["name"] == "laguna":
+            entry["binary"] = str(ref_bin)
+    reg.write_text(yaml.safe_dump(data, sort_keys=False))
+    ctl.invalidate_registry_cache()
+
     pulled = ctl.pull_model("acme/Pulled-GGUF", "pulled")
     assert pulled.source == "pulled"
-    assert pulled.binary == ctl.DEFAULT_MODELS[2]["binary"]
+    assert pulled.binary == str(ref_bin)
 
     # Simulate an older pulled entry written before `pull_defaults` —
     # clear its binary/env so it has only the PATH default.
-    reg = ctl.DEFAULT_REGISTRY
     data = yaml.safe_load(reg.read_text())
     for entry in data["models"]:
         if entry["name"] == "pulled":
             entry["binary"] = "llama-server"
             entry["env"] = {}
     reg.write_text(yaml.safe_dump(data, sort_keys=False))
+    ctl.invalidate_registry_cache()
 
     healed = ctl.backfill_binary_env()
     assert healed == ["pulled"]
     refreshed = ctl.get_model("pulled")
-    assert refreshed.binary == ctl.DEFAULT_MODELS[2]["binary"]
+    assert refreshed.binary == str(ref_bin)
     assert refreshed.source == "pulled"
 
 
@@ -842,25 +913,36 @@ def test_repair_cli_noop_when_clean(env, hf, monkeypatch):
     assert "nothing to repair" in res.output
 
 
-def test_repair_cli_heals_legacy_entry(seeded_env, hf, monkeypatch):
+def test_repair_cli_heals_legacy_entry(seeded_env, hf, tmp_path, monkeypatch):
 
     from tokirecur.cli import cli
 
     monkeypatch.delenv("TOKI_LLAMA_SERVER", raising=False)
+    ref_bin = tmp_path / "bin" / "llama-server"
+    ref_bin.parent.mkdir(parents=True)
+    ref_bin.write_bytes(b"")
+    reg = ctl.DEFAULT_REGISTRY
+    data = yaml.safe_load(reg.read_text())
+    for entry in data["models"]:
+        if entry["name"] == "laguna":
+            entry["binary"] = str(ref_bin)
+    reg.write_text(yaml.safe_dump(data, sort_keys=False))
+    ctl.invalidate_registry_cache()
+
     ctl.pull_model("acme/Pulled-GGUF", "pulled")
     # Simulate a legacy entry: blow away binary/env but keep source.
-    reg = ctl.DEFAULT_REGISTRY
     data = yaml.safe_load(reg.read_text())
     for entry in data["models"]:
         if entry["name"] == "pulled":
             entry["binary"] = "llama-server"
             entry["env"] = {}
     reg.write_text(yaml.safe_dump(data, sort_keys=False))
+    ctl.invalidate_registry_cache()
 
     res = CliRunner().invoke(cli, ["model", "repair"])
     assert res.exit_code == 0, res.output
     assert "repaired: pulled" in res.output
-    assert ctl.get_model("pulled").binary == ctl.DEFAULT_MODELS[2]["binary"]
+    assert ctl.get_model("pulled").binary == str(ref_bin)
 
 
 # ── Settings: update_spec_field ───────────────────────────────────
@@ -923,12 +1005,13 @@ def test_update_spec_field_preserves_other_fields(seeded_env):
     ctl.invalidate_registry_cache()
 
     spec = ctl.update_spec_field("laguna", "ctx_size", "99999")
-    # Laguna's binary + env + extra_args must survive.
+    # Laguna's env + extra_args must survive; the binary defaults to the
+    # portable bare name (DEFAULT_MODELS pins no machine-specific build).
     assert spec.ctx_size == 99999
     assert spec.env.get("HSA_OVERRIDE_GFX_VERSION") == "11.5.1"
     assert spec.env.get("GGML_CUDA_ENABLE_UNIFIED_MEMORY") == "1"
     assert spec.extra_args == ["--reasoning", "off"]
-    assert spec.binary == str(ctl.Path.home() / "llama.cpp/build/bin/llama-server")
+    assert spec.binary == "llama-server"
 
 
 def test_repair_heals_legacy_entry_without_source_field(env, monkeypatch):
