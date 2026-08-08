@@ -305,7 +305,7 @@ def test_pull_model_registers_entry(env, hf):
     assert spec.llama_port == 8088 and spec.daemon_port == 8787
     assert spec.ctx_size == 8192 and spec.kv == "q8_0"
     assert spec.max_tokens == 4096
-    assert spec.model_id == "acme/My-Model-GGUF"
+    assert spec.model_id == "model-q4_k_m"
     assert str(env / "models" / "mymodel" / "model-Q4_K_M.gguf") == spec.gguf
     # persisted and visible to the launcher/list
     assert ctl.get_model("mymodel").name == "mymodel"
@@ -1510,3 +1510,84 @@ def test_write_hermes_config_preserves_user_custom_providers(env, tmp_path):
     names = [c.get("name") for c in out["custom_providers"]]
     assert "ollama-local" in names
     assert "llamacpp" in names
+
+
+def test_normalize_model_ids_rewrites_repo_paths(env, monkeypatch, tmp_path):
+    """Pre-0.2.15 pulls left a Hugging Face repo path in model_id.
+    normalize_model_ids rewrites it to a short slug from the GGUF
+    filename so hermes stops 404ing on it."""
+    from types import SimpleNamespace
+
+    from tokirecur.ctl import normalize_model_ids
+    reg = env / "models.yaml"
+    spec = SimpleNamespace(
+        name="qwen3.5-0.8b-gguf", gguf="/m/qwen3.5-0.8b-gguf/"
+        "Qwen3.5-0.8B-Q4_K_M.gguf",
+        llama_port=8091, daemon_port=8790, ctx_size=32768,
+        parallel=2, kv="f16", max_tokens=16384,
+        model_id="unsloth/Qwen3.5-0.8B-GGUF",  # the legacy form
+        always_on=False, boot=False, binary="/b/llama-server",
+        env={}, extra_args=[], reasoning="auto", source="pulled",
+    )
+    reg.write_text(yaml.safe_dump({"models": [spec.__dict__]}))
+
+    changes = normalize_model_ids()
+    assert len(changes) == 1
+    name, old, new = changes[0]
+    assert name == "qwen3.5-0.8b-gguf"
+    assert old == "unsloth/Qwen3.5-0.8B-GGUF"
+    assert new == "qwen3.5-0.8b-q4_k_m"
+    # Registry was actually rewritten.
+    reloaded = yaml.safe_load(reg.read_text())
+    assert reloaded["models"][0]["model_id"] == "qwen3.5-0.8b-q4_k_m"
+
+
+def test_normalize_model_ids_skips_already_short_ids(env, tmp_path):
+    from types import SimpleNamespace
+
+    from tokirecur.ctl import normalize_model_ids
+    reg = env / "models.yaml"
+    spec = SimpleNamespace(
+        name="qwen3.5-9b", gguf="/m/qwen3.5-9b.gguf",
+        llama_port=8091, daemon_port=8790, ctx_size=32768,
+        parallel=2, kv="f16", max_tokens=16384,
+        model_id="qwen3.5-9b",  # already short
+        always_on=False, boot=False, binary="/b/llama-server",
+        env={}, extra_args=[], reasoning="auto", source="pulled",
+    )
+    reg.write_text(yaml.safe_dump({"models": [spec.__dict__]}))
+    assert normalize_model_ids() == []
+
+
+def test_pull_model_sets_short_model_id(env, monkeypatch, tmp_path):
+    """toki model pull now uses the GGUF filename stem as model_id
+    (e.g. 'qwen3.5-0.8b-q4_k_m') instead of the full HF repo path."""
+    from types import SimpleNamespace
+
+    import huggingface_hub as hfh
+
+    from tokirecur import ctl
+
+    api = SimpleNamespace(
+        list_repo_files=lambda repo: ["Qwen3.5-0.8B-Q4_K_M.gguf"],
+    )
+    monkeypatch.setattr(hfh, "HfApi", lambda endpoint=None: api)
+    monkeypatch.setattr(hfh, "snapshot_download", lambda *a, **kw: None)
+    monkeypatch.setattr(ctl, "_auto_ctx_size",
+                        lambda *a, **kw: 32768)
+    monkeypatch.setattr(ctl, "next_free_ports",
+                        lambda specs: (29901, 29902))
+    monkeypatch.setattr(ctl, "pull_defaults",
+                        lambda specs: ("/b/llama-server", {}))
+    monkeypatch.setattr(ctl, "_gguf_sizes", lambda api, r, c: {})
+
+    reg = env / "models.yaml"
+    reg.write_text(yaml.safe_dump({"models": []}))
+    monkeypatch.setattr(ctl, "DEFAULT_REGISTRY", reg)
+
+    spec = ctl.pull_model("unsloth/Qwen3.5-0.8B-GGUF", name="qwen3.5-0.8b",
+                          registry=reg)
+    assert spec.model_id == "qwen3.5-0.8b-q4_k_m"
+    assert spec.name == "qwen3.5-0.8b"
+    # And the full repo id is NOT in the registry.
+    assert "/" not in spec.model_id

@@ -1015,6 +1015,38 @@ def pull(repo: str, name: str | None, gguf_file: str | None, ctx_size: int,
         )
 
 
+@model.command("fix-model-ids")
+def fix_model_ids() -> None:
+    """Rewrite repo-path model_ids (e.g. ``unsloth/Qwen3.5-0.8B-GGUF``)
+    to short, stable identifiers derived from the GGUF filename.
+
+    Pre-0.2.15 `toki model pull` set ``model_id`` to the full Hugging
+    Face repo id. hermes and other agents compare the request's
+    ``model`` field against this string and 404 when it doesn't match
+    the loaded alias. Running this once normalises every spec and
+    re-writes the opencode/openclaw/hermes/codex configs.
+    """
+    from ..ctl import normalize_model_ids
+    changes = normalize_model_ids()
+    if not changes:
+        click.echo("no model_ids needed fixing.")
+        return
+    for name, old, new in changes:
+        click.echo(f"  {name}: {old!r} -> {new!r}")
+    # Re-sync the agent configs so the new short names land in
+    # hermes/openclaw/opencode/codex immediately.
+    from ..ctl import get_model, read_active, sync_cli_configs
+    active = read_active()
+    if active:
+        try:
+            spec = get_model(active)
+            sync_cli_configs(spec)
+            click.echo(f"  re-synced agent configs for '{active}'.")
+        except Exception as e:
+            click.echo(f"  warning: could not re-sync agent configs: {e}",
+                      err=True)
+
+
 def _detect_gpu_backend(os_name: str) -> str:
     """Best-guess GPU backend for this machine, without admin access."""
     import shutil as _shutil

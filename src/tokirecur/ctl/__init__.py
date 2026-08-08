@@ -933,7 +933,11 @@ def pull_model(
         "parallel": 2,
         "kv": kv,
         "max_tokens": ctx_size // 2,
-        "model_id": repo_id,
+        # Use a short, stable identifier derived from the GGUF filename
+        # stem (e.g. "Qwen3.5-0.8B-Q4_K_M.gguf" -> "qwen3.5-0.8b-q4_k_m").
+        # The full repo id (e.g. "unsloth/Qwen3.5-0.8B-GGUF") is too long
+        # and case-sensitive for hermes's model name matching.
+        "model_id": _slugify_name(Path(filename).stem),
         "always_on": False,
         "boot": False,
         "binary": binary,
@@ -944,6 +948,41 @@ def pull_model(
     spec = ModelSpec(raw=raw, **raw)
     save_registry([*specs, spec], registry)
     return spec
+
+
+def normalize_model_ids(registry: Path | None = None) -> list[tuple[str, str, str]]:
+    """Rewrite any spec whose ``model_id`` is a Hugging Face repo path
+    (e.g. ``unsloth/Qwen3.5-0.8B-GGUF``) to a short, stable identifier
+    derived from the GGUF filename stem.
+
+    The repo path is the historical default from `pull_model` (before
+    0.2.15) and is too long / case-sensitive for hermes's model-name
+    matching, which surfaces as a "model 'X' not found" 404 from
+    llama-server. The rewrite makes hermes/openclaw/opencode/codex see a
+    short, consistent model name.
+
+    Returns a list of ``(name, old_model_id, new_model_id)`` tuples so
+    the caller can show what changed. Existing registry entries that
+    already have a short model_id are left alone.
+    """
+    specs = load_registry(registry)
+    if not specs:
+        return []
+    changes: list[tuple[str, str, str]] = []
+    for s in specs:
+        mid = s.model_id or ""
+        # Treat anything containing a "/" as a repo path; short ids
+        # like "qwen3.5-0.8b" or "qwen3.5-0.8b-q4_k_m" stay.
+        if "/" not in mid:
+            continue
+        gguf = Path(s.gguf).name if s.gguf else ""
+        new_mid = _slugify_name(Path(gguf).stem) if gguf else _slugify_name(mid.rsplit("/", 1)[-1])
+        if not new_mid or new_mid == mid:
+            continue
+        changes.append((s.name, mid, new_mid))
+        update_spec_field(s.name, "model_id", new_mid, registry=registry)
+        logger.info("%s: model_id %r -> %r", s.name, mid, new_mid)
+    return changes
 
 
 # ── Process helpers ────────────────────────────────────────────────────

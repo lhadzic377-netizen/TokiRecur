@@ -82,6 +82,22 @@ def _max_context_ceiling() -> int | None:
     return value if value > 0 else None
 
 
+def _active_model_id() -> str | None:
+    """The model_id of the currently-active spec, or None if no model
+    is active. Used to normalize the ``model`` field on incoming
+    OpenAI requests so a client sending ``"unsloth/..."`` (legacy
+    form) gets a consistent identity back from the daemon.
+    """
+    try:
+        from ..ctl import get_model, read_active
+        name = read_active()
+        if not name:
+            return None
+        return get_model(name).model_id
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _resolve_max_tokens(requested: int, reasoning: str = "auto") -> int:
     """Floor at the thinking/non-thinking budget without capping larger
     client requests, then clamp to the real slot context when the stack
@@ -1174,6 +1190,20 @@ def create_app(
 
     @app.post("/v1/chat/completions")
     async def chat_completions(req: ChatCompletionRequest) -> Response:
+        # Resolve the model name the client sent. hermes/openclaw/etc.
+        # can ship a model id that doesn't match the active spec (e.g.
+        # the historical "unsloth/<repo>-GGUF" form vs the spec's
+        # short "qwen3.5-0.8b" form). We accept any model name when
+        # only one model is loaded — the daemon is single-tenant.
+        # Override `req.model` with the active spec's model_id so
+        # downstream consumers (and the response) see a consistent name.
+        active_model = _active_model_id()
+        if active_model and req.model and req.model != active_model:
+            logger.debug(
+                "chat_completions: client model %r != active %r; "
+                "using active", req.model, active_model,
+            )
+            req = req.model_copy(update={"model": active_model})
         # Pass OpenAI-format messages through (including tool_calls /
         # tool_call_id fields for agentic clients). llama-server applies
         # the chat template appropriate for the loaded model.
