@@ -1333,3 +1333,94 @@ def test_default_paths_falls_back_when_xdg_not_writable(tmp_path, monkeypatch):
             locked.chmod(0o755)
         except OSError:
             pass
+
+
+def test_write_hermes_config_purges_stale_tokirecur_keys(env, monkeypatch, tmp_path):
+    """Old toki versions wrote short keys like 'tokirecur-9b'. The new
+    code uses 'tokirecur-<full-name>'. A leftover 'tokirecur-9b' would
+    linger if we just setdefault'd, so the writer must purge."""
+    from tokirecur.ctl import write_hermes_config
+    from tokirecur import ctl
+    from types import SimpleNamespace
+    import yaml
+
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(yaml.safe_dump({
+        "providers": {
+            "tokirecur-9b": {"api": "http://127.0.0.1:8787/v1",
+                             "default_model": "qwen3.5-9b"},
+            "ollama-launch": {"api": "http://127.0.0.1:11434/v1"},
+        },
+    }))
+
+    spec = SimpleNamespace(
+        name="qwen3.5-0.8b-gguf", model_id="qwen3.5-0.8b",
+        daemon_url="http://127.0.0.1:8787", label="Qwen3.5-0.8B",
+    )
+
+    write_hermes_config(spec, specs=[spec], path=cfg)
+    out = yaml.safe_load(cfg.read_text())
+    assert "tokirecur-9b" not in out["providers"], out["providers"]
+    assert "tokirecur-qwen3.5-0.8b-gguf" in out["providers"], out["providers"]
+    # Other providers (ollama) must be preserved.
+    assert "ollama-launch" in out["providers"]
+
+
+def test_write_opencode_config_purges_stale_tokirecur_keys(env, monkeypatch, tmp_path):
+    from tokirecur.ctl import write_opencode_config
+    from types import SimpleNamespace
+    import json
+
+    cfg = tmp_path / "opencode.json"
+    cfg.write_text(json.dumps({
+        "provider": {
+            "tokirecur-9b": {"name": "9b (Toki Recur)"},
+            "anthropic": {"name": "Anthropic"},
+        },
+    }))
+
+    spec = SimpleNamespace(
+        name="qwen3.5-0.8b-gguf", model_id="qwen3.5-0.8b",
+        daemon_url="http://127.0.0.1:8787", label="Qwen3.5-0.8B",
+        max_tokens=32768,
+        ctx_size=32768,
+        always_on=False,
+        state_dir=lambda: tmp_path / "state",
+    )
+
+    write_opencode_config(spec, specs=[spec], path=cfg)
+    out = json.loads(cfg.read_text())
+    assert "tokirecur-9b" not in out["provider"], out["provider"]
+    assert "tokirecur-qwen3.5-0.8b-gguf" in out["provider"]
+    assert "anthropic" in out["provider"]
+
+
+def test_write_openclaw_config_purges_stale_tokirecur_keys(env, monkeypatch, tmp_path):
+    from tokirecur.ctl import write_openclaw_config
+    from types import SimpleNamespace
+    import json
+
+    cfg = tmp_path / "openclaw.json"
+    cfg.write_text(json.dumps({
+        "models": {
+            "providers": {
+                "tokirecur-9b": {"api": "openai-completions",
+                                 "baseUrl": "http://127.0.0.1:8787/v1"},
+            },
+        },
+    }))
+
+    spec = SimpleNamespace(
+        name="qwen3.5-0.8b-gguf", model_id="qwen3.5-0.8b",
+        daemon_url="http://127.0.0.1:8787", label="Qwen3.5-0.8B",
+        max_tokens=32768,
+        ctx_size=32768,
+        always_on=False,
+        state_dir=lambda: tmp_path / "state",
+    )
+
+    write_openclaw_config(spec, specs=[spec], path=cfg)
+    out = json.loads(cfg.read_text())
+    providers = out["models"]["providers"]
+    assert "tokirecur-9b" not in providers, providers
+    assert "tokirecur-qwen3.5-0.8b-gguf" in providers

@@ -1811,6 +1811,10 @@ def write_opencode_config(
     cfg: dict[str, Any] = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
 
     providers = cfg.setdefault("provider", {})
+    # Purge stale tokirecur-* entries from a previous toki version so
+    # a renamed or removed model doesn't leave a dangling key.
+    for stale in [k for k in providers if k.startswith("tokirecur-")]:
+        providers.pop(stale, None)
     all_specs = specs if specs is not None else load_registry()
     for s in all_specs:
         providers[f"tokirecur-{s.name}"] = _provider_entry(s)
@@ -1837,6 +1841,10 @@ def write_openclaw_config(
     models = cfg.setdefault("models", {})
     models.setdefault("mode", "merge")
     providers = models.setdefault("providers", {})
+    # Purge stale tokirecur-* entries from a previous toki version so
+    # a renamed or removed model doesn't leave a dangling key.
+    for stale in [k for k in providers if k.startswith("tokirecur-")]:
+        providers.pop(stale, None)
     all_specs = specs if specs is not None else load_registry()
     for s in all_specs:
         providers[f"tokirecur-{s.name}"] = {
@@ -1875,6 +1883,11 @@ def write_hermes_config(
     cfg: dict[str, Any] = yaml.safe_load(cfg_path.read_text()) if cfg_path.exists() else {}
 
     providers = cfg.setdefault("providers", {})
+    # Purge stale tokirecur-* entries from a previous toki version so
+    # a renamed or removed model doesn't leave a dangling key that
+    # hermes later refuses to resolve.
+    for stale in [k for k in providers if k.startswith("tokirecur-")]:
+        providers.pop(stale, None)
     all_specs = specs if specs is not None else load_registry()
     model_ids = [s.model_id for s in all_specs]
     for s in all_specs:
