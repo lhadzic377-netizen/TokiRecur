@@ -902,8 +902,7 @@ def status() -> None:  # noqa: F811
 def use(name: str, keep_others: bool, wait: bool, sync_only: bool,
         mode: str | None) -> None:
     """Start the model stack and select it in opencode/openclaw/hermes."""
-    from ..ctl import (_effective_ctx, model_status, sync_cli_configs,
-                       use_model, write_client_mode)
+    from ..ctl import _effective_ctx, model_status, sync_cli_configs, use_model, write_client_mode
     if mode:
         for tool in ("opencode", "openclaw", "hermes", "codex"):
             write_client_mode(tool, mode)
