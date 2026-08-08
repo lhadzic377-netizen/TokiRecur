@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from click.testing import CliRunner
 from tomllib import load as toml_load
 
 from tokirecur import ctl
@@ -500,7 +501,6 @@ def test_expand_gguf_patterns_includes_all_siblings(env, hf):
 
 def test_cli_picker_interactive_and_eof_fallback():
     import click
-    from click.testing import CliRunner
 
     from tokirecur.cli import _pick_gguf_interactive
 
@@ -833,7 +833,6 @@ def test_backfill_binary_env_no_reference_noop(env, hf, monkeypatch):
 
 
 def test_repair_cli_noop_when_clean(env, hf, monkeypatch):
-    from click.testing import CliRunner
 
     from tokirecur.cli import cli
 
@@ -844,7 +843,6 @@ def test_repair_cli_noop_when_clean(env, hf, monkeypatch):
 
 
 def test_repair_cli_heals_legacy_entry(seeded_env, hf, monkeypatch):
-    from click.testing import CliRunner
 
     from tokirecur.cli import cli
 
@@ -1685,3 +1683,260 @@ def test_pull_model_sets_short_model_id(env, monkeypatch, tmp_path):
     assert spec.name == "qwen3.5-0.8b"
     # And the full repo id is NOT in the registry.
     assert "/" not in spec.model_id
+
+
+# ── 0.2.17: automatic config sync (sync_only / heal / fault isolation) ──
+
+
+def test_use_model_sync_only_never_touches_stack(env, monkeypatch):
+    """`--sync-only` must rewrite configs without starting or stopping
+    any llama/daemon — installers and daemon startup rely on it being
+    side-effect-free on processes."""
+
+    from tokirecur import ctl
+
+    env.joinpath("models.yaml").write_text(yaml.safe_dump({"models": [
+        {"name": "m1", "gguf": "/tmp/m1.gguf", "llama_port": 18001,
+         "daemon_port": 18002, "ctx_size": 100, "max_tokens": 90,
+         "model_id": "m1-model"},
+    ]}))
+    reg = env / "models.yaml"
+    marker = env / "active-model"
+
+    monkeypatch.setattr(ctl, "start_model",
+                        lambda *a, **k: pytest.fail("start_model must not run"))
+    monkeypatch.setattr(ctl, "stop_model",
+                        lambda *a, **k: pytest.fail("stop_model must not run"))
+    monkeypatch.setattr(ctl, "llama_reachable", lambda s: False)
+    monkeypatch.setattr(ctl, "daemon_reachable", lambda s: False)
+    monkeypatch.setattr(ctl, "sync_cli_configs",
+                        lambda spec: {"hermes": env / "hermes.yaml"})
+
+    spec = ctl.use_model("m1", registry=reg, sync_only=True)
+    assert spec.name == "m1"
+    assert ctl.read_active(reg) == "m1"
+    assert marker.read_text().strip() == "m1"
+
+
+def test_use_model_normalizes_legacy_ids_before_sync(env, monkeypatch):
+    """A legacy repo-path model_id must be normalized before the agent
+    configs are written, so hermes never sees 'unsloth/...' again."""
+
+    from tokirecur import ctl
+
+    reg = env / "models.yaml"
+    reg.write_text(yaml.safe_dump({"models": [
+        {"name": "qwen3.5-0.8b-gguf", "gguf": "/tmp/Qwen3.5-0.8B-Q4_K_M.gguf",
+         "llama_port": 18001, "daemon_port": 18002, "ctx_size": 100,
+         "max_tokens": 90, "model_id": "unsloth/Qwen3.5-0.8B-GGUF"},
+    ]}))
+
+    written: list[str] = []
+
+    def fake_sync(spec):
+        written.append(spec.model_id)
+        return {}
+
+    monkeypatch.setattr(ctl, "sync_cli_configs", fake_sync)
+    ctl.use_model("qwen3.5-0.8b-gguf", registry=reg, sync_only=True)
+    # The writer saw the short id, and the registry is healed.
+    assert written == ["qwen3.5-0.8b-q4_k_m"]
+    healed = yaml.safe_load(reg.read_text())["models"][0]["model_id"]
+    assert "/" not in healed
+
+
+def test_heal_cli_configs_rewrites_stale_hermes_endpoint(env, monkeypatch):
+    """The daemon-startup heal must take a stale hermes config (llama
+    port + legacy model id) and rewrite it to the daemon with the short
+    model id — the exact Mac/Windows failure state."""
+    from tokirecur import ctl
+
+    reg = env / "models.yaml"
+    reg.write_text(yaml.safe_dump({"models": [
+        {"name": "qwen3.5-0.8b-gguf", "gguf": "/tmp/Qwen3.5-0.8B-Q4_K_M.gguf",
+         "llama_port": 18001, "daemon_port": 18002, "ctx_size": 100,
+         "max_tokens": 90, "model_id": "unsloth/Qwen3.5-0.8B-GGUF"},
+    ]}))
+    marker = env / "active-model"
+    marker.write_text("qwen3.5-0.8b-gguf")
+
+    hermes_cfg = env / "hermes.yaml"
+    hermes_cfg.write_text(yaml.safe_dump({
+        "custom_providers": {
+            "llamacpp": {
+                "base_url": "http://127.0.0.1:18001/v1",  # llama port!
+                "api_key": "none",
+                "model": "unsloth/Qwen3.5-0.8B-GGUF",
+            },
+        },
+    }))
+    opencode_cfg = env / "opencode.json"
+    opencode_cfg.write_text(json.dumps({"provider": "llamacpp"}))  # string form
+
+    monkeypatch.setattr(ctl, "DEFAULT_REGISTRY", reg)
+    monkeypatch.setattr(ctl, "ACTIVE_MARKER", marker)
+    monkeypatch.setattr(ctl, "DEFAULT_REGISTRY", reg)
+    monkeypatch.setattr(ctl, "ACTIVE_MARKER", marker)
+    monkeypatch.setenv("HERMES_CONFIG", str(hermes_cfg))
+    monkeypatch.setenv("OPENCODE_CONFIG", str(opencode_cfg))
+
+    paths = ctl.heal_cli_configs(reg)
+    assert paths is not None
+    assert "hermes" in paths
+
+    out = yaml.safe_load(hermes_cfg.read_text())
+    entry = out["custom_providers"][0]
+    assert entry["base_url"] == "http://127.0.0.1:18002/v1"
+    assert entry["default_model"] == "qwen3.5-0.8b-q4_k_m"
+    # The opencode string provider migrated to a dict, not a crash.
+    out2 = json.loads(opencode_cfg.read_text())
+    assert isinstance(out2["provider"], dict)
+    # The registry got normalized by the heal too.
+    assert "/" not in yaml.safe_load(reg.read_text())["models"][0]["model_id"]
+
+
+def test_heal_cli_configs_no_active_returns_none(env, monkeypatch):
+    from tokirecur import ctl
+
+    reg = env / "models.yaml"
+    reg.write_text(yaml.safe_dump({"models": [
+        {"name": "m1", "gguf": "/tmp/m1.gguf", "llama_port": 1,
+         "daemon_port": 2, "ctx_size": 100, "max_tokens": 90,
+         "model_id": "m1-model"},
+    ]}))
+    monkeypatch.setattr(ctl, "DEFAULT_REGISTRY", reg)
+    monkeypatch.setattr(ctl, "ACTIVE_MARKER", env / "active-model")
+    assert ctl.heal_cli_configs(reg) is None
+
+
+def test_sync_cli_configs_fault_isolated(env, monkeypatch, tmp_path):
+    """One corrupt/foreign config (opencode) must never block the other
+    three writers — that silent failure left hermes stale for the whole
+    0.2.16 era."""
+    from types import SimpleNamespace
+
+    from tokirecur import ctl
+
+    cfg_dir = tmp_path / "cfgs"
+    cfg_dir.mkdir()
+    corrupt = cfg_dir / "opencode.json"
+    corrupt.write_text("not json {{{")
+
+    spec = SimpleNamespace(
+        name="qwen3.5-0.8b-gguf", model_id="qwen3.5-0.8b",
+        daemon_url="http://127.0.0.1:8787", label="Qwen3.5-0.8B",
+        max_tokens=32768, ctx_size=32768, always_on=False,
+        state_dir=lambda: cfg_dir / "state",
+    )
+    monkeypatch.setenv("OPENCODE_CONFIG", str(corrupt))
+    monkeypatch.setenv("OPENCLAW_CONFIG", str(cfg_dir / "openclaw.json"))
+    monkeypatch.setenv("HERMES_CONFIG", str(cfg_dir / "hermes.yaml"))
+    monkeypatch.setenv("CODEX_HOME", str(cfg_dir / "codex"))
+
+    out = ctl.sync_cli_configs(spec)
+    assert "hermes" in out
+    assert "openclaw" in out
+    assert "codex" in out
+    assert "opencode" not in out
+    hermes = yaml.safe_load((cfg_dir / "hermes.yaml").read_text())
+    assert hermes["custom_providers"][0]["base_url"] == "http://127.0.0.1:8787/v1"
+
+
+def test_write_opencode_config_migrates_string_provider(env, tmp_path):
+    """A vanilla opencode config has `"provider": "<name>"` (string);
+    the writer must migrate it to the dict form, not crash."""
+    from types import SimpleNamespace
+
+    from tokirecur.ctl import write_opencode_config
+
+    cfg = tmp_path / "opencode.json"
+    cfg.write_text(json.dumps({"provider": "opencode", "model": "gpt-4o"}))
+
+    spec = SimpleNamespace(
+        name="qwen3.5-0.8b-gguf", model_id="qwen3.5-0.8b",
+        daemon_url="http://127.0.0.1:8787", label="Qwen3.5-0.8B",
+        max_tokens=32768, ctx_size=32768, always_on=False,
+        state_dir=lambda: tmp_path / "state",
+    )
+    write_opencode_config(spec, specs=[spec], path=cfg)
+    out = json.loads(cfg.read_text())
+    assert isinstance(out["provider"], dict)
+    assert f"tokirecur-{spec.name}" in out["provider"]
+    assert out["model"] == "tokirecur-qwen3.5-0.8b-gguf/qwen3.5-0.8b"
+
+
+def test_write_hermes_config_migrates_string_model_key(env, tmp_path):
+    """Old hermes configs carry `model: <name>` as a string; the writer
+    must upgrade it to the dict form instead of crashing the sync."""
+    from types import SimpleNamespace
+
+    from tokirecur.ctl import write_hermes_config
+
+    cfg = tmp_path / "hermes.yaml"
+    cfg.write_text(yaml.safe_dump({"model": "unsloth/Qwen3.5-0.8B-GGUF"}))
+
+    spec = SimpleNamespace(
+        name="qwen3.5-0.8b-gguf", model_id="qwen3.5-0.8b",
+        daemon_url="http://127.0.0.1:8787", label="Qwen3.5-0.8B",
+    )
+    write_hermes_config(spec, specs=[spec], path=cfg)
+    out = yaml.safe_load(cfg.read_text())
+    assert isinstance(out["model"], dict)
+    assert out["model"]["base_url"] == "http://127.0.0.1:8787/v1"
+    assert out["model"]["default"] == "qwen3.5-0.8b"
+
+
+def test_llama_args_aliases_cover_every_stack_name(env, tmp_path):
+    """Every model name the stack can emit must be registered as a
+    llama-server alias so a validating (router-mode) build can never
+    404 a direct hit with one of them."""
+    from types import SimpleNamespace
+
+    from tokirecur import ctl
+
+    gguf = tmp_path / "Qwen3.5-0.8B-Q4_K_M.gguf"
+    gguf.write_bytes(b"GGUF")
+    spec = SimpleNamespace(
+        name="qwen3.5-0.8b-gguf", model_id="qwen3.5-0.8b",
+        gguf=str(gguf),
+        llama_port=1, ctx_size=100, parallel=2, kv="f16",
+        reasoning="off", extra_args=[], binary="llama-server",
+    )
+    args = ctl._llama_args(spec)
+    aliases = {args[i + 1] for i in range(len(args)) if args[i] == "--alias"}
+    assert aliases == {
+        "qwen3.5-0.8b",                          # model_id
+        "Qwen3.5-0.8B-Q4_K_M",                   # GGUF stem
+        "default",                               # toki chat client
+        "tokirecur-qwen3.5-0.8b-gguf/qwen3.5-0.8b",  # opencode form
+        "tokirecur/qwen3.5-0.8b-gguf",           # legacy short form
+    }, aliases
+
+
+def test_model_use_sync_only_cli(env, monkeypatch):
+    """`toki model use <name> --sync-only` rewires the four agent
+    configs and prints 'configs synced' without starting any stack —
+    the installer/daemon-startup repair path, end to end."""
+    from click.testing import CliRunner
+
+    from tokirecur.cli import cli
+
+    reg = env / "models.yaml"
+    reg.write_text(yaml.safe_dump({"models": [
+        {"name": "m1", "gguf": "/tmp/m1.gguf", "llama_port": 18001,
+         "daemon_port": 18002, "ctx_size": 100, "max_tokens": 90,
+         "model_id": "m1-model"},
+    ]}))
+    monkeypatch.setattr(ctl, "DEFAULT_REGISTRY", reg)
+    monkeypatch.setattr(ctl, "ACTIVE_MARKER", env / "active-model")
+    monkeypatch.setenv("HERMES_CONFIG", str(env / "hermes.yaml"))
+    monkeypatch.setenv("OPENCODE_CONFIG", str(env / "opencode.json"))
+    monkeypatch.setenv("OPENCLAW_CONFIG", str(env / "openclaw.json"))
+    monkeypatch.setenv("CODEX_HOME", str(env / "codex"))
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["model", "use", "m1", "--sync-only"])
+    assert result.exit_code == 0, result.output
+    assert "configs synced" in result.output
+    hermes = yaml.safe_load((env / "hermes.yaml").read_text())
+    assert hermes["custom_providers"][0]["base_url"] == "http://127.0.0.1:18002/v1"

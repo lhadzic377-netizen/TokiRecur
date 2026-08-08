@@ -99,6 +99,7 @@ def test_launch_agent_uses_selector_launch_cmd(monkeypatch, capsys):
     can never drift from the Textual launcher."""
     from tokirecur import clilauncher as cl
 
+    monkeypatch.setattr("tokirecur.ctl.daemon_reachable", lambda spec: True)
     monkeypatch.setattr(cl, "_active_spec", _stub_spec)
     monkeypatch.setattr(cl.shutil, "which", lambda _: r"C:\bin\opencode.exe")
     monkeypatch.setattr(os, "name", "nt")
@@ -123,6 +124,7 @@ def test_launch_agent_openclaw_falls_back_to_chat_when_gateway_down(monkeypatch,
     from tokirecur import clilauncher as cl
     from tokirecur import selector
 
+    monkeypatch.setattr("tokirecur.ctl.daemon_reachable", lambda spec: True)
     monkeypatch.setattr(cl, "_active_spec", _stub_spec)
     monkeypatch.setattr(cl.shutil, "which", lambda _: r"C:\bin\openclaw.exe")
     monkeypatch.setattr(os, "name", "nt")
@@ -145,6 +147,7 @@ def test_launch_agent_openclaw_falls_back_to_chat_when_gateway_down(monkeypatch,
 def test_launch_agent_openclaw_uses_tui_when_gateway_up(monkeypatch, capsys):
     from tokirecur import clilauncher as cl
     from tokirecur import selector
+    monkeypatch.setattr("tokirecur.ctl.daemon_reachable", lambda spec: True)
 
     monkeypatch.setattr(cl, "_active_spec", _stub_spec)
     monkeypatch.setattr(cl.shutil, "which", lambda _: r"C:\bin\openclaw.exe")
@@ -200,6 +203,7 @@ def test_find_binary_windows_fallback(monkeypatch, tmp_path):
 def test_agent_launch_cmd_wrapper(monkeypatch, capsys):
     """npm/pipx .cmd shims must launch via cmd.exe, not CreateProcess."""
     from tokirecur import clilauncher as cl
+    monkeypatch.setattr("tokirecur.ctl.daemon_reachable", lambda spec: True)
     monkeypatch.setattr(cl.shutil, "which", lambda _: r"C:\npm\opencode.cmd")
     monkeypatch.setattr(cl, "_active_spec", _stub_spec)
     monkeypatch.setattr(os, "name", "nt")
@@ -222,6 +226,7 @@ def test_agent_launch_cmd_wrapper(monkeypatch, capsys):
 
 def test_agent_launch_exe(monkeypatch, capsys):
     from tokirecur import clilauncher as cl
+    monkeypatch.setattr("tokirecur.ctl.daemon_reachable", lambda spec: True)
     monkeypatch.setattr(cl.shutil, "which", lambda _: r"C:\bin\codex.exe")
     monkeypatch.setattr(cl, "_active_spec", _stub_spec)
     monkeypatch.setattr(os, "name", "nt")
@@ -313,3 +318,34 @@ def test_windows_routing_in_selector(monkeypatch):
     monkeypatch.setattr("tokirecur.clilauncher.run_cli_launcher", fake_launcher)
     assert selector.run() == 0
     assert ran["called"]
+
+
+def test_launch_agent_boots_stack_when_daemon_down(monkeypatch, capsys):
+    """0.2.17: launching an agent with the stack down must bring the
+    stack up first (which also re-syncs the agent configs), then launch
+    against the refreshed spec."""
+    from tokirecur import clilauncher as cl
+    from tokirecur import ctl
+
+    calls = {"use_model": 0}
+    monkeypatch.setattr(cl, "_active_spec", _stub_spec)
+    monkeypatch.setattr(cl.shutil, "which", lambda _: r"C:\bin\opencode.exe")
+    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setattr(ctl, "daemon_reachable", lambda spec: False)
+    monkeypatch.setattr(ctl, "use_model",
+                        lambda name, **kw: calls.__setitem__("use_model", calls["use_model"] + 1) or ctl.get_model(name))
+    monkeypatch.setattr(ctl, "get_model", lambda name: _stub_spec())
+    captured = {}
+
+    class FakeProc:
+        pid = 9
+
+    monkeypatch.setattr(
+        cl.subprocess, "Popen",
+        lambda argv, **kw: (captured.__setitem__("argv", argv), FakeProc())[1],
+    )
+
+    cl._launch_agent("opencode")
+    assert calls["use_model"] == 1
+    assert captured["argv"][0] == r"C:\bin\opencode.exe"
+    assert "starting 'qwen3' stack" in capsys.readouterr().out

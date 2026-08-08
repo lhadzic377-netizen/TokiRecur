@@ -96,11 +96,46 @@ if exist "%LLAMA%" (
   )
 )
 
+rem ── 6. starter model + agent config wiring (0.2.17: plug-and-play) ─
+rem    Windows never wired the four agent configs at install time, so
+rem    direct agent launches hit stale/absent configs (hermes "model
+rem    '<name>' not found"). Pull a starter model when the registry is
+rem    empty, then sync opencode/openclaw/hermes/codex (--sync-only
+rem    writes configs without booting a model).
+set "HAS_MODELS=0"
+for /f "delims=" %%a in ('"%TOKI%" model list') do set "HAS_MODELS=1"
+if "%HAS_MODELS%"=="0" (
+  echo [+] no models registered - pulling a starter model...
+  set "DEFAULT_REPO=Qwen/Qwen3-8B-GGUF"
+  set "DEFAULT_FILE=Qwen3-8B-Q4_K_M.gguf"
+  set "DEFAULT_NAME=qwen3-8b"
+  for /f "delims=" %%a in ('powershell -NoProfile -Command "try{[math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/1GB)}catch{8}"') do set "RAM_GB=%%a"
+  if defined RAM_GB if !RAM_GB! LSS 16 (
+    set "DEFAULT_REPO=Qwen/Qwen3-0.6B-GGUF"
+    set "DEFAULT_FILE=Qwen3-0.6B-Q4_K_M.gguf"
+    set "DEFAULT_NAME=qwen3-0.6b"
+  )
+  "%TOKI%" model pull "!DEFAULT_REPO!" --name "!DEFAULT_NAME!" --file "!DEFAULT_FILE!"
+  if not errorlevel 1 (
+    echo [+] wiring opencode/openclaw/hermes/codex to "!DEFAULT_NAME!"...
+    "%TOKI%" model use "!DEFAULT_NAME!" --sync-only
+  ) else (
+    echo warning: starter model pull failed. Pull one later:
+    echo     toki model pull Qwen/Qwen3-8B-GGUF --name qwen3-8b
+  )
+) else (
+  for /f "tokens=3" %%a in ('"%TOKI%" model status ^| findstr /b /c:"active model:"') do set "ACTIVE_MODEL=%%a"
+  if defined ACTIVE_MODEL (
+    if not "!ACTIVE_MODEL!"=="none" (
+      echo [+] re-syncing agent configs for "!ACTIVE_MODEL!"...
+      "%TOKI%" model use "!ACTIVE_MODEL!" --sync-only
+    )
+  )
+)
+
 echo.
 echo Done.
 echo   toki CLI:        %TOKI%
 echo   llama-server:    %LLAMA%
 echo.
-echo Next steps (open a NEW terminal so PATH picks up toki):
-echo   toki model pull Qwen/Qwen3-8B-GGUF --name qwen3-8b
-echo   toki model use qwen3-8b ^&^& toki tui
+echo Agents are wired automatically; start the stack with: toki model use ^<name^> ^&^& toki tui

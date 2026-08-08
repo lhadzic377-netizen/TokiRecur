@@ -1312,6 +1312,26 @@ def _default_ngl() -> int:
     return 0
 
 
+def _model_aliases(spec: ModelSpec) -> list[str]:
+    """Every model name the stack can hand to a client or receive back.
+
+    The union covers: the registry model id, the GGUF filename stem
+    (what a freshly-pulled model gets before normalization), ``default``
+    (toki's own chat client), the opencode provider model name
+    (``tokirecur-<name>/<model_id>``), and the legacy short form
+    (``tokirecur/<name>``). Aliases are registered on llama-server so a
+    validating build accepts any of them instead of returning the
+    ``model '<name>' not found`` 404.
+    """
+    aliases = {spec.model_id} if spec.model_id else set()
+    if spec.gguf:
+        aliases.add(Path(spec.gguf).name.removesuffix(".gguf"))
+    aliases.update(("default", f"tokirecur/{spec.name}"))
+    if spec.model_id:
+        aliases.add(f"tokirecur-{spec.name}/{spec.model_id}")
+    return sorted(a for a in aliases if a)
+
+
 def _llama_args(spec: ModelSpec, ctx_override: int | None = None) -> list[str]:
     # MLX has a different invocation: mlx_lm.server takes a model
     # directory and exposes an OpenAI-compatible API on a port.
@@ -1347,6 +1367,12 @@ def _llama_args(spec: ModelSpec, ctx_override: int | None = None) -> list[str]:
         args += ["--reasoning", "off"]
     elif spec.reasoning == "on":
         args += ["--reasoning", "on"]
+    # Register every model name the stack can emit as an alias so a
+    # validating (router-mode) llama-server can never 404 a client that
+    # talks to it directly with a stale/legacy name. llama.cpp
+    # accumulates repeated --alias flags (common.h: std::set).
+    for alias in _model_aliases(spec):
+        args += ["--alias", alias]
     args += spec.extra_args
     return args
 
@@ -1730,7 +1756,10 @@ def backfill_binary_env(specs: list[ModelSpec] | None = None) -> list[str]:
     return updated
 
 
-def use_model(name: str, *, stop_others: bool = True, registry: Path | None = None) -> ModelSpec:
+def use_model(
+    name: str, *, stop_others: bool = True, registry: Path | None = None,
+    sync_only: bool = False,
+) -> ModelSpec:
     """Ensure the chosen model is up, selected, and visible to every CLI.
 
     The always-on small model (9b) is kept running; other big-model
@@ -1739,9 +1768,24 @@ def use_model(name: str, *, stop_others: bool = True, registry: Path | None = No
     so they have a provider entry for every registry spec — callers
     (``toki model use``, ``toki model pull --use``, the launcher)
     don't have to do this themselves.
+
+    With ``sync_only=True`` nothing is started or stopped: the registry
+    is healed (legacy model ids normalized, missing binary/env backfilled),
+    the active marker is set, and the four agent configs are rewritten.
+    This is the plug-and-play repair path used by installers and daemon
+    startup so agent configs are always correct without user commands.
     """
     target = get_model(name, registry)
     all_models = load_registry(registry)
+
+    # Legacy repo-path model ids (pre-0.2.15) surface as "model 'X' not
+    # found" from validating llama-server builds. Normalize at EVERY
+    # sync point so configs can never carry a repo path again.
+    changed = normalize_model_ids(registry)
+    if changed:
+        all_models = load_registry(registry)
+        target = get_model(name, registry)
+        logger.info("normalized legacy model ids: %s", ", ".join(f"{a}->{b}" for _, a, b in changed))
 
     # Self-heal any registry entries written before `pull_defaults`
     # existed (no machine-tuned binary/env). Best-effort: only runs when
@@ -1751,6 +1795,16 @@ def use_model(name: str, *, stop_others: bool = True, registry: Path | None = No
         all_models = load_registry(registry)
         target = get_model(name, registry)
         logger.info("repaired registry entries: %s", ", ".join(healed))
+
+    if sync_only:
+        # Config-only pass: the stack is not touched (installers and
+        # daemon startup use this to heal drift without booting models).
+        set_active(target.name, registry)
+        try:
+            sync_cli_configs(target)
+        except Exception as e:
+            logger.warning("could not sync CLI configs: %s", e)
+        return target
 
     # Free RAM FIRST: stop competing big-model stacks before loading the
     # target (a 64 GB model cannot share memory with another big model).
@@ -1849,7 +1903,13 @@ def write_opencode_config(
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     cfg: dict[str, Any] = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
 
-    providers = cfg.setdefault("provider", {})
+    # A vanilla opencode config carries `"provider": "<name>"` (a string).
+    # Replace it with the provider dict we manage — never crash the sync
+    # over a foreign config shape.
+    providers = cfg.get("provider")
+    if not isinstance(providers, dict):
+        providers = {}
+        cfg["provider"] = providers
     # Purge stale tokirecur-* entries from a previous toki version so
     # a renamed or removed model doesn't leave a dangling key.
     for stale in [k for k in providers if k.startswith("tokirecur-")]:
@@ -1877,9 +1937,16 @@ def write_openclaw_config(
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     cfg: dict[str, Any] = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
 
-    models = cfg.setdefault("models", {})
+    # Guard against a foreign config shape (e.g. `models` as a list).
+    models = cfg.get("models")
+    if not isinstance(models, dict):
+        models = {}
+        cfg["models"] = models
     models.setdefault("mode", "merge")
     providers = models.setdefault("providers", {})
+    if not isinstance(providers, dict):
+        providers = {}
+        models["providers"] = providers
     # Purge stale tokirecur-* entries from a previous toki version so
     # a renamed or removed model doesn't leave a dangling key.
     for stale in [k for k in providers if k.startswith("tokirecur-")]:
@@ -1945,7 +2012,10 @@ def write_hermes_config(
     # Drop any legacy tokirecur-* provider keys left by a previous toki
     # version, plus any non-toki "llamacpp" key (see docstring). The user
     # may keep their own (ollama, anthropic, ...) keys.
-    providers = cfg.setdefault("providers", {})
+    providers = cfg.get("providers")
+    if not isinstance(providers, dict):
+        providers = {}
+        cfg["providers"] = providers
     for stale in [k for k in providers
                   if k.startswith("tokirecur-") or k == "llamacpp"]:
         providers.pop(stale, None)
@@ -1989,7 +2059,13 @@ def write_hermes_config(
         "_toki": True,
     }
 
-    cfg.setdefault("model", {}).update(
+    # Old hermes configs carry `model: <name>` as a string; replace it
+    # with the dict form rather than crashing the sync.
+    model_cfg = cfg.get("model")
+    if not isinstance(model_cfg, dict):
+        model_cfg = {}
+        cfg["model"] = model_cfg
+    model_cfg.update(
         {
             "api_key": DEFAULT_AUTH,
             "base_url": f"{spec.daemon_url}/v1",
@@ -2060,11 +2136,52 @@ def sync_cli_configs(spec: ModelSpec) -> dict[str, Path]:
     writer — the previous version re-parsed the YAML four times per
     switch (once per writer plus a second `load_registry` inside
     `_small_model_ref`).
+
+    Each writer is fault-isolated: a corrupt/foreign config for one CLI
+    must never block the other three (that failure mode silently left
+    hermes pointing at a stale endpoint for the whole 0.2.16 era).
     """
     specs = load_registry()
-    return {
-        "opencode": write_opencode_config(spec, specs),
-        "openclaw": write_openclaw_config(spec, specs),
-        "hermes": write_hermes_config(spec, specs),
-        "codex": write_codex_config(spec, specs),
-    }
+    out: dict[str, Path] = {}
+    for tool, writer in (
+        ("opencode", write_opencode_config),
+        ("openclaw", write_openclaw_config),
+        ("hermes", write_hermes_config),
+        ("codex", write_codex_config),
+    ):
+        try:
+            out[tool] = writer(spec, specs)
+        except Exception as e:  # defensive: one bad config never blocks the rest
+            logger.warning("could not write %s config: %s", tool, e)
+    return out
+
+
+def heal_cli_configs(registry: Path | None = None) -> dict[str, Path] | None:
+    """Best-effort self-heal of the four agent configs for the active model.
+
+    Called at every stack startup (``toki serve``, ``toki up``, daemon
+    spawn) so the agent configs are correct even when the user never
+    runs ``toki model use``: legacy repo-path model ids are normalized
+    and the four agent configs are rewritten to point at the active
+    model's daemon. This is the plug-and-play repair point that kills
+    the "model '<name>' not found" 404 class from stale configs.
+
+    Never raises (a broken config is recoverable; a failed stack start
+    is not). Returns the written paths, or ``None`` when no model is
+    active.
+    """
+    try:
+        changed = normalize_model_ids(registry)
+        if changed:
+            logger.info("normalized legacy model ids: %s",
+                        ", ".join(f"{a}->{b}" for _, a, b in changed))
+        healed = backfill_binary_env(load_registry(registry))
+        if healed:
+            logger.info("repaired registry entries: %s", ", ".join(healed))
+        active = read_active(registry)
+        if not active:
+            return None
+        return sync_cli_configs(get_model(active, registry))
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning("agent config heal skipped: %s", e)
+        return None

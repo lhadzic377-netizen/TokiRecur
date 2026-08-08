@@ -110,7 +110,7 @@ if [[ $EUID -ne 0 ]]; then
     # user can `toki` immediately. A 0.8B Q4_K_M is ~500 MB and runs in
     # a couple of minutes on a normal connection; pick a bigger default
     # on machines that look like they have headroom (>= 16 GB RAM).
-    if "$TOKI" model list | grep -q "no models"; then
+    if ! "$TOKI" model list | grep -q .; then
       if [[ "$(uname -s)" == "Darwin" ]]; then
         # macOS: hard to read total RAM portably; default to the
         # 0.8B model which fits any Apple Silicon Mac.
@@ -143,6 +143,17 @@ if [[ $EUID -ne 0 ]]; then
           echo "  $TOKI model pull Qwen/Qwen3-0.6B-GGUF --name qwen3-0.6b" >&2
         fi
       fi
+    fi
+
+    # 0.2.17: a re-install / upgrade over an existing registry also heals
+    # the agent configs. Old versions left stale entries pointing at
+    # llama-server (or carrying legacy repo-path model ids), which
+    # surfaces as hermes "model '<name>' not found". `--sync-only`
+    # rewrites opencode/openclaw/hermes/codex without booting a model.
+    ACTIVE=$("$TOKI" model status 2>/dev/null | awk '/active model:/ {print $3}')
+    if [[ -n "$ACTIVE" && "$ACTIVE" != "none" ]]; then
+      echo "Re-syncing agent configs for active model '$ACTIVE'..."
+      "$TOKI" model use "$ACTIVE" --sync-only || true
     fi
 
     echo ""

@@ -259,9 +259,22 @@ def _launch_agent(app: str) -> None:
     gateway running; when it isn't, fall back to the local TUI the
     same way the Textual launcher does.
     """
+    ctl = _ctl()
     spec = _active_spec()
     if spec is None:
         print("no active model — pick one with 2) Switch model first.")
+        return
+    # 0.2.17: every agent launch is a repair point. If the active
+    # model's stack is down, bring it up (which also rewrites the four
+    # agent configs) so agents never talk to a dead endpoint or a
+    # stale one from an older toki.
+    try:
+        if not ctl.daemon_reachable(spec):
+            print(f"starting '{spec.name}' stack...")
+            ctl.use_model(spec.name)
+            spec = ctl.get_model(spec.name)
+    except Exception as e:
+        print(f"failed to start '{spec.name}' stack: {e}")
         return
     try:
         from .selector import launch_cmd

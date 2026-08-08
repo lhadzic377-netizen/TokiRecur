@@ -129,14 +129,52 @@ if ($UserPath -notmatch [regex]::Escape($Scripts)) {
     $env:Path = $Scripts + ';' + $env:Path
 }
 
+# ---- Starter model + agent config wiring (0.2.17: plug-and-play) ----
+#
+# Windows never wired the four agent configs at install time, so direct
+# agent launches hit stale/absent configs (hermes "model '<name>' not
+# found"). Pull a starter model when the registry is empty, then sync
+# opencode/openclaw/hermes/codex (--sync-only writes configs without
+# booting a model). Re-runs over an existing registry heal old configs.
+
+$Models = & $Toki model list
+if (-not $Models) {
+    $DefaultRepo = 'Qwen/Qwen3-8B-GGUF'
+    $DefaultFile = 'Qwen3-8B-Q4_K_M.gguf'
+    $DefaultName = 'qwen3-8b'
+    try {
+        $RamGb = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)
+        if ($RamGb -lt 16) {
+            $DefaultRepo = 'Qwen/Qwen3-0.6B-GGUF'
+            $DefaultFile = 'Qwen3-0.6B-Q4_K_M.gguf'
+            $DefaultName = 'qwen3-0.6b'
+        }
+    } catch {}
+    Write-Host "[+] no models registered - pulling a starter model ($DefaultRepo)..."
+    & $Toki model pull $DefaultRepo --name $DefaultName --file $DefaultFile
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "[+] wiring opencode/openclaw/hermes/codex to '$DefaultName'..."
+        & $Toki model use $DefaultName --sync-only
+    } else {
+        Write-Host "warning: starter model pull failed. Pull one later:" -ForegroundColor Yellow
+        Write-Host "  toki model pull Qwen/Qwen3-8B-GGUF --name qwen3-8b" -ForegroundColor Yellow
+    }
+} else {
+    $ActiveLine = (& $Toki model status | Select-String '^active model: (.+)$')
+    if ($ActiveLine -and $ActiveLine.Matches[0].Groups[1].Value.Trim() -ne 'none') {
+        $ActiveModel = $ActiveLine.Matches[0].Groups[1].Value.Trim()
+        Write-Host "[+] re-syncing agent configs for active model '$ActiveModel'..."
+        & $Toki model use $ActiveModel --sync-only
+    }
+}
+
 Write-Host ""
 Write-Host "Toki Recur installed." -ForegroundColor Green
 Write-Host "  toki CLI:        $Toki"
 Write-Host "  llama-server:    $env:USERPROFILE\.local\state\tokirecur\bin\llama-server.exe"
 Write-Host ""
-Write-Host "Next steps (open a NEW terminal so PATH picks up toki):"
-Write-Host "  toki serve                  # run the API daemon"
-Write-Host "  toki --help                 # everything else"
+Write-Host "Agents are wired automatically; start the stack with:"
+Write-Host "  toki model use <name> --sync-only   # or: toki model use <name> ^&^& toki tui"
 Write-Host ""
 Write-Host "To run as a service instead of a terminal window:"
 Write-Host "  nssm install TokiRecur `"$Toki`" serve   (or a scheduled task at logon)"

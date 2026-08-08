@@ -81,7 +81,16 @@ def serve(
 
     from ..api.app import create_app
     from ..backend import LlamaServerBackend
+
+    # 0.2.17: every daemon start is a repair point. Rewrite the four
+    # agent configs for the active model so stale/legacy configs (the
+    # "model '<name>' not found" 404 class) heal themselves without any
+    # user command. Best-effort and non-fatal by design.
+    from ..ctl import heal_cli_configs
     from ..index import BruteForceIndex
+    healed = heal_cli_configs()
+    if healed:
+        click.echo("agent configs synced for the active model")
 
     # Fail loudly-but-kindly: a daemon with no llama-server behind it
     # looks exactly like "the server doesn't start". Ping the backend
@@ -383,6 +392,30 @@ def doctor(fix: bool) -> None:
                 except (KeyError, FileNotFoundError, RuntimeError, OSError) as e:
                     click.echo(f"fix: use_model failed: {e}", err=True)
 
+    # 3) Heal the four agent configs for the active model (0.2.17):
+    #    legacy repo-path model ids are normalized and any stale
+    #    endpoint is rewritten to the active model's daemon. This is
+    #    the one-command fix for the "model '<name>' not found" 404.
+    from ..ctl import heal_cli_configs
+    healed_paths = heal_cli_configs()
+    if healed_paths:
+        names = ", ".join(f"{k}:{p.name}" for k, p in healed_paths.items())
+        actions.append(f"synced agent configs ({names})")
+        spec = None
+        try:
+            spec = ctl.get_model(active) if active else None
+        except Exception:
+            spec = None
+        if spec is not None:
+            import httpx as _httpx
+            try:
+                r = _httpx.get(f"{spec.daemon_url}/healthz", timeout=2.0)
+                state = "ok" if r.status_code == 200 else f"down ({r.status_code})"
+            except Exception:
+                state = "not reachable"
+            actions.append(f"agent endpoints -> {spec.daemon_url}/v1 ({state}; "
+                           f"start the stack with `toki model use {active}` if down)")
+
     if actions:
         click.echo("fix:")
         for a in actions:
@@ -626,6 +659,13 @@ def up(
         click.echo("hint: set TOKI_MODEL or pass --model", err=True)
         raise SystemExit(2)
 
+    # 0.2.17: `toki up` is a repair point — heal the four agent configs
+    # for the active registry model before the stack comes up.
+    from ..ctl import heal_cli_configs
+    healed = heal_cli_configs()
+    if healed:
+        click.echo("agent configs synced for the active model")
+
     if not skip_llama:
         try:
             pid = lifecycle.start_llama_server(
@@ -848,11 +888,16 @@ def status() -> None:  # noqa: F811
     help="Stay attached (for systemd units). The stack is torn down "
          "when this process is stopped.",
 )
-def use(name: str, keep_others: bool, wait: bool) -> None:
+@click.option(
+    "--sync-only", is_flag=True,
+    help="Only rewrite the opencode/openclaw/hermes/codex configs; do "
+         "not start or stop any stack (installer-friendly heal).",
+)
+def use(name: str, keep_others: bool, wait: bool, sync_only: bool) -> None:
     """Start the model stack and select it in opencode/openclaw/hermes."""
     from ..ctl import _effective_ctx, sync_cli_configs, use_model
     try:
-        spec = use_model(name, stop_others=not keep_others)
+        spec = use_model(name, stop_others=not keep_others, sync_only=sync_only)
     except (KeyError, FileNotFoundError, RuntimeError) as e:
         click.echo(f"error: {e}", err=True)
         raise SystemExit(1) from None
@@ -863,7 +908,10 @@ def use(name: str, keep_others: bool, wait: bool) -> None:
             f"note: context clamped to {effective} tokens (fits this "
             f"machine's RAM; configured {spec.ctx_size})"
         )
-    click.echo(f"model '{name}' is up: llama :{spec.llama_port}  daemon :{spec.daemon_port}")
+    if sync_only:
+        click.echo(f"model '{name}' configs synced (stack not started)")
+    else:
+        click.echo(f"model '{name}' is up: llama :{spec.llama_port}  daemon :{spec.daemon_port}")
     for tool, path in paths.items():
         click.echo(f"  {tool:9s} -> {path}")
     click.echo("switched. per-run override: opencode --model, openclaw agent --model, "
