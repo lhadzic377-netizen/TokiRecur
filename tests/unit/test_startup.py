@@ -131,14 +131,17 @@ def test_fit_plan_noop_zero_budget(env, monkeypatch):
         spec.ctx_size, spec.kv, spec.parallel)
 
 
-def test_effective_ctx_falls_back_to_clamped(env, monkeypatch):
+def test_effective_ctx_falls_back_to_plan(env, monkeypatch):
     spec = _spec(env, ctx=200000)
     monkeypatch.setattr(ctl, "read_gguf_meta", lambda p: GgufMeta(
         n_embd=4096, n_layer=32, n_head=16, n_head_kv=4))
-    monkeypatch.setattr(ctl, "_available_gb", lambda: 16.0)
-    # Pre-start, the effective context must be the RAM-clamped window
-    # (45776), never the raw 200000 that clients would overfill.
-    assert ctl._effective_ctx(spec) == 45776
+    monkeypatch.setattr(ctl, "_available_gb", lambda: 8.0)
+    # 8 GB budget, weights ignored: f16@2 slots fits 30517, but the
+    # planner launches the biggest window that fits — q4_0@1 slot
+    # reaches 108506. The effective context must match what
+    # llama-server actually runs with, not the spec's own worst-case
+    # kv/slots (the "select 65k, still says 31k" bug).
+    assert ctl._effective_ctx(spec) == 108506
 
 
 # ── effective ctx plumbing ──────────────────────────────────────────

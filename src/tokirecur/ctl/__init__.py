@@ -449,7 +449,7 @@ def _fit_plan(spec: ModelSpec, avail_gb: float | None = None,
     if _kv_bytes_per_token(spec) is None or not math.isfinite(budget) or budget <= 0:
         # Unknown metadata/RAM (or weights alone don't fit — `_check_ram`
         # raises before launch): keep the spec's own config untouched.
-        return (cap, spec.kv, spec.parallel)
+        return (cap, getattr(spec, "kv", "f16"), getattr(spec, "parallel", 1))
     candidates = []
     for kv in _KV_QUALITY_ORDER:
         for par in (spec.parallel, 1):
@@ -482,8 +482,14 @@ def _effective_ctx(spec: ModelSpec) -> int:
             return int((sd() / "effective_ctx.txt").read_text().strip())
         except (OSError, ValueError):
             pass
-    clamped = _clamp_ctx(spec)
-    return clamped if clamped < spec.ctx_size else spec.ctx_size
+    # The pre-start fallback must be the plan's actual launch window —
+    # NOT _clamp_ctx, which computes the worst case (the spec's own
+    # kv/parallel). A 16 GB box selecting 65k for a 9B fits ~31k as
+    # f16@2 slots but the full 65k as q8_0@1 slot; _fit_plan launches
+    # the latter, so advertising the former makes clients (and status
+    # readouts) show a context that never matches the server.
+    plan_ctx = _fit_plan(spec)[0]
+    return plan_ctx if plan_ctx < spec.ctx_size else spec.ctx_size
 
 
 def _check_ram(spec: ModelSpec) -> None:
