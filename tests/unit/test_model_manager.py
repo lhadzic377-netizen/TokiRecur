@@ -1087,6 +1087,51 @@ def test_chat_completion_includes_reasoning_content(tmp_path, monkeypatch):
     assert observed_max_tokens["v"] == THINKING_TOKENS_FLOOR
 
 
+def test_chat_completions_accepts_legacy_repo_path_model_name(tmp_path, monkeypatch):
+    """Regression for the hermes 'model not found' 404: a client
+    sending the legacy repo-path model_id ('unsloth/Qwen3.5-0.8B-GGUF')
+    must be served (not 404) and the response echoes the active spec's
+    short model_id so downstream consumers see one consistent name."""
+    from fastapi.testclient import TestClient
+
+    from tokirecur.api import app as app_module
+    from tokirecur.api.app import create_app
+    from tokirecur.backend import LlamaServerBackend
+    from tokirecur.core.recycling import RecyclingEngine, RecyclingResult
+    from tokirecur.index import Index
+
+    backend = LlamaServerBackend(base_url="http://llama.invalid")
+    app = create_app(
+        backend=backend, index=Index(), cache_dir=tmp_path,
+        enable_auth=False, enable_rate_limit=False,
+    )
+
+    def fake_serve_chat(self, messages, *, max_tokens, **kw):
+        return RecyclingResult(
+            hit=False, soft_hit=False, cache_id=None, reuse_depth=0,
+            embedding_similarity=0.0, prefilled_tokens=0, skipped_tokens=0,
+            generated_tokens=2, ttft_ms=5.0, total_ms=10.0,
+            prefill_tokens_per_sec=0.0, generated_tokens_per_sec=200.0,
+            output_text="hi", reasoning="", slot_id=0, spilled=False,
+            tool_calls=None, finish_reason="stop",
+        )
+
+    monkeypatch.setattr(RecyclingEngine, "serve_chat", fake_serve_chat)
+    # Active spec's short model_id (post-fix-model-ids form).
+    monkeypatch.setattr(app_module, "_active_model_id",
+                        lambda: "qwen3.5-0.8b-q4_k_m")
+
+    client = TestClient(app)
+    res = client.post("/v1/chat/completions", json={
+        "model": "unsloth/Qwen3.5-0.8B-GGUF",  # legacy form from the bug
+        "messages": [{"role": "user", "content": "hi"}],
+    })
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["model"] == "qwen3.5-0.8b-q4_k_m"
+    assert body["choices"][0]["message"]["content"] == "hi"
+
+
 def test_chat_completion_stream_emits_reasoning_sse(tmp_path, monkeypatch):
     """The streaming path emits ``reasoning_content`` deltas as their own
     SSE chunks alongside the visible ``content`` deltas."""
