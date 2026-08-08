@@ -1927,6 +1927,15 @@ def write_hermes_config(
     ``llamacpp`` entry that points at the active model's daemon and
     list every registry model_id under ``models`` so hermes can pick
     any of them via ``--model``.
+
+    hermes resolves a requested provider by scanning the newer
+    ``providers:`` dict FIRST, then falling back to the legacy
+    ``custom_providers:`` list. A stale ``providers.llamacpp`` entry
+    (hermes's own setup wizard, or a pre-0.2.16 toki, can write one
+    pointing straight at llama-server) therefore shadows the daemon
+    entry below, which surfaces as llama.cpp's "model 'X' not found"
+    404. We purge and re-take the ``llamacpp`` key in BOTH formats so
+    hermes always routes through the toki daemon.
     """
     cfg_path = path or Path(os.environ.get(
         "HERMES_CONFIG", str(Path.home() / ".hermes/config.yaml")))
@@ -1934,9 +1943,11 @@ def write_hermes_config(
     cfg: dict[str, Any] = yaml.safe_load(cfg_path.read_text()) if cfg_path.exists() else {}
 
     # Drop any legacy tokirecur-* provider keys left by a previous toki
-    # version. The user may keep their own (ollama, anthropic, ...) keys.
+    # version, plus any non-toki "llamacpp" key (see docstring). The user
+    # may keep their own (ollama, anthropic, ...) keys.
     providers = cfg.setdefault("providers", {})
-    for stale in [k for k in providers if k.startswith("tokirecur-")]:
+    for stale in [k for k in providers
+                  if k.startswith("tokirecur-") or k == "llamacpp"]:
         providers.pop(stale, None)
 
     all_specs = specs if specs is not None else load_registry()
@@ -1965,6 +1976,18 @@ def write_hermes_config(
             break
     if not has_entry:
         custom.append(entry)
+
+    # Same provider in the newer ``providers:`` dict schema, which hermes
+    # scans before ``custom_providers``. Without this a stale user/legacy
+    # "llamacpp" key would keep pointing requests at llama-server.
+    providers["llamacpp"] = {
+        "api": f"{spec.daemon_url}/v1",
+        "api_key": DEFAULT_AUTH,
+        "models": list(model_ids),
+        "default_model": spec.model_id,
+        "name": "Toki Recur (llamacpp)",
+        "_toki": True,
+    }
 
     cfg.setdefault("model", {}).update(
         {

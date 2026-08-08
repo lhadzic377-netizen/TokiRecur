@@ -1526,6 +1526,55 @@ def test_write_hermes_config_uses_llamacpp_alias(env, monkeypatch, tmp_path):
     entry = next(c for c in custom if c.get("name") == "llamacpp")
     assert entry["base_url"] == "http://127.0.0.1:8787/v1"
     assert entry["models"] == ["qwen3.5-0.8b"]
+    # The newer providers: dict has the same entry — hermes scans this
+    # FIRST, so a stale user entry must not shadow the daemon.
+    prov = out.get("providers") or {}
+    assert "llamacpp" in prov
+    assert prov["llamacpp"]["api"] == "http://127.0.0.1:8787/v1"
+    assert prov["llamacpp"]["default_model"] == "qwen3.5-0.8b"
+    assert prov["llamacpp"]["models"] == ["qwen3.5-0.8b"]
+
+
+def test_write_hermes_config_takes_over_stale_providers_llamacpp(env, tmp_path):
+    """Regression for the hermes 404: a stale providers.llamacpp entry
+    pointing straight at llama-server (hermes's own setup wizard or a
+    pre-0.2.16 toki can write one) shadows the custom_providers entry
+    because hermes scans providers: first. The writer must purge and
+    re-take the key so requests route through the toki daemon."""
+    from types import SimpleNamespace
+
+    import yaml
+
+    from tokirecur.ctl import write_hermes_config
+
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(yaml.safe_dump({
+        "providers": {
+            "llamacpp": {
+                "api": "http://127.0.0.1:8091/v1",  # llama-server directly
+                "api_key": "",
+                "default_model": "unsloth/Qwen3.5-0.8B-GGUF",
+                "name": "llamacpp",
+            },
+        },
+        "custom_providers": [],
+        "model": {"provider": "llamacpp"},
+    }))
+
+    spec = SimpleNamespace(
+        name="qwen3.5-0.8b-gguf", model_id="qwen3.5-0.8b-q4_k_m",
+        daemon_url="http://127.0.0.1:8787", label="Qwen3.5-0.8B",
+    )
+
+    write_hermes_config(spec, specs=[spec], path=cfg)
+    out = yaml.safe_load(cfg.read_text())
+    prov = out["providers"]
+    assert prov["llamacpp"]["api"] == "http://127.0.0.1:8787/v1"
+    assert prov["llamacpp"]["default_model"] == "qwen3.5-0.8b-q4_k_m"
+    assert "8091" not in prov["llamacpp"]["api"]
+    custom = out["custom_providers"]
+    assert any(c.get("name") == "llamacpp" for c in custom)
+    assert out["model"]["provider"] == "llamacpp"
 
 
 def test_write_hermes_config_preserves_user_custom_providers(env, tmp_path):
