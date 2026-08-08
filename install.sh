@@ -40,7 +40,11 @@ if [[ $EUID -ne 0 ]]; then
 
     if command -v pipx >/dev/null 2>&1; then
       echo "Installing tokirecur with pipx ($EXTRA)…"
-      pipx install "$EXTRA"
+      # --force so re-running ./install.sh overwrites an older venv
+      # (e.g. upgrading 0.1.0 → 0.2.10); without it pipx refuses to
+      # modify an existing install and leaves the user on the old
+      # version.
+      pipx install --force "$EXTRA"
     elif [[ -n "${TOKI_VENV_DIR:-}" ]]; then
       echo "Installing tokirecur into $TOKI_VENV_DIR …"
       "$PYTHON" -m venv "$TOKI_VENV_DIR"
@@ -79,6 +83,29 @@ if [[ $EUID -ne 0 ]]; then
     if [[ "${TOKI_SKIP_LLAMA:-0}" != "1" && -x "$HOME/.local/state/tokirecur/bin/llama-server" ]]; then
       echo "  llama-server:    $HOME/.local/state/tokirecur/bin/llama-server"
     fi
+
+    # Smoke test: catch permission / config-path issues now instead of
+    # on first `toki` launch. `toki model list` writes the registry
+    # (or honors the writable fallback in ctl._default_paths), so a
+    # broken ~/.config surfaces here as a non-zero exit.
+    echo ""
+    echo "Smoke test: $TOKI --version"
+    if ! "$TOKI" --version; then
+      echo "warning: 'toki --version' failed; the install landed but the CLI is broken." >&2
+    fi
+    echo "Smoke test: $TOKI model list"
+    if ! "$TOKI" model list; then
+      echo "" >&2
+      echo "error: 'toki model list' failed. This usually means" >&2
+      echo "  ~/.config/tokirecur isn't writable. Toki Recur auto-falls" >&2
+      echo "  back to ~/Library/Application Support/tokirecur on macOS" >&2
+      echo "  when the XDG path is locked down, but if that also failed" >&2
+      echo "  set TOKI_MODEL_REGISTRY to a writable file:" >&2
+      echo "    export TOKI_MODEL_REGISTRY=\"\$HOME/.config/tokirecur/models.yaml\"" >&2
+      echo "    echo 'export TOKI_MODEL_REGISTRY=\"...\"' >> \$HOME/.zshrc" >&2
+      exit 1
+    fi
+
     echo ""
     echo "Next steps:"
     echo "  $TOKI model pull Qwen/Qwen3-8B-GGUF --name qwen3-8b"

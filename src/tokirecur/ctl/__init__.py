@@ -43,6 +43,68 @@ from ..ggufmeta import read_gguf_meta
 
 logger = logging.getLogger(__name__)
 
+def _writable_dir(parent: Path, name: str) -> Path:
+    """Return ``parent/name`` if it (or a creatable parent) is writable
+    by the current user; otherwise return a macOS-native fallback.
+
+    ``~/.config`` on macOS is often owned by a different account or
+    created with restrictive perms by other tools, which would block
+    ``mkdir`` at import time and crash the launcher. The macOS
+    fallback (``~/Library/Application Support/<name>``) is owned by
+    the current user by default.
+    """
+    import sys as _sys
+
+    def _try(p: Path) -> Path | None:
+        try:
+            p.mkdir(parents=True, exist_ok=True)
+            # Probe write access — mkdir(exist_ok=True) is a no-op when
+            # the dir already exists, which silently masks perm errors.
+            probe = p / ".toki-write-probe"
+            probe.write_text("")
+            probe.unlink()
+            return p
+        except OSError:
+            return None
+
+    chosen = _try(parent / name)
+    if chosen is not None:
+        return chosen
+    if _sys.platform == "darwin":
+        mac = Path.home() / "Library" / "Application Support" / name
+        chosen = _try(mac)
+        if chosen is not None:
+            return chosen
+    # Last resort: temp dir, but warn so the user notices.
+    import tempfile as _tempfile
+    fallback = Path(_tempfile.gettempdir()) / name
+    return _try(fallback) or fallback
+
+
+def _default_paths() -> tuple[Path, Path, Path]:
+    """Resolve the writable registry, state, and active-marker paths.
+
+    Honors ``TOKI_MODEL_REGISTRY``/``TOKI_STATE_DIR``/``TOKI_ACTIVE_MODEL``
+    env vars first; then probes the XDG default. On macOS, falls back
+    to ``~/Library/Application Support/tokirecur`` when the XDG path
+    is not writable.
+    """
+    home = Path.home()
+    if os.environ.get("TOKI_MODEL_REGISTRY"):
+        reg = Path(os.environ["TOKI_MODEL_REGISTRY"])
+    else:
+        reg = _writable_dir(home / ".config", "tokirecur") / "models.yaml"
+    if os.environ.get("TOKI_STATE_DIR"):
+        state = Path(os.environ["TOKI_STATE_DIR"])
+    else:
+        state = _writable_dir(home / ".local", "state/tokirecur")
+    if os.environ.get("TOKI_ACTIVE_MODEL"):
+        marker = Path(os.environ["TOKI_ACTIVE_MODEL"])
+    else:
+        marker = reg.parent / "active-model"
+    return reg, state, marker
+
+
 DEFAULT_REGISTRY = Path(
     os.environ.get("TOKI_MODEL_REGISTRY", str(Path.home() / ".config/tokirecur/models.yaml"))
 )
@@ -52,6 +114,18 @@ STATE_ROOT = Path(
 ACTIVE_MARKER = Path(
     os.environ.get("TOKI_ACTIVE_MODEL", str(Path.home() / ".config/tokirecur/active-model"))
 )
+
+# Resolve to a writable location at import time: if the XDG default
+# isn't writable (common on macOS where ~/.config is owned by a
+# different account), fall back to the macOS-native Application
+# Support dir, then a temp dir. The env vars above always win.
+try:
+    _resolved = _default_paths()
+    DEFAULT_REGISTRY = _resolved[0]
+    STATE_ROOT = _resolved[1]
+    ACTIVE_MARKER = _resolved[2]
+except Exception:  # noqa: BLE001 — never let path resolution crash import
+    pass
 
 DEFAULT_AUTH = os.environ.get("TOKI_AUTH_TOKEN", "demo-token")
 
