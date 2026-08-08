@@ -924,6 +924,13 @@ def use(name: str, keep_others: bool, wait: bool, sync_only: bool,
             "consider `toki model use laguna` (or 0.8b) instead of a "
             "9B-class model at full window"
         )
+    if effective < 64000:
+        click.echo(
+            "warning: hermes refuses models under 64k context. This model "
+            f"advertises {effective} — either raise its ctx_size in the "
+            "launcher settings (0.8b's true window is 262144) or pick "
+            "another model for hermes sessions"
+        )
     if sync_only:
         click.echo(f"model '{name}' configs synced (stack not started)")
     else:
