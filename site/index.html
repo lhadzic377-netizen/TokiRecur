@@ -328,13 +328,18 @@
     <p class="overline reveal">Quick start</p>
     <h2 class="reveal">Install in 3 commands.</h2>
     <p class="section-sub reveal">Nothing is preinstalled, you pull exactly what you want. Three commands to first chat:</p>
-    <pre class="code reveal" data-copy><code><span class="k">pipx install tokirecur</span><span class="c">                    # one command, no deps</span>
+    <pre class="code reveal" data-copy><code><span class="k">git clone</span> https://github.com/lhadzic377-netizen/TokiRecur.git<span class="c">    # clone the repo</span>
+<span class="k">./install.sh</span><span class="c">                                      # one installer, yellow progress bar included</span>
 <span class="k">toki model install-llama</span><span class="c">                  # auto-detects ROCm / CUDA / Vulkan / Metal / CPU</span>
 <span class="k">toki model pull</span> Qwen/Qwen3-8B-GGUF --name qwen3-8b<span class="c">  # fetch a GGUF, register as "qwen3-8b"</span>
 <span class="k">toki model use</span> qwen3-8b<span class="c">                   # boots llama-server + daemon, wires your CLIs</span>
 <span class="k">toki tui</span><span class="c">                                      # full-screen chat, or: toki web</span></code></pre>
     <p class="note">Runs on any x86_64 or arm64 Linux, macOS, or Windows box, with whatever GPU
-      backend your llama-server build has. Optional systemd/launchd daemon mode included.</p>
+      backend your llama-server build has. Optional systemd/launchd daemon mode included.
+      Platform status: <strong>Linux and macOS stable</strong>, <strong>Windows beta</strong> —
+      the Windows installer keeps improving without touching the stable code paths.
+      The installer on macOS/Linux is one script that runs everything behind a yellow
+      progress bar while the real output still streams live.</p>
   </section>
 
   <section id="architecture">
