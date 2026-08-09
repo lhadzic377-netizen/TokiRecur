@@ -23,6 +23,18 @@
 #
 set -euo pipefail
 
+# ── yellow progress bar (TTY only; no-op when piped) ─────────────────
+_yellow_bar() {
+    [[ -t 1 ]] || return 0
+    local label="$1" pct="$2" width=22 filled i bar=""
+    (( pct > 100 )) && pct=100
+    filled=$((pct * width / 100))
+    for ((i = 0; i < width; i++)); do
+        if (( i < filled )); then bar+="█"; else bar+="░"; fi
+    done
+    printf '\e[93m[%s] %3d%% %s\e[0m\n' "$bar" "$pct" "$label"
+}
+
 if [[ $EUID -ne 0 ]]; then
     # ── full user install ───────────────────────────────────────────
     cd "$(dirname "${BASH_SOURCE[0]}")"
@@ -32,6 +44,7 @@ if [[ $EUID -ne 0 ]]; then
       echo "error: python3 not found — install Python 3.10+ first" >&2
       exit 1
     fi
+    _yellow_bar "python check" 10
 
     EXTRA="."
     if [[ -n "${TOKI_EXTRAS:-}" ]]; then
@@ -59,6 +72,7 @@ if [[ $EUID -ne 0 ]]; then
     fi
 
     TOKI="${TOKI:-$(command -v toki || echo "$HOME/.local/bin/toki")}"
+    _yellow_bar "tokirecur installed" 40
     if [[ ! -x "$TOKI" ]]; then
       echo "Install finished, but the 'toki' binary was not found on PATH." >&2
       echo "Add $HOME/.local/bin to PATH, or re-run with TOKI_VENV_DIR=<dir>." >&2
@@ -67,6 +81,7 @@ if [[ $EUID -ne 0 ]]; then
 
     if [[ "${TOKI_SKIP_LLAMA:-0}" != "1" ]]; then
       echo ""
+      _yellow_bar "fetching llama-server" 55
       echo "Fetching llama-server for this machine ($TOKI model install-llama)…"
       "$TOKI" model install-llama
       if [[ $? -ne 0 ]]; then
@@ -89,6 +104,7 @@ if [[ $EUID -ne 0 ]]; then
     # (or honors the writable fallback in ctl._default_paths), so a
     # broken ~/.config surfaces here as a non-zero exit.
     echo ""
+    _yellow_bar "smoke tests" 75
     echo "Smoke test: $TOKI --version"
     if ! "$TOKI" --version; then
       echo "warning: 'toki --version' failed; the install landed but the CLI is broken." >&2
@@ -130,6 +146,7 @@ if [[ $EUID -ne 0 ]]; then
         fi
       fi
       echo ""
+      _yellow_bar "starter model" 88
       echo "Registry is empty — pulling a starter model ($DEFAULT_REPO)..."
       echo "(set TOKI_SKIP_DEFAULT_MODEL=1 to skip this)"
       if [[ "${TOKI_SKIP_DEFAULT_MODEL:-0}" != "1" ]]; then
@@ -152,11 +169,13 @@ if [[ $EUID -ne 0 ]]; then
     # rewrites opencode/openclaw/hermes/codex without booting a model.
     ACTIVE=$("$TOKI" model status 2>/dev/null | awk '/active model:/ {print $3}')
     if [[ -n "$ACTIVE" && "$ACTIVE" != "none" ]]; then
+      _yellow_bar "agent config sync" 94
       echo "Re-syncing agent configs for active model '$ACTIVE'..."
       "$TOKI" model use "$ACTIVE" --sync-only || true
     fi
 
     echo ""
+    _yellow_bar "install complete" 100
     echo "Installed."
     echo "  toki CLI:        $TOKI"
     if [[ "${TOKI_SKIP_LLAMA:-0}" != "1" && -x "$HOME/.local/state/tokirecur/bin/llama-server" ]]; then

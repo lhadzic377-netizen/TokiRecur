@@ -123,15 +123,15 @@ If `toki` is not found after install, your shell's PATH may not include the venv
 
 Toki Recur is pure Python over the llama-server HTTP API — it runs on **any x86_64 or aarch64 device** running Linux, macOS or Windows, with whatever GPU backend your llama-server build has (ROCm, CUDA, Vulkan, Metal, CPU). The only per-platform piece is the llama-server binary itself:
 
-| Platform | Architecture | llama-server builds | install-llama asset |
-|---|---|---|---|
-| Linux | x86_64 | ROCm (auto if HIP present), Vulkan, CPU | `ubuntu-rocm-7.2-x64`, `ubuntu-vulkan-x64`, `ubuntu-x64` |
-| Linux | aarch64 | Vulkan, CPU | `ubuntu-vulkan-arm64`, `ubuntu-arm64` |
-| macOS | x86_64, arm64 | Metal (also runs CPU-only) | `macos-x64`, `macos-arm64` |
-| Windows | x86_64 | CUDA (auto if NVIDIA), ROCm/HIP, Vulkan, CPU | `win-cuda-13.3-x64`, `win-hip-radeon-x64`, `win-vulkan-x64`, `win-cpu-x64` |
-| Windows | aarch64 | CPU, Adreno OpenCL | `win-cpu-arm64` |
+| Platform | Architecture | llama-server builds | install-llama asset | Support |
+|---|---|---|---|---|
+| Linux | x86_64 | ROCm (auto if HIP present), Vulkan, CPU | `ubuntu-rocm-7.2-x64`, `ubuntu-vulkan-x64`, `ubuntu-x64` | stable |
+| Linux | aarch64 | Vulkan, CPU | `ubuntu-vulkan-arm64`, `ubuntu-arm64` | stable |
+| macOS | x86_64, arm64 | Metal (also runs CPU-only) | `macos-x64`, `macos-arm64` | stable |
+| Windows | x86_64 | CUDA (auto if NVIDIA), ROCm/HIP, Vulkan, CPU | `win-cuda-13.3-x64`, `win-hip-radeon-x64`, `win-vulkan-x64`, `win-cpu-x64` | beta |
+| Windows | aarch64 | CPU, Adreno OpenCL | `win-cpu-arm64` | beta |
 
-CI runs the test suite on all three OSes (x86_64 + aarch64), executes the Linux and macOS system installers end-to-end, and runs `toki model install-llama` on all four platform legs (Linux x86_64/ARM, macOS Apple Silicon, Windows) for both auto-detect and explicit `--backend cpu`, then executes the downloaded llama-server binary. Windows has no shell service manager, so it uses the pip package + `toki model install-llama` + a plain `toki serve` (or NSSM/scheduled task). The GPU backends are provided by the llama-server binary itself — Toki Recur talks to it over HTTP and is backend-agnostic.
+CI runs the test suite on all three OSes (x86_64 + aarch64), executes the Linux and macOS system installers end-to-end, and runs `toki model install-llama` on all four platform legs (Linux x86_64/ARM, macOS Apple Silicon, Windows) for both auto-detect and explicit `--backend cpu`, then executes the downloaded llama-server binary. Windows has no shell service manager, so it uses the pip package + `toki model install-llama` + a plain `toki serve` (or NSSM/scheduled task). The GPU backends are provided by the llama-server binary itself — Toki Recur talks to it over HTTP and is backend-agnostic. Windows is **beta**: installs and chats end-to-end, but continues to receive platform-specific fixes that never touch the stable Linux/macOS code paths.
 
 One command installs the matching official build:
 
