@@ -26,7 +26,7 @@ document.addEventListener("DOMContentLoaded", () => {
   hero.forEach((el) => el.classList.add("in-view"));
 
   const groups = document.querySelectorAll(
-    ".cards .card, .steps .reveal, .stats .stat, #benchmarks tbody .reveal, .arch .reveal, .cta-final .reveal"
+    ".cards .card, .steps .reveal, .stats .stat, #benchmarks tbody .reveal, .arch .reveal, .cta-final .reveal, .code.reveal"
   );
   stagger(groups, 0.1);
 
