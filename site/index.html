@@ -332,10 +332,8 @@
 <span class="k">cd TokiRecur</span><span class="c">                                      # enter it</span>
 <span class="k">./install.sh</span><span class="c">                                      # mac/linux: one installer, yellow progress bar</span>
 <span class="k">install.bat</span><span class="c">                                       # windows: same, one double-click</span>
-<span class="k">toki model install-llama</span><span class="c">                  # auto-detects ROCm / CUDA / Vulkan / Metal / CPU</span>
-<span class="k">toki model pull</span> Qwen/Qwen3-8B-GGUF --name qwen3-8b<span class="c">  # fetch a GGUF, register as "qwen3-8b"</span>
-<span class="k">toki model use</span> qwen3-8b<span class="c">                   # boots llama-server + daemon, wires your CLIs</span>
-<span class="k">toki tui</span><span class="c">                                      # full-screen chat, or: toki web</span></code></pre>
+<span class="k">toki model pull</span> Qwen/Qwen3-8B-GGUF --use<span class="c">      # pick a GGUF from the list, pulls + activates</span>
+<span class="k">toki</span><span class="c">                                            # opens the launcher: chat, web, models</span></code></pre>
     <p class="note">Runs on any x86_64 or arm64 Linux, macOS, or Windows box, with whatever GPU
       backend your llama-server build has. Optional systemd/launchd daemon mode included.
       Platform status: <strong>Linux and macOS stable</strong>, <strong>Windows beta</strong> —

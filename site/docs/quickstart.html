@@ -45,29 +45,19 @@
 
     <pre class="reveal"><code># 1. Clone and run the installer — cross-platform, no token needed.
 #    macOS/Linux: ./install.sh (yellow progress bar). Windows: install.bat
+#    The installer also fetches the llama-server binary for your machine.
 git clone https://github.com/lhadzic377-netizen/TokiRecur.git
 cd TokiRecur
 ./install.sh            # or: install.bat
 
-# 2. Fetch the llama-server binary matching your OS/arch and GPU.
-#    Auto-detects the best backend: ROCm (AMD/HIP), CUDA (NVIDIA),
-#    Vulkan, Metal (macOS), CPU. Pass --backend to override.
-toki model install-llama
+# 2. Pull a model — pick a GGUF from the numbered list (no name needed,
+#    the repo is registered as a lowercase slug). --use activates it:
+#    boots llama-server + the toki daemon and wires opencode/openclaw/
+#    hermes at it.
+toki model pull Qwen/Qwen3-8B-GGUF --use
 
-# 3. Install a model, fetch a GGUF from Hugging Face and register it
-#    under a short name (quantized Qwen3 GGUFs: huggingface.co/models?library=gguf)
-toki model pull Qwen/Qwen3-4B-GGUF --name qwen3-4b
-
-# 4. Point your install-llama binary at the new entry (auto-detected
-#    ROCm/CUDA build from step 2 wins over the PATH llama-server)
-toki model install-llama --backend rocm --name qwen3-4b
-
-# 5. Start it (boots llama-server + the toki daemon and wires
-#    opencode/openclaw/hermes at it)
-toki model use qwen3-4b
-
-# 6. Talk to it, the full-screen TUI chat (or open the web UI with `toki web`)
-toki tui</code></pre>
+# 3. Open the launcher (chat, web UI, model switching)
+toki</code></pre>
 
     <p>Prefer a direct install without the clone? <code>pipx install "tokirecur[embeddings] @ git+https://x-access-token:&lt;PAT&gt;@github.com/lhadzic377-netizen/TokiRecur.git"</code> works too, see the <a href="/docs/install.html">install docs</a>.</p>
 
