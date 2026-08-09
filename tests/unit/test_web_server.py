@@ -169,6 +169,48 @@ class TestCompletionPayload:
         assert "chat_template_kwargs" not in payload
         assert "cache_prompt" not in payload
 
+    def test_raw_disables_cache_prompt_on_windows(self, monkeypatch):
+        # Windows CPU llama-server can hang on the multi-turn KV-reuse
+        # path (first message works, second spins without tokens), so
+        # the raw path must not send cache_prompt there by default.
+        monkeypatch.setattr("os.name", "nt")
+        _, payload = _completion_payload(
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=16,
+            temperature=0.0,
+            mode="raw",
+            raw_url="http://raw:8088",
+            daemon_url="http://daemon:8787",
+            session_id="s1",
+        )
+        assert payload["cache_prompt"] is False
+
+    def test_toki_cache_prompt_env_overrides_default(self, monkeypatch):
+        monkeypatch.setattr("os.name", "nt")
+        monkeypatch.setenv("TOKI_CACHE_PROMPT", "1")
+        _, payload = _completion_payload(
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=16,
+            temperature=0.0,
+            mode="raw",
+            raw_url="http://raw:8088",
+            daemon_url="http://daemon:8787",
+            session_id="s1",
+        )
+        assert payload["cache_prompt"] is True
+        monkeypatch.setattr("os.name", "posix")
+        monkeypatch.setenv("TOKI_CACHE_PROMPT", "0")
+        _, payload = _completion_payload(
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=16,
+            temperature=0.0,
+            mode="raw",
+            raw_url="http://raw:8088",
+            daemon_url="http://daemon:8787",
+            session_id="s1",
+        )
+        assert payload["cache_prompt"] is False
+
 
 # ── SSE parser ─────────────────────────────────────────────────────────
 

@@ -24,6 +24,8 @@ from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from tokirecur import cache_prompt_enabled
+
 # Configure logging once. Honor TOKI_LOG_LEVEL env var (default INFO).
 logging.basicConfig(
     level=os.environ.get("TOKI_LOG_LEVEL", "INFO"),
@@ -472,7 +474,7 @@ def _completion_payload(
         "stream": True,
     }
     if mode == "raw":
-        base["cache_prompt"] = True
+        base["cache_prompt"] = cache_prompt_enabled()
         return f"{raw_url}/v1/chat/completions", base
     base["session_id"] = session_id
     base["max_slots"] = 4

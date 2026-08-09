@@ -17,6 +17,8 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
+from tokirecur import cache_prompt_enabled
+
 
 def _make_client(base_url: str, auth_token: str | None):
     """Build an httpx.AsyncClient with our defaults."""
@@ -252,7 +254,9 @@ class DaemonClient:
                 # Reuse llama-server's in-memory KV prefix across turns:
                 # consecutive messages in a session share a prefix, so
                 # multi-turn requests skip re-prefilling the history.
-                "cache_prompt": True,
+                # Off by default on Windows (the CPU llama-server build
+                # can hang on the KV-reuse path on second messages).
+                "cache_prompt": cache_prompt_enabled(),
             }
             target_label = "raw"
         elif mode == "cached":
