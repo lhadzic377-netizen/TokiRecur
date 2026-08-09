@@ -198,6 +198,35 @@ def test_detect_backend_windows_cuda_then_cpu(monkeypatch):
     assert _detect_gpu_backend("windows") == "cpu"
 
 
+def test_detect_backend_windows_intel_igpu_gets_cpu_build(monkeypatch):
+    """An Intel HD/UHD/Iris iGPU-only box must not receive the Vulkan
+    build (it thrashes on old Intel drivers, like the ngl case)."""
+    from tokirecur import ctl
+    from tokirecur.cli import _detect_gpu_backend
+
+    monkeypatch.setattr(Path, "exists", lambda self: False)
+    monkeypatch.setattr(
+        "shutil.which",
+        lambda name: "vulkaninfo" if name == "vulkaninfo" else None,
+    )
+    monkeypatch.setattr(ctl, "_intel_igpu_only", lambda: True)
+    assert _detect_gpu_backend("windows") == "cpu"
+
+
+def test_detect_backend_windows_non_intel_vulkan(monkeypatch):
+    """A discrete-GPU Windows box still gets the Vulkan build."""
+    from tokirecur import ctl
+    from tokirecur.cli import _detect_gpu_backend
+
+    monkeypatch.setattr(Path, "exists", lambda self: False)
+    monkeypatch.setattr(
+        "shutil.which",
+        lambda name: "vulkaninfo" if name == "vulkaninfo" else None,
+    )
+    monkeypatch.setattr(ctl, "_intel_igpu_only", lambda: False)
+    assert _detect_gpu_backend("windows") == "vulkan"
+
+
 @pytest.mark.parametrize(
     "main,cudart",
     [

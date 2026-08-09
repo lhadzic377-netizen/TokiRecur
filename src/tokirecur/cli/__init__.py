@@ -1163,7 +1163,16 @@ def _detect_gpu_backend(os_name: str) -> str:
         ).exists():
             return "rocm"
         if _shutil.which("vulkaninfo"):
-            return "vulkan"
+            # An Intel HD/UHD/Iris iGPU-only box must not get the Vulkan
+            # build: llama.cpp's Vulkan backend still probes/initializes
+            # the device at startup on those old drivers, which pegs the
+            # CPU without ever producing tokens (the same class of bug
+            # as `_default_ngl` refusing to offload to them). The plain
+            # CPU build is what ollama uses there — and works.
+            from ..ctl import _intel_igpu_only
+            if not _intel_igpu_only():
+                return "vulkan"
+            return "cpu"
         return "cpu"
     # Linux
     if _shutil.which("hipconfig") or Path("/opt/rocm").exists():
