@@ -7,11 +7,16 @@ rem   cd TokiRecur
 rem   install.bat
 rem
 rem Does everything:
-rem   1. python 3.10+ check
+rem   1. python 3.10+ check - INSTALLS Python itself when missing/too old
+rem      (winget first, python.org installer as fallback, both silent)
 rem   2. venv at %%LOCALAPPDATA%%\tokirecur\venv + package (embeddings extra)
+rem      (ensurepip fallback if the venv was created without pip)
 rem   3. idempotent user-PATH hook so `toki` works from any terminal
 rem   4. toki model install-llama (official llama-server.exe for this machine)
-rem   5. verification: toki --version + llama-server --version
+rem   5. Microsoft Visual C++ runtime (llama-server.exe hard dependency) -
+rem      best-effort: needs an elevated prompt to install
+rem   6. verification: toki --version + llama-server --version
+rem   7. starter model pull + agent config wiring (opencode/openclaw/hermes/codex)
 rem
 rem No tokens needed - the clone already authenticated you. Re-runnable.
 rem
@@ -20,16 +25,74 @@ rem   TOKI_EXTRAS=         install without extras (faster, no torch)
 rem   TOKI_EXTRAS=dev      install dev/test extras instead
 rem   TOKI_SKIP_LLAMA=1    skip the llama-server download
 rem   TOKI_BASE=<dir>      install location instead of %%LOCALAPPDATA%%\tokirecur
+rem   TOKI_SKIP_PYTHON=1   never install Python (error instead)
 
 setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
-rem ── 1. python check ─────────────────────────────────────────────
+rem ── 1. python check + install ─────────────────────────────
+rem The classic "python not found" failure: instead of erroring out,
+rem install Python 3.12 (winget first; python.org silent installer as
+rem fallback). PATH is re-read from the registry afterwards so this
+rem same session sees the new python.
+:ensure_python
 where python >nul 2>nul
+if errorlevel 1 goto :no_python
+python -c "import sys; raise SystemExit(0 if sys.version_info >= (3,10) else 1)" >nul 2>nul
 if errorlevel 1 (
-  echo error: python not found on PATH. Install Python 3.10+ and tick "Add to PATH".
+  echo warning: installed python is older than 3.10 - installing 3.12 alongside
+  goto :install_python
+)
+goto :python_ok
+
+:install_python
+if "%TOKI_SKIP_PYTHON%"=="1" (
+  echo error: python not found and TOKI_SKIP_PYTHON=1. Install Python 3.10+ and tick "Add to PATH".
   exit /b 1
 )
+where winget >nul 2>nul
+if not errorlevel 1 (
+  echo [+] installing Python 3.12 via winget (silent)...
+  winget install --id Python.Python.3.12 -e --silent --accept-package-agreements --accept-source-agreements >nul 2>nul
+  if not errorlevel 1 (
+    call :refresh_path
+    where python >nul 2>nul
+    if not errorlevel 1 goto :python_ok
+  )
+)
+echo [+] winget unavailable or failed - downloading the python.org installer...
+set "PYEXE=%TEMP%\python-3.12.10-amd64.exe"
+curl -L --fail --silent --show-error -o "%PYEXE%" "https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe"
+if errorlevel 1 (
+  echo error: could not download Python (curl failed). Install Python 3.10+ manually and tick "Add to PATH".
+  exit /b 1
+)
+start /wait "" "%PYEXE%" /quiet InstallAllUsers=0 PrependPath=1 Include_test=0 Include_launcher=1 Include_pip=1
+call :refresh_path
+where python >nul 2>nul
+if errorlevel 1 (
+  echo error: python still not found after installing. Open a NEW terminal and re-run install.bat.
+  exit /b 1
+)
+:python_ok
+for /f "tokens=*" %%v in ('python -c "import sys;print('%%d.%%d'%%sys.version_info[:2])"') do set "PYVER=%%v"
+echo [+] python: %PYVER%
+goto :proceed
+
+:no_python
+echo [i] python not on PATH - installing it...
+goto :install_python
+
+:refresh_path
+rem Re-read user + system PATH from the registry so a freshly
+rem installed python is visible to THIS batch session (setx only
+rem affects new processes).
+for /f "tokens=2*" %%a in ('reg query "HKCU\Environment" /v PATH 2^>nul') do set "USERPATH=%%b"
+for /f "tokens=2*" %%a in ('reg query "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" /v PATH 2^>nul') do set "SYS_PATH=%%b"
+set "PATH=%USERPATH%;%SYS_PATH%;%PATH%"
+exit /b 0
+
+:proceed
 
 rem ── 2. venv + package ───────────────────────────────────────────
 if defined TOKI_BASE (set "BASE=%TOKI_BASE%") else (set "BASE=%LOCALAPPDATA%\tokirecur")
@@ -43,7 +106,13 @@ if not exist "%VENV%\Scripts\python.exe" (
   if errorlevel 1 (echo error: venv creation failed & exit /b 1)
 )
 if not exist "%PIP%" (
-  echo error: venv missing pip at %PIP% & exit /b 1
+  rem A venv from a Store/truncated python can lack pip; ensurepip fixes it.
+  echo [+] venv missing pip - bootstrapping with ensurepip...
+  "%VENV%\Scripts\python.exe" -m ensurepip --upgrade
+  if errorlevel 1 (echo error: ensurepip failed & exit /b 1)
+)
+if not exist "%PIP%" (
+  echo error: venv still missing pip at %PIP% & exit /b 1
 )
 
 set "EXTRA=.[embeddings]"
@@ -81,7 +150,30 @@ if errorlevel 1 (
   echo     toki model install-llama
 )
 
-rem ── 5. verification ─────────────────────────────────────────────
+rem ── 5. MSVC runtime (llama-server.exe hard dependency) ────────
+rem llama-server.exe is built against the Microsoft Visual C++
+rem runtime; a missing vcruntime140.dll makes it fail with a dialog
+rem right after install. Best-effort: the redist wants an elevated
+rem prompt, so a non-admin run warns instead of hard-failing.
+reg query "HKLM\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64" /v Installed >nul 2>nul
+if not errorlevel 1 goto :vcredist_ok
+echo [+] installing Microsoft Visual C++ 2015-2022 x64 runtime (silent)...
+set "VCRED=%TEMP%\vc_redist.x64.exe"
+curl -L --fail --silent --show-error -o "%VCRED%" "https://aka.ms/vs/17/release/vc_redist.x64.exe"
+if errorlevel 1 (
+  echo warning: could not download the VC++ runtime. llama-server needs it;
+  echo         install https://aka.ms/vs/17/release/vc_redist.x64.exe manually
+) else (
+  start /wait "" "%VCRED%" /quiet /norestart
+  reg query "HKLM\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64" /v Installed >nul 2>nul
+  if errorlevel 1 (
+    echo warning: VC++ runtime did not register - re-run install.bat from an
+    echo         ADMIN terminal, or install vc_redist.x64.exe manually
+  )
+)
+:vcredist_ok
+
+rem ── 6. verification ─────────────────────────────────────────────
 :verify
 echo [+] verifying...
 "%TOKI%" --version
@@ -96,7 +188,7 @@ if exist "%LLAMA%" (
   )
 )
 
-rem ── 6. starter model + agent config wiring (0.2.17: plug-and-play) ─
+rem ── 7. starter model + agent config wiring (0.2.17: plug-and-play) ─
 rem    Windows never wired the four agent configs at install time, so
 rem    direct agent launches hit stale/absent configs (hermes "model
 rem    '<name>' not found"). Pull a starter model when the registry is

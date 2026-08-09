@@ -205,33 +205,6 @@ h1 .accent { color: var(--accent); }
 
 .cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
 
-/* ── wishlist ──────────────────────────────────────────── */
-
-.wishlist {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  margin-top: 22px;
-  flex-wrap: wrap;
-}
-
-.btn-wishlist[aria-pressed="true"] {
-  background: rgba(255, 200, 60, 0.12);
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-.btn-wishlist[aria-pressed="true"] .wl-icon { color: var(--accent); }
-
-.wl-icon { color: var(--dim); font-size: 15px; line-height: 1; }
-
-.wishlist-count {
-  color: var(--dim);
-  font-size: 13px;
-  font-family: var(--mono);
-}
-
 .btn {
   display: inline-flex;
   align-items: center;
