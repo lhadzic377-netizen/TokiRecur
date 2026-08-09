@@ -2149,3 +2149,43 @@ def test_model_use_sync_only_cli(env, monkeypatch):
     assert "configs synced" in result.output
     hermes = yaml.safe_load((env / "hermes.yaml").read_text())
     assert hermes["custom_providers"][0]["base_url"] == "http://127.0.0.1:18002/v1"
+
+
+class _RunResult:
+    def __init__(self, stdout):
+        self.stdout = stdout
+
+
+def _fake_run(device_names):
+    def run(*args, **kwargs):
+        lines = []
+        for i, n in enumerate(device_names):
+            lines.append(f"GPU{i}\ndeviceName = {n}\n")
+        return _RunResult("".join(lines))
+
+    return run
+
+
+def test_default_ngl_zero_for_intel_igpu_only(monkeypatch):
+    """Intel HD/UHD iGPU alone must not offload (Vulkan thrash); Arc or a
+    second device offloads; TOKI_NGL still wins."""
+    monkeypatch.setattr(ctl.os, "name", "nt")
+    monkeypatch.setattr(ctl.sys, "platform", "win32")
+    monkeypatch.setattr(
+        ctl.shutil, "which", lambda name: "vulkaninfo" if name == "vulkaninfo" else None
+    )
+
+    monkeypatch.setattr(ctl.subprocess, "run", _fake_run(["Intel(R) UHD Graphics 620"]))
+    assert ctl._default_ngl() == 0
+
+    monkeypatch.setattr(ctl.subprocess, "run", _fake_run(["Intel(R) Arc(TM) A770"]))
+    assert ctl._default_ngl() == 99
+
+    monkeypatch.setattr(
+        ctl.subprocess, "run",
+        _fake_run(["Intel(R) UHD Graphics 620", "NVIDIA GeForce RTX 3060"]),
+    )
+    assert ctl._default_ngl() == 99
+
+    monkeypatch.setenv("TOKI_NGL", "7")
+    assert ctl._default_ngl() == 7

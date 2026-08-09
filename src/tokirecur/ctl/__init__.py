@@ -1449,7 +1449,7 @@ def _default_ngl() -> int:
             "C:/Program Files/AMD/ROCm"
         ):
             return 99
-        if shutil.which("vulkaninfo"):
+        if shutil.which("vulkaninfo") and not _intel_igpu_only():
             return 99
         return 0
     if shutil.which("hipconfig") or os.path.exists("/opt/rocm"):
@@ -1459,6 +1459,39 @@ def _default_ngl() -> int:
     ):
         return 99
     return 0
+
+
+def _intel_igpu_only() -> bool:
+    """True when the only Vulkan device on this Windows box is an
+    integrated Intel GPU (HD/UHD/Iris).
+
+    Those iGPUs are far slower than the CPU for llama.cpp and their old
+    Vulkan drivers make a full offload thrash at 100% util without
+    generating tokens. Offload is skipped unless a discrete/Arc GPU is
+    present; ``TOKI_NGL`` still wins if set explicitly.
+    """
+    if os.name != "nt":
+        return False
+    if not shutil.which("vulkaninfo"):
+        return False
+    try:
+        out = subprocess.run(
+            ["vulkaninfo", "--summary"],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        ).stdout or ""
+    except Exception:
+        return False
+    names = [
+        line.split("=", 1)[-1].strip()
+        for line in out.splitlines()
+        if "deviceName" in line
+    ]
+    if not names:
+        return False
+    intel_igpu = "Intel" in names[0] and "Arc" not in names[0]
+    return intel_igpu and len(names) == 1
 
 
 def _model_aliases(spec: ModelSpec) -> list[str]:
