@@ -42,58 +42,63 @@ rem same session sees the new python.
 where python >nul 2>nul
 if errorlevel 1 goto :no_python
 python -c "import sys; raise SystemExit(0 if sys.version_info >= (3,10) else 1)" >nul 2>nul
-if errorlevel 1 (
-  echo warning: installed python is older than 3.10 - installing 3.12 alongside
-  goto :install_python
-)
+if errorlevel 1 goto :old_python
 rem Store python (PythonSoftwareFoundation alias under WindowsApps)
 rem silently redirects venv files under %%LOCALAPPDATA%% into its own
 rem sandbox, so the venv is created in a place the PATH hook and every
 rem later process cannot see. Detect it and swap in the python.org build.
+set "STORE_PY="
 for /f "delims=" %%p in ('where python 2^>nul') do (
   echo %%p | findstr /i "WindowsApps" >nul
   if not errorlevel 1 set "STORE_PY=1"
 )
-if "%STORE_PY%"=="1" (
-  echo [i] Microsoft Store python detected - installing the full python.org build...
-  goto :install_python
-)
+if "%STORE_PY%"=="1" echo [i] Microsoft Store python detected - installing the full python.org build...
+if "%STORE_PY%"=="1" goto :install_python
 goto :python_ok
 
+:old_python
+echo warning: installed python is older than 3.10 - installing 3.12 alongside
+goto :install_python
+
 :install_python
-if "%TOKI_SKIP_PYTHON%"=="1" (
-  echo error: python not found and TOKI_SKIP_PYTHON=1. Install Python 3.10+ and tick "Add to PATH".
-  exit /b 1
-)
+if "%TOKI_SKIP_PYTHON%"=="1" goto :py_skip_error
 rem The python.org per-user install always lands here; reuse it if a
 rem previous run already put it there (winget would fail on it).
 set "PYEXE=%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
-if exist "%PYEXE%" (
-  echo [+] reusing python.org build at %PYEXE%
-  goto :python_ok
-)
+if exist "%PYEXE%" goto :reuse_py
 where winget >nul 2>nul
-if not errorlevel 1 (
-  echo [+] installing Python 3.12 via winget (silent)...
-  winget install --id Python.Python.3.12 -e --silent --accept-package-agreements --accept-source-agreements >nul 2>nul
-  if not errorlevel 1 (
-    call :refresh_path
-    if exist "%PYEXE%" goto :python_ok
-  )
-)
+if errorlevel 1 goto :py_installer
+echo [+] installing Python 3.12 via winget (silent)...
+winget install --id Python.Python.3.12 -e --silent --accept-package-agreements --accept-source-agreements >nul 2>nul
+if errorlevel 1 goto :py_installer
+call :refresh_path
+if exist "%PYEXE%" goto :python_ok
+:py_installer
 echo [+] winget unavailable or failed - downloading the python.org installer...
 set "PYINST=%TEMP%\python-3.12.10-amd64.exe"
 curl -L --fail --silent --show-error -o "%PYINST%" "https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe"
-if errorlevel 1 (
-  echo error: could not download Python (curl failed). Install Python 3.10+ manually and tick "Add to PATH".
-  exit /b 1
-)
+if errorlevel 1 goto :py_dl_error
 start /wait "" "%PYINST%" /quiet InstallAllUsers=0 PrependPath=1 Include_test=0 Include_launcher=1 Include_pip=1
 call :refresh_path
-if not exist "%PYEXE%" (
-  echo error: python still not found after installing. Open a NEW terminal and re-run install.bat.
-  exit /b 1
-)
+if not exist "%PYEXE%" goto :py_still_missing
+goto :python_ok
+
+:reuse_py
+echo [+] reusing python.org build at %PYEXE%
+goto :python_ok
+
+:py_skip_error
+echo error: python not found and TOKI_SKIP_PYTHON=1. Install Python 3.10+ and tick "Add to PATH".
+exit /b 1
+
+:py_dl_error
+echo error: could not download Python (curl failed). Install Python 3.10+ manually and tick "Add to PATH".
+exit /b 1
+
+:py_still_missing
+echo error: python still not found after installing. Open a NEW terminal and re-run install.bat.
+exit /b 1
+
 :python_ok
 if defined PYEXE (
   for /f "tokens=*" %%v in ('"%PYEXE%" -c "import sys;print('%%d.%%d'%%sys.version_info[:2])"') do set "PYVER=%%v"
