@@ -65,9 +65,54 @@ def test_invalid_pick_loops(monkeypatch, quit_after, capsys):
 def test_web_opens_browsers(monkeypatch, quit_after, capsys):
     opened = []
     monkeypatch.setattr(clilauncher.webbrowser, "open", lambda u: opened.append(u))
+    monkeypatch.setattr(clilauncher, "_active_spec", lambda: None)
+    monkeypatch.setattr(clilauncher, "_port_open", lambda port: True)
     assert quit_after("7") == 0
     assert opened == list(clilauncher.WEB_URLS)
     assert "dashboards" in capsys.readouterr().out
+
+
+def test_web_starts_ui_when_port_closed(monkeypatch, quit_after, capsys):
+    """Web Dashboards must start the toki web UI (7777) when nothing
+    listens on it, not just open tabs to a dead port."""
+    opened = []
+    spawned = []
+    monkeypatch.setattr(clilauncher.webbrowser, "open", lambda u: opened.append(u))
+    monkeypatch.setattr(
+        clilauncher, "_active_spec", lambda: _stub_spec()
+    )
+
+    class FakeCtl:
+        def daemon_reachable(self, spec):
+            return True
+
+        def use_model(self, name):
+            pass
+
+        def get_model(self, name):
+            return _stub_spec()
+
+        def model_status(self, spec):
+            return {"llama": {"reachable": True}, "daemon": {"reachable": True}}
+
+        def gpu_state(self, spec):
+            return {"backend": "CPU", "layers": 0}
+
+    monkeypatch.setattr(clilauncher, "_ctl", lambda: FakeCtl())
+    monkeypatch.setattr(clilauncher, "_find_binary", lambda app: "toki.exe")
+    monkeypatch.setattr(
+        clilauncher.subprocess, "Popen",
+        lambda argv, **kw: spawned.append(argv),
+    )
+
+    def fake_port_open(port):
+        return False
+
+    monkeypatch.setattr(clilauncher, "_port_open", fake_port_open)
+    monkeypatch.setattr(clilauncher, "_wait_for_port", lambda port, timeout: True)
+    assert quit_after("7") == 0
+    assert "toki" in spawned[0][0] and "web" in spawned[0]
+    assert "http://127.0.0.1:7777" in opened
 
 
 def test_missing_agent_warns(monkeypatch, quit_after, capsys):

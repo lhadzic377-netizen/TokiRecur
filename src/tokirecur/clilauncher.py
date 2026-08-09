@@ -202,9 +202,7 @@ def run_cli_launcher() -> int:
             agents_available = {app: _find_binary(app) for app, _, _ in AGENTS}
             continue
         if pick == str(len(AGENTS) + 3):
-            for url in WEB_URLS:
-                webbrowser.open(url)
-            print(f"opened {len(WEB_URLS)} dashboards in your browser.")
+            _open_web_dashboards()
             continue
         if pick == str(len(AGENTS) + 4):
             print()
@@ -220,6 +218,90 @@ def run_cli_launcher() -> int:
             print(f"  invalid pick — enter a number 1-{hi}.")
             continue
         _launch_agent(AGENTS[idx][0])
+
+
+def _open_web_dashboards() -> None:
+    """Start the toki web UI (and openclaw gateway when available),
+    then open the browser tabs.
+
+    The launcher used to only open tabs — on Windows nothing ever
+    listened on 7777, so the browser said "can't reach page". Now we
+    bring the toki UI up first (it needs the active model stack) and
+    wait for it to answer before opening the tab.
+    """
+    urls: list[str] = []
+    ctl = _ctl()
+    spec = _active_spec()
+    if spec is not None:
+        try:
+            if not ctl.daemon_reachable(spec):
+                print(f"starting '{spec.name}' stack...")
+                ctl.use_model(spec.name)
+                spec = ctl.get_model(spec.name)
+        except Exception as e:
+            print(f"failed to start '{spec.name}' stack: {e}")
+        try:
+            from .selector import launch_cmd
+            plan = launch_cmd("web", "toki", spec)
+            argv = plan.get("argv") or []
+            url = plan.get("url")
+        except Exception as e:
+            print(f"failed to build web launch plan: {e}")
+            argv, url = [], None
+        if url and not _port_open(_url_port(url)):
+            print(f"starting toki web UI ({url})...")
+            binary = _find_binary("toki")
+            if binary:
+                try:
+                    subprocess.Popen(
+                        [binary] + argv[1:],
+                        stdin=subprocess.DEVNULL,
+                        creationflags=_NEW_CONSOLE,
+                    )
+                except OSError as e:
+                    print(f"failed to launch toki web: {e}")
+            if _wait_for_port(_url_port(url), timeout=15):
+                urls.append(url)
+            else:
+                print("toki web UI did not answer on time; check the "
+                      "stack is up (1) Chat).")
+        elif url:
+            urls.append(url)
+    for url in WEB_URLS:
+        if url not in urls and _port_open(_url_port(url)):
+            urls.append(url)
+    for url in urls:
+        webbrowser.open(url)
+    print(f"opened {len(urls)} dashboards in your browser.")
+
+
+def _url_port(url: str) -> int:
+    from urllib.parse import urlparse
+
+    return urlparse(url).port
+
+
+def _port_open(port: int) -> bool:
+    import socket
+
+    with socket.socket() as s:
+        s.settimeout(0.4)
+        try:
+            s.connect(("127.0.0.1", port))
+            return True
+        except OSError:
+            return False
+
+
+def _wait_for_port(port: int, timeout: float) -> bool:
+    import time
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if _port_open(port):
+            return True
+        time.sleep(0.5)
+    return _port_open(port)
 
 
 def _find_binary(app: str) -> str | None:
