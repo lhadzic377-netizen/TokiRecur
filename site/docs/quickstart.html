@@ -41,10 +41,13 @@
   <main class="doc">
     <h1 class="reveal">Quick start</h1>
 
-    <p class="reveal">Nothing is preinstalled, you pull exactly what you want. Six commands to your first cached chat:</p>
+    <p class="reveal">Nothing is preinstalled, you pull exactly what you want. Clone, install, first chat:</p>
 
-    <pre class="reveal"><code># 1. Install the CLI (pipx isolates it in its own venv and puts toki on PATH)
-pipx install "tokirecur[embeddings] @ git+https://x-access-token:&lt;PAT&gt;@github.com/lhadzic377-netizen/TokiRecur.git"
+    <pre class="reveal"><code># 1. Clone and run the installer — cross-platform, no token needed.
+#    macOS/Linux: ./install.sh (yellow progress bar). Windows: install.bat
+git clone https://github.com/lhadzic377-netizen/TokiRecur.git
+cd TokiRecur
+./install.sh            # or: install.bat
 
 # 2. Fetch the llama-server binary matching your OS/arch and GPU.
 #    Auto-detects the best backend: ROCm (AMD/HIP), CUDA (NVIDIA),
@@ -65,6 +68,8 @@ toki model use qwen3-4b
 
 # 6. Talk to it, the full-screen TUI chat (or open the web UI with `toki web`)
 toki tui</code></pre>
+
+    <p>Prefer a direct install without the clone? <code>pipx install "tokirecur[embeddings] @ git+https://x-access-token:&lt;PAT&gt;@github.com/lhadzic377-netizen/TokiRecur.git"</code> works too, see the <a href="/docs/install.html">install docs</a>.</p>
 
     <p>No models are installed or started at install time, <code>toki model use &lt;name&gt;</code> is the explicit, documented way to bring one up (it starts llama-server + the toki daemon, stops competing big-model stacks, and wires opencode/openclaw/hermes at it). <code>toki up --model &lt;path&gt;</code> is the single-model equivalent for a raw GGUF without a registry entry. <code>toki serve</code> is <strong>only</strong> the API daemon (default 127.0.0.1:8787) that proxies to an already-running llama-server; it warns loudly if the backend isn't reachable instead of failing silently.</p>
 
