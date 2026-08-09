@@ -8,7 +8,10 @@ rem   install.bat
 rem
 rem Does everything:
 rem   1. python 3.10+ check - INSTALLS Python itself when missing/too old
-rem      (winget first, python.org installer as fallback, both silent)
+rem      (winget first, python.org installer as fallback, both silent).
+rem      The Microsoft Store python is detected and replaced with the
+rem      full python.org build - Store python redirects venv files into
+rem      its sandbox, which breaks every later step
 rem   2. venv at %%LOCALAPPDATA%%\tokirecur\venv + package (embeddings extra)
 rem      (ensurepip fallback if the venv was created without pip)
 rem   3. idempotent user-PATH hook so `toki` works from any terminal
@@ -43,6 +46,18 @@ if errorlevel 1 (
   echo warning: installed python is older than 3.10 - installing 3.12 alongside
   goto :install_python
 )
+rem Store python (PythonSoftwareFoundation alias under WindowsApps)
+rem silently redirects venv files under %%LOCALAPPDATA%% into its own
+rem sandbox, so the venv is created in a place the PATH hook and every
+rem later process cannot see. Detect it and swap in the python.org build.
+for /f "delims=" %%p in ('where python 2^>nul') do (
+  echo %%p | findstr /i "WindowsApps" >nul
+  if not errorlevel 1 set "STORE_PY=1"
+)
+if "%STORE_PY%"=="1" (
+  echo [i] Microsoft Store python detected - installing the full python.org build...
+  goto :install_python
+)
 goto :python_ok
 
 :install_python
@@ -50,32 +65,41 @@ if "%TOKI_SKIP_PYTHON%"=="1" (
   echo error: python not found and TOKI_SKIP_PYTHON=1. Install Python 3.10+ and tick "Add to PATH".
   exit /b 1
 )
+rem The python.org per-user install always lands here; reuse it if a
+rem previous run already put it there (winget would fail on it).
+set "PYEXE=%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
+if exist "%PYEXE%" (
+  echo [+] reusing python.org build at %PYEXE%
+  goto :python_ok
+)
 where winget >nul 2>nul
 if not errorlevel 1 (
   echo [+] installing Python 3.12 via winget (silent)...
   winget install --id Python.Python.3.12 -e --silent --accept-package-agreements --accept-source-agreements >nul 2>nul
   if not errorlevel 1 (
     call :refresh_path
-    where python >nul 2>nul
-    if not errorlevel 1 goto :python_ok
+    if exist "%PYEXE%" goto :python_ok
   )
 )
 echo [+] winget unavailable or failed - downloading the python.org installer...
-set "PYEXE=%TEMP%\python-3.12.10-amd64.exe"
-curl -L --fail --silent --show-error -o "%PYEXE%" "https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe"
+set "PYINST=%TEMP%\python-3.12.10-amd64.exe"
+curl -L --fail --silent --show-error -o "%PYINST%" "https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe"
 if errorlevel 1 (
   echo error: could not download Python (curl failed). Install Python 3.10+ manually and tick "Add to PATH".
   exit /b 1
 )
-start /wait "" "%PYEXE%" /quiet InstallAllUsers=0 PrependPath=1 Include_test=0 Include_launcher=1 Include_pip=1
+start /wait "" "%PYINST%" /quiet InstallAllUsers=0 PrependPath=1 Include_test=0 Include_launcher=1 Include_pip=1
 call :refresh_path
-where python >nul 2>nul
-if errorlevel 1 (
+if not exist "%PYEXE%" (
   echo error: python still not found after installing. Open a NEW terminal and re-run install.bat.
   exit /b 1
 )
 :python_ok
-for /f "tokens=*" %%v in ('python -c "import sys;print('%%d.%%d'%%sys.version_info[:2])"') do set "PYVER=%%v"
+if defined PYEXE (
+  for /f "tokens=*" %%v in ('"%PYEXE%" -c "import sys;print('%%d.%%d'%%sys.version_info[:2])"') do set "PYVER=%%v"
+) else (
+  for /f "tokens=*" %%v in ('python -c "import sys;print('%%d.%%d'%%sys.version_info[:2])"') do set "PYVER=%%v"
+)
 echo [+] python: %PYVER%
 goto :proceed
 
@@ -102,7 +126,11 @@ set "TOKI=%VENV%\Scripts\toki.exe"
 
 if not exist "%VENV%\Scripts\python.exe" (
   echo [+] creating venv at %VENV%
-  python -m venv "%VENV%"
+  if defined PYEXE (
+    "%PYEXE%" -m venv "%VENV%"
+  ) else (
+    python -m venv "%VENV%"
+  )
   if errorlevel 1 (echo error: venv creation failed & exit /b 1)
 )
 if not exist "%PIP%" (
