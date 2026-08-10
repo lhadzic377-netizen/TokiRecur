@@ -62,6 +62,20 @@ def test_codex_config_writer(env):
     assert prov["env"]["TOKI_AUTH_TOKEN"] == ctl.DEFAULT_AUTH
     ctl.write_codex_config(spec, [spec], path=cfg_path)
     assert Path(str(cfg_path) + ".bak-model").exists()
+    # Anti-loop guardrail: top-level system_prompt scalar (re-emitted
+    # before the table sections, as TOML requires).
+    cfg = _load(cfg_path)
+    assert cfg["system_prompt"] == ctl.ANTI_LOOP_SYSTEM_PROMPT
+
+
+def test_codex_config_keeps_user_system_prompt(env):
+    spec = _spec(env)
+    cfg_path = env / "codex" / "config.toml"
+    cfg_path.parent.mkdir(parents=True)
+    cfg_path.write_text('system_prompt = "My custom prompt"\n')
+    ctl.write_codex_config(spec, [spec], path=cfg_path)
+    cfg = _load(cfg_path)
+    assert cfg["system_prompt"] == "My custom prompt"
 
 
 def test_codex_config_writes_all_specs(env):

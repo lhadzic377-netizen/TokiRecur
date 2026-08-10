@@ -108,9 +108,24 @@ def test_opencode_config_writer(env, with_pulled_model):
     assert cfg["provider"][f"tokirecur-{pulled.name}"]["options"]["baseURL"] == \
         f"{pulled.daemon_url}/v1"
     assert cfg_path.with_suffix(".json.bak-model").exists()
+    # Anti-loop guardrail: opencode's `instructions` points at the
+    # toki-owned markdown file next to the config.
+    assert cfg["instructions"] == [str(env / "tokirecur-anti-loop.md")]
+    assert ctl.ANTI_LOOP_SYSTEM_PROMPT in (env / "tokirecur-anti-loop.md").read_text()
 
 
-def test_openclaw_config_writer(env, with_pulled_model):
+def test_opencode_config_writer_skips_user_instructions(env, with_pulled_model):
+    spec = with_pulled_model["35b"]
+    cfg_path = env / "opencode.json"
+    cfg_path.write_text(json.dumps({"instructions": ["CONTRIBUTING.md"]}))
+    ctl.write_opencode_config(spec, path=cfg_path)
+    cfg = json.loads(cfg_path.read_text())
+    # User-provided instructions are never clobbered or extended.
+    assert cfg["instructions"] == ["CONTRIBUTING.md"]
+    assert not (env / "tokirecur-anti-loop.md").exists()
+
+
+def test_openclaw_config_writer(env, with_pulled_model, monkeypatch):
     spec = with_pulled_model["laguna"]
     cfg_path = env / "openclaw.json"
     cfg_path.write_text(json.dumps({"agents": {"defaults": {"model": {"primary": "old"}}}}))
@@ -134,6 +149,17 @@ def test_openclaw_config_writer(env, with_pulled_model):
     pulled_prov = cfg["models"]["providers"][f"tokirecur-{pulled.name}"]
     assert pulled_prov["baseUrl"] == f"{pulled.daemon_url}/v1"
     assert pulled_prov["models"][0]["id"] == pulled.model_id
+    # Anti-loop guardrail: rules land in the workspace AGENTS.md
+    # bootstrap (openclaw has no config-injectable system prompt yet).
+    ws = env / "ws"
+    monkeypatch.setenv("OPENCLAW_WORKSPACE_DIR", str(ws))
+    ctl.write_openclaw_config(spec, path=cfg_path)
+    agents_md = ws / "AGENTS.md"
+    assert agents_md.exists()
+    assert ctl.ANTI_LOOP_SYSTEM_PROMPT in agents_md.read_text()
+    # Idempotent: a second sync doesn't duplicate the block.
+    ctl.write_openclaw_config(spec, path=cfg_path)
+    assert agents_md.read_text().count(ctl.ANTI_LOOP_SYSTEM_PROMPT) == 1
 
 
 def test_hermes_config_writer(env, with_pulled_model):
@@ -170,6 +196,17 @@ def test_hermes_config_writer(env, with_pulled_model):
         "context_length": 200000,
     }
     assert cfg_path.with_suffix(".yaml.bak-model").exists()
+    # Anti-loop guardrail: hermes's manual system-prompt field.
+    assert cfg["agent"]["system_prompt"] == ctl.ANTI_LOOP_SYSTEM_PROMPT
+
+
+def test_hermes_config_writer_keeps_user_system_prompt(env, with_pulled_model):
+    spec = with_pulled_model["9b"]
+    cfg_path = env / "config.yaml"
+    cfg_path.write_text(yaml.safe_dump({"agent": {"system_prompt": "Be snarky."}}))
+    ctl.write_hermes_config(spec, path=cfg_path)
+    cfg = yaml.safe_load(cfg_path.read_text())
+    assert cfg["agent"]["system_prompt"] == "Be snarky."
 
 
 def test_sync_cli_configs_writes_all(env, with_pulled_model, monkeypatch):

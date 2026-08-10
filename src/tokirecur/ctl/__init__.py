@@ -129,6 +129,21 @@ except Exception:  # noqa: BLE001 — never let path resolution crash import
 
 DEFAULT_AUTH = os.environ.get("TOKI_AUTH_TOKEN", "demo-token")
 
+# Behavioral guardrail injected into the CLI harness configs (opencode,
+# openclaw, hermes, codex) so agentic models don't lock into repeating
+# the same tool call / message. Never written if the user already has
+# their own instructions/system prompt in that harness's config.
+ANTI_LOOP_SYSTEM_PROMPT = (
+    "You are an autonomous agent completing a task. Follow instructions "
+    "exactly and do not skip steps. Once a step succeeds, move to the next "
+    "-- never redo or repeat a completed step. If an action fails or "
+    "produces the same result twice, change your approach instead of "
+    "retrying the identical call. Never repeat a tool call, a message, or "
+    "an answer you have already produced. When the task is done, stop "
+    "immediately -- no extra turns, no repeated summaries, no follow-ups "
+    "unless asked."
+)
+
 # Reference defaults: registry entries matching these names (source ==
 # "default") are treated as user-configured and never rewritten by
 # backfill_binary_env. They are NOT preloaded — a fresh install starts
@@ -2113,6 +2128,70 @@ def _backup(path: Path) -> None:
         shutil.copy2(path, path.with_suffix(path.suffix + ".bak-model"))
 
 
+# Marker used to spot a toki-owned anti-loop block inside a user's
+# AGENTS.md-style bootstrap file (openclaw workspace, codex global).
+_ANTI_LOOP_MARKER = "<!-- toki-recur: anti-loop rules -->"
+
+
+def _inject_anti_loop_prompt(cfg: dict[str, Any], path: str) -> bool:
+    """Set the anti-loop system prompt on ``cfg`` if the user hasn't.
+
+    Returns True when the prompt was injected, False when the user
+    already provides their own instructions/system prompt at ``path``
+    (dotted config path, e.g. ``agent.system_prompt``). Never clobbers.
+    """
+    keys = path.split(".")
+    node: Any = cfg
+    for k in keys[:-1]:
+        if not isinstance(node, dict) or k not in node:
+            node.setdefault(k, {})
+        node = node[k]
+    leaf = keys[-1]
+    existing = node.get(leaf) if isinstance(node, dict) else None
+    if existing:
+        return False
+    if not isinstance(node, dict):
+        return False
+    node[leaf] = ANTI_LOOP_SYSTEM_PROMPT
+    return True
+
+
+def _inject_anti_loop_md_file(
+    cfg_dir: Path, instructions_key: str = "instructions",
+) -> str | None:
+    """Write ``tokirecur-anti-loop.md`` beside the config and return the
+    path to reference in ``instructions`` (opencode-style file lists).
+
+    Returns None when the target already exists and isn't toki-owned, so
+    the caller skips wiring rather than overwriting a user's file.
+    """
+    md = cfg_dir / "tokirecur-anti-loop.md"
+    owned = md.exists() and _ANTI_LOOP_MARKER in md.read_text()
+    if md.exists() and not owned:
+        return None
+    md.write_text(
+        f"{_ANTI_LOOP_MARKER}\n\n{ANTI_LOOP_SYSTEM_PROMPT}\n"
+    )
+    return str(md)
+
+
+def _inject_anti_loop_bootstrap(
+    md_path: Path, marker: str = _ANTI_LOOP_MARKER,
+) -> bool:
+    """Append a marked anti-loop block to a user AGENTS.md-style file.
+
+    Idempotent (the marker is checked first) and never removes user
+    content: the block is appended at the end when absent. Returns True
+    when the file now carries the block.
+    """
+    if md_path.exists() and marker in md_path.read_text():
+        return True
+    md_path.parent.mkdir(parents=True, exist_ok=True)
+    with md_path.open("a") as fh:
+        fh.write(f"\n{marker}\n\n{ANTI_LOOP_SYSTEM_PROMPT}\n\n")
+    return True
+
+
 def _known_daemon_ports(specs: list[ModelSpec]) -> set[int]:
     """The daemon ports every registry spec can be serving on.
 
@@ -2227,6 +2306,15 @@ def write_opencode_config(
     cfg["small_model"] = small
     cfg["model"] = f"tokirecur-{spec.name}/{spec.model_id}"
 
+    # Anti-loop guardrail: opencode's `instructions` takes FILE PATHS,
+    # so we write a toki-owned markdown file and reference it. Never
+    # clobber a user instruction list.
+    existing = cfg.get("instructions")
+    if not existing:
+        md = _inject_anti_loop_md_file(cfg_path.parent)
+        if md is not None:
+            cfg["instructions"] = [md]
+
     _backup(cfg_path)
     _atomic_write_text(cfg_path, json.dumps(cfg, indent=2) + "\n")
     return cfg_path
@@ -2287,6 +2375,17 @@ def write_openclaw_config(
     defaults = agents.setdefault("defaults", {})
     defaults["model"] = {"primary": f"tokirecur-{spec.name}/{spec.model_id}"}
     defaults["timeoutSeconds"] = 3600
+
+    # Anti-loop guardrail: openclaw has no config-injectable system
+    # prompt yet (feature request #50103 — the strict agent-defaults
+    # schema rejects unknown keys), so the rules go into the workspace
+    # AGENTS.md bootstrap file, which openclaw injects into every run.
+    workspace = Path(os.environ.get(
+        "OPENCLAW_WORKSPACE_DIR",
+        str(Path.home() / ".openclaw/workspace")))
+    if isinstance(defaults.get("workspace"), str):
+        workspace = Path(defaults["workspace"])
+    _inject_anti_loop_bootstrap(workspace / "AGENTS.md")
 
     _backup(cfg_path)
     _atomic_write_text(cfg_path, json.dumps(cfg, indent=2) + "\n")
@@ -2404,6 +2503,10 @@ def write_hermes_config(
         }
     )
 
+    # Anti-loop guardrail: hermes's manual system-prompt field. Skipped
+    # when the user already set their own agent.system_prompt.
+    _inject_anti_loop_prompt(cfg, "agent.system_prompt")
+
     _purge_stale_hermes_context_cache(all_specs)
 
     _backup(cfg_path)
@@ -2498,6 +2601,11 @@ def write_codex_config(
 
     top["model_provider"] = f"tokirecur-{spec.name}"
     top["model"] = spec.model_id
+
+    # Anti-loop guardrail: codex honors a top-level `system_prompt`
+    # scalar. Skipped when the user already set one.
+    if not top.get("system_prompt"):
+        top["system_prompt"] = ANTI_LOOP_SYSTEM_PROMPT
 
     _backup(cfg_path)
     _atomic_write_text(cfg_path, tomli_w.dumps({**top, **tables}))
