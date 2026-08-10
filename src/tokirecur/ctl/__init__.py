@@ -133,15 +133,23 @@ DEFAULT_AUTH = os.environ.get("TOKI_AUTH_TOKEN", "demo-token")
 # openclaw, hermes, codex) so agentic models don't lock into repeating
 # the same tool call / message. Never written if the user already has
 # their own instructions/system prompt in that harness's config.
+#
+# v2 style guide (learned from v1 feedback — small local models got
+# confused and over-thought): NO identity claim (the harness already
+# states who the model is — claiming "you are an autonomous agent"
+# conflicts with it), NO abstract meta-language ("tool call", "identical
+# call", "follow-ups unless asked"), positive-first concrete rules, and
+# nothing that can be read as "keep going" ("do not skip steps" fought
+# with "stop when done" and pushed the model into long self-monitoring
+# loops). Keep it short: each extra rule costs attention.
 ANTI_LOOP_SYSTEM_PROMPT = (
-    "You are an autonomous agent completing a task. Follow instructions "
-    "exactly and do not skip steps. Once a step succeeds, move to the next "
-    "-- never redo or repeat a completed step. If an action fails or "
-    "produces the same result twice, change your approach instead of "
-    "retrying the identical call. Never repeat a tool call, a message, or "
-    "an answer you have already produced. When the task is done, stop "
-    "immediately -- no extra turns, no repeated summaries, no follow-ups "
-    "unless asked."
+    "Working rules\n\n"
+    "1. Work one step at a time.\n"
+    "2. When a step succeeds, move on to the next.\n"
+    "3. When a step fails, try a different way. Don't repeat the same "
+    "attempt.\n"
+    "4. Say something new each turn. Don't repeat what you already said.\n"
+    "5. Stop as soon as the task is done, then give a short answer.\n"
 )
 
 # Reference defaults: registry entries matching these names (source ==
@@ -2130,7 +2138,16 @@ def _backup(path: Path) -> None:
 
 # Marker used to spot a toki-owned anti-loop block inside a user's
 # AGENTS.md-style bootstrap file (openclaw workspace, codex global).
-_ANTI_LOOP_MARKER = "<!-- toki-recur: anti-loop rules -->"
+# Bump _ANTI_LOOP_VERSION when the prompt text changes so re-syncs
+# REPLACE a stale toki block instead of leaving old text behind.
+_ANTI_LOOP_VERSION = 2
+_ANTI_LOOP_MARKER = f"<!-- toki-recur: anti-loop rules v{_ANTI_LOOP_VERSION} -->"
+# Matches any toki-owned block from ANY version (v1 wrote an unversioned
+# marker) up to the next HTML comment or the end of the file.
+_ANTI_LOOP_BLOCK_RE = re.compile(
+    r"\n?<!-- toki-recur: anti-loop rules(?: v\d+)? -->.*?(?=\n<!--|\Z)",
+    re.DOTALL,
+)
 
 
 def _inject_anti_loop_prompt(cfg: dict[str, Any], path: str) -> bool:
@@ -2166,7 +2183,7 @@ def _inject_anti_loop_md_file(
     the caller skips wiring rather than overwriting a user's file.
     """
     md = cfg_dir / "tokirecur-anti-loop.md"
-    owned = md.exists() and _ANTI_LOOP_MARKER in md.read_text()
+    owned = md.exists() and bool(_ANTI_LOOP_BLOCK_RE.search(md.read_text()))
     if md.exists() and not owned:
         return None
     md.write_text(
@@ -2180,15 +2197,22 @@ def _inject_anti_loop_bootstrap(
 ) -> bool:
     """Append a marked anti-loop block to a user AGENTS.md-style file.
 
-    Idempotent (the marker is checked first) and never removes user
-    content: the block is appended at the end when absent. Returns True
-    when the file now carries the block.
+    Idempotent and self-upgrading: any toki-owned block (any version) is
+    replaced with the current text, and the block is (re)appended at the
+    end when absent. User content around the block is never touched.
+    Returns True when the file now carries the block.
     """
-    if md_path.exists() and marker in md_path.read_text():
+    if md_path.exists():
+        text = md_path.read_text()
+        block = f"{marker}\n\n{ANTI_LOOP_SYSTEM_PROMPT}\n"
+        body = _ANTI_LOOP_BLOCK_RE.sub("", text).strip("\n")
+        if body:
+            body += "\n\n"
+        md_path.write_text(body + block)
         return True
     md_path.parent.mkdir(parents=True, exist_ok=True)
     with md_path.open("a") as fh:
-        fh.write(f"\n{marker}\n\n{ANTI_LOOP_SYSTEM_PROMPT}\n\n")
+        fh.write(f"{marker}\n\n{ANTI_LOOP_SYSTEM_PROMPT}\n\n")
     return True
 
 
@@ -2602,10 +2626,18 @@ def write_codex_config(
     top["model_provider"] = f"tokirecur-{spec.name}"
     top["model"] = spec.model_id
 
-    # Anti-loop guardrail: codex honors a top-level `system_prompt`
-    # scalar. Skipped when the user already set one.
-    if not top.get("system_prompt"):
-        top["system_prompt"] = ANTI_LOOP_SYSTEM_PROMPT
+    # Anti-loop guardrail: codex has NO `system_prompt` config key (the
+    # top-level ConfigToml schema doesn't define one — an unknown key is
+    # silently ignored, so v1's write was a no-op). The documented layered
+    # channel is the global instructions file ~/.codex/AGENTS.md (read as
+    # user context instructions, never replacing the built-in prompt).
+    # A user's own global AGENTS.md content is preserved around the block.
+    # Drop the dead v1 scalar (only if it's exactly toki's old text).
+    if top.get("system_prompt") and top["system_prompt"].startswith(
+        "You are an autonomous agent completing a task."
+    ):
+        top.pop("system_prompt")
+    _inject_anti_loop_bootstrap(cfg_path.parent / "AGENTS.md")
 
     _backup(cfg_path)
     _atomic_write_text(cfg_path, tomli_w.dumps({**top, **tables}))

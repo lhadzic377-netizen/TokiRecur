@@ -125,6 +125,38 @@ def test_opencode_config_writer_skips_user_instructions(env, with_pulled_model):
     assert not (env / "tokirecur-anti-loop.md").exists()
 
 
+def test_opencode_md_upgrades_v1_block(env, with_pulled_model):
+    spec = with_pulled_model["35b"]
+    md = env / "tokirecur-anti-loop.md"
+    md.write_text(
+        "<!-- toki-recur: anti-loop rules -->\n\n"
+        "You are an autonomous agent completing a task. Old v1 text.\n"
+    )
+    ctl.write_opencode_config(spec, path=env / "opencode.json")
+    text = md.read_text()
+    assert ctl._ANTI_LOOP_MARKER in text
+    assert "Old v1 text." not in text
+    assert ctl.ANTI_LOOP_SYSTEM_PROMPT in text
+
+
+def test_openclaw_upgrades_v1_block(env, with_pulled_model, monkeypatch):
+    spec = with_pulled_model["laguna"]
+    ws = env / "ws"
+    agents_md = ws / "AGENTS.md"
+    agents_md.parent.mkdir(parents=True)
+    agents_md.write_text(
+        "# My workspace\n\n"
+        "<!-- toki-recur: anti-loop rules -->\n\n"
+        "You are an autonomous agent completing a task. Old v1 text.\n"
+    )
+    monkeypatch.setenv("OPENCLAW_WORKSPACE_DIR", str(ws))
+    ctl.write_openclaw_config(spec, path=env / "openclaw.json")
+    text = agents_md.read_text()
+    assert text.startswith("# My workspace")
+    assert "Old v1 text." not in text
+    assert text.count(ctl.ANTI_LOOP_SYSTEM_PROMPT) == 1
+
+
 def test_openclaw_config_writer(env, with_pulled_model, monkeypatch):
     spec = with_pulled_model["laguna"]
     cfg_path = env / "openclaw.json"

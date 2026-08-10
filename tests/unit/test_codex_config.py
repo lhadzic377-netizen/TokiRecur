@@ -62,19 +62,63 @@ def test_codex_config_writer(env):
     assert prov["env"]["TOKI_AUTH_TOKEN"] == ctl.DEFAULT_AUTH
     ctl.write_codex_config(spec, [spec], path=cfg_path)
     assert Path(str(cfg_path) + ".bak-model").exists()
-    # Anti-loop guardrail: top-level system_prompt scalar (re-emitted
-    # before the table sections, as TOML requires).
-    cfg = _load(cfg_path)
-    assert cfg["system_prompt"] == ctl.ANTI_LOOP_SYSTEM_PROMPT
+    # Anti-loop guardrail: codex has NO system_prompt config key (v1's
+    # top-level scalar was silently ignored). The rules land in the
+    # global instructions file ~/.codex/AGENTS.md, which codex reads as
+    # user context instructions.
+    assert "system_prompt" not in _load(cfg_path)
+    agents_md = cfg_path.parent / "AGENTS.md"
+    assert agents_md.exists()
+    text = agents_md.read_text()
+    assert ctl.ANTI_LOOP_SYSTEM_PROMPT in text
+    assert ctl._ANTI_LOOP_MARKER in text
+    # Idempotent: a second sync doesn't duplicate the block.
+    ctl.write_codex_config(spec, [spec], path=cfg_path)
+    assert agents_md.read_text().count(ctl.ANTI_LOOP_SYSTEM_PROMPT) == 1
 
 
-def test_codex_config_keeps_user_system_prompt(env):
+def test_codex_config_preserves_user_agents_md(env):
+    spec = _spec(env)
+    cfg_path = env / "codex" / "config.toml"
+    agents_md = cfg_path.parent / "AGENTS.md"
+    agents_md.parent.mkdir(parents=True)
+    agents_md.write_text("# My rules\n\nBe concise.\n")
+    ctl.write_codex_config(spec, [spec], path=cfg_path)
+    text = agents_md.read_text()
+    # User content survives; the block is appended after it.
+    assert text.startswith("# My rules\n\nBe concise.")
+    assert ctl.ANTI_LOOP_SYSTEM_PROMPT in text
+
+
+def test_codex_config_upgrades_v1_block(env):
+    spec = _spec(env)
+    cfg_path = env / "codex" / "config.toml"
+    agents_md = cfg_path.parent / "AGENTS.md"
+    agents_md.parent.mkdir(parents=True)
+    v1 = (
+        "# My rules\n\n"
+        "<!-- toki-recur: anti-loop rules -->\n\n"
+        "You are an autonomous agent completing a task. Old text.\n"
+    )
+    agents_md.write_text(v1)
+    ctl.write_codex_config(spec, [spec], path=cfg_path)
+    text = agents_md.read_text()
+    # The stale v1 block is replaced by the current versioned one.
+    assert "Old text." not in text
+    assert text.count(ctl.ANTI_LOOP_SYSTEM_PROMPT) == 1
+    assert text.startswith("# My rules")
+    # The dead v1 system_prompt scalar is dropped from the TOML.
+    assert "system_prompt" not in _load(cfg_path)
+
+
+def test_codex_config_keeps_user_config_scalar(env):
     spec = _spec(env)
     cfg_path = env / "codex" / "config.toml"
     cfg_path.parent.mkdir(parents=True)
     cfg_path.write_text('system_prompt = "My custom prompt"\n')
     ctl.write_codex_config(spec, [spec], path=cfg_path)
     cfg = _load(cfg_path)
+    # A user's own (non-toki) scalar is preserved as-is.
     assert cfg["system_prompt"] == "My custom prompt"
 
 
