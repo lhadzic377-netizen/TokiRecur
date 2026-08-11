@@ -155,6 +155,19 @@ def _max_context_ceiling() -> int | None:
     return value if value > 0 else None
 
 
+def _max_output_ceiling() -> int | None:
+    """Hard per-turn output budget in tokens (TOKI_MAX_OUTPUT_TOKENS,
+    set from the registry's per-model ``max_output_tokens`` at spawn).
+    Guards against runaway single generations: registry ``max_tokens``
+    is advertising (the context window) and client-side caps are not
+    always sent as max_tokens. None = no cap."""
+    try:
+        value = int(os.environ.get("TOKI_MAX_OUTPUT_TOKENS", ""))
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
 def _max_slots_ceiling() -> int | None:
     """The server's real ``--parallel`` slot count (TOKI_MAX_SLOTS, set
     by the stack's fit planner). The recycling engine round-robins over
@@ -218,8 +231,9 @@ def _active_model_id() -> str | None:
 def _resolve_max_tokens(requested: int, reasoning: str = "auto") -> int:
     """Floor at the thinking/non-thinking budget without capping larger
     client requests, then clamp to the real slot context when the stack
-    provides one. Logs a one-time warning when a client's budget is
-    silently raised.
+    provides one, then to the per-model output budget
+    (TOKI_MAX_OUTPUT_TOKENS) when configured. Logs a one-time warning
+    when a client's budget is silently raised.
     """
     global _FLOOR_WARNED
     requested = int(requested)
@@ -235,6 +249,9 @@ def _resolve_max_tokens(requested: int, reasoning: str = "auto") -> int:
     ceiling = _max_context_ceiling()
     if ceiling:
         resolved = min(resolved, ceiling)
+    output_cap = _max_output_ceiling()
+    if output_cap:
+        resolved = min(resolved, max(output_cap, floor))
     return resolved
 
 

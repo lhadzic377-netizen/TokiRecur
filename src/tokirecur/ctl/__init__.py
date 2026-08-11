@@ -195,6 +195,7 @@ DEFAULT_MODELS: list[dict[str, Any]] = [
         "parallel": 2,
         "kv": "f16",
         "max_tokens": 100000,
+        "max_output_tokens": 16384,
         "model_id": "qwen3.5-9b",
         "always_on": False,
         "boot": False,
@@ -210,6 +211,7 @@ DEFAULT_MODELS: list[dict[str, Any]] = [
         "parallel": 2,
         "kv": "f16",
         "max_tokens": 100000,
+        "max_output_tokens": 16384,
         "model_id": "qwen3.6-35b-a3b",
         "always_on": False,
         "source": "default",
@@ -260,6 +262,12 @@ class ModelSpec:
     # temperature / repeat_penalty / top_k / top_p / min_p. Empty
     # (default) means the global defaults apply unchanged.
     sampling: dict[str, Any] = field(default_factory=dict)
+    # Hard per-turn output budget in tokens, enforced by the daemon
+    # (threaded as TOKI_MAX_OUTPUT_TOKENS at spawn). Guards against
+    # runaway single generations: registry `max_tokens` is advertising
+    # only (the context window), and client-side caps (e.g. opencode's
+    # limit.output) are not always sent as max_tokens. None = no cap.
+    max_output_tokens: int | None = None
     # Tracks how the spec entered the registry. "default" for the
     # built-in DEFAULT_MODELS (always treated as configured, even when
     # they lack an explicit `binary`); "pulled" for entries created by
@@ -1789,6 +1797,8 @@ def start_model(spec: ModelSpec, wait: bool = True) -> None:
             "TOKI_REASONING": spec.reasoning,
             "TOKI_SAMPLING": json.dumps(merged_sampling(spec)),
         }
+        if spec.max_output_tokens:
+            env["TOKI_MAX_OUTPUT_TOKENS"] = str(spec.max_output_tokens)
         proc = subprocess.Popen(
             [
                 sys.executable, "-m", "uvicorn",
