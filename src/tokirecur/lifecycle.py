@@ -173,6 +173,7 @@ def start_daemon(
     similarity_threshold: float = 0.85,
     memory_budget_mb: int = 8192,
     reasoning: str = "auto",
+    sampling: str | None = None,
     wait: bool = True,
 ) -> int:
     """Start the Toki Recur daemon (uvicorn). Returns the PID."""
@@ -193,15 +194,20 @@ def start_daemon(
     ]
     logger.info("starting: %s", " ".join(args))
     log = open(DAEMON_LOG, "ab")
+    daemon_env = {
+        **os.environ, "TOKI_BACKEND_URL": backend_url,
+        "TOKI_SIMILARITY_THRESHOLD": str(similarity_threshold),
+        "TOKI_MEMORY_BUDGET_MB": str(memory_budget_mb),
+        "TOKI_REASONING": reasoning,
+    }
+    if sampling is not None:
+        daemon_env["TOKI_SAMPLING"] = sampling
     proc = subprocess.Popen(
         args,
         stdout=log,
         stderr=subprocess.STDOUT,
         stdin=subprocess.DEVNULL,
-        env={**os.environ, "TOKI_BACKEND_URL": backend_url,
-             "TOKI_SIMILARITY_THRESHOLD": str(similarity_threshold),
-             "TOKI_MEMORY_BUDGET_MB": str(memory_budget_mb),
-             "TOKI_REASONING": reasoning},
+        env=daemon_env,
         start_new_session=_DETACH,
     )
     DAEMON_PID.write_text(str(proc.pid))

@@ -78,6 +78,23 @@ def _sanitize_tools(tools: list) -> list:
     return out
 
 
+# Sampling fields llama-server accepts on /completion and
+# /v1/chat/completions. temperature travels as its own parameter;
+# everything else rides in the `sampling` dict.
+_SAMPLING_FIELDS = ("repeat_penalty", "top_k", "top_p", "min_p")
+
+
+def _merge_sampling(payload: dict, sampling: dict | None) -> dict:
+    """Fold non-None sampling values into a llama-server payload."""
+    if not sampling:
+        return payload
+    for key in _SAMPLING_FIELDS:
+        value = sampling.get(key)
+        if value is not None:
+            payload[key] = value
+    return payload
+
+
 class LlamaServerBackend(LlamaBackend):
     """HTTP backend against llama-server (upstream).
 
@@ -392,6 +409,7 @@ class LlamaServerBackend(LlamaBackend):
         prefix_token_ids: list[int] | None = None,
         cached_n_past: int = 0,
         cache_prompt: bool = True,
+        sampling: dict | None = None,
     ) -> dict[str, Any]:
         """Run a completion. If `cached_n_past > 0` and the caller has
         already loaded a saved KV state into this slot, the server still
@@ -412,6 +430,7 @@ class LlamaServerBackend(LlamaBackend):
             "slot_id": slot_id if slot_id is not None else 0,
             "cache_prompt": cache_prompt,
         }
+        _merge_sampling(payload, sampling)
         started = time.perf_counter()
         r = self._client.post(
             f"{self.base_url}/completion",
@@ -444,6 +463,7 @@ class LlamaServerBackend(LlamaBackend):
         max_tokens: int = 256,
         temperature: float = 0.0,
         cache_prompt: bool = True,
+        sampling: dict | None = None,
     ) -> dict[str, Any]:
         """Run a completion that relies on llama-server's IN-MEMORY
         slot cache (no save/restore round-trip through disk).
@@ -470,6 +490,7 @@ class LlamaServerBackend(LlamaBackend):
             "slot_id": slot_id,
             "cache_prompt": cache_prompt,
         }
+        _merge_sampling(payload, sampling)
         started = time.perf_counter()
         r = self._client.post(
             f"{self.base_url}/completion",
@@ -505,6 +526,7 @@ class LlamaServerBackend(LlamaBackend):
         chat_template_kwargs: dict | None = None,
         tools: list | None = None,
         tool_choice: str | dict | None = None,
+        sampling: dict | None = None,
     ) -> dict[str, Any]:
         """Run a chat completion via llama-server's OpenAI-compatible
         endpoint (``/v1/chat/completions``).
@@ -544,6 +566,7 @@ class LlamaServerBackend(LlamaBackend):
             "slot_id": slot_id,
             "cache_prompt": cache_prompt,
         }
+        _merge_sampling(payload, sampling)
         if tools:
             payload["tools"] = _sanitize_tools(tools)
             if tool_choice is not None:
@@ -609,6 +632,7 @@ class LlamaServerBackend(LlamaBackend):
         chat_template_kwargs: dict | None = None,
         tools: list | None = None,
         tool_choice: str | dict | None = None,
+        sampling: dict | None = None,
     ):
         """Stream a chat completion via llama-server's OpenAI-compatible
         endpoint (``/v1/chat/completions`` with ``stream: True``).
@@ -636,6 +660,7 @@ class LlamaServerBackend(LlamaBackend):
             "slot_id": slot_id,
             "cache_prompt": cache_prompt,
         }
+        _merge_sampling(payload, sampling)
         if tools:
             payload["tools"] = _sanitize_tools(tools)
             if tool_choice is not None:

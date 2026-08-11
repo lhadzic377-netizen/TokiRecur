@@ -40,6 +40,7 @@ class FakeBackend:
         max_tokens: int = 256,
         temperature: float = 0.0,
         cache_prompt: bool = True,
+        sampling: dict | None = None,
     ) -> dict[str, Any]:
         toks = self.tokenize(prompt)
         prev = self.slot_kv.get(slot_id, [])
@@ -79,6 +80,7 @@ class FakeBackend:
         chat_template_kwargs=None,
         tools=None,
         tool_choice=None,
+        sampling: dict | None = None,
     ):
         toks = self.tokenize(messages[-1]["content"])
         prev = self.slot_kv.get(slot_id, [])

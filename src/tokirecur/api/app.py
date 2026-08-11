@@ -57,7 +57,80 @@ logger = logging.getLogger(__name__)
 MAX_TOKENS_FLOOR = 512
 THINKING_TOKENS_FLOOR = 2048
 
+# Sampling defaults for every request the daemon serves. Greedy decode
+# (temperature 0.0) with no repetition penalty is the loop engine behind
+# agent harnesses — identical context reproduces identical tokens and
+# the model re-sends the same tool call forever. These defaults break
+# that lock; they are decode-time only, so the KV cache is untouched.
+# The active model's profile comes in as TOKI_SAMPLING (JSON, set by ctl
+# at daemon spawn from DEFAULT_SAMPLING + the registry `sampling:` block).
+# A client value for any field always wins over the default.
+DEFAULT_SAMPLING = {"temperature": 0.4, "repeat_penalty": 1.15,
+                    "top_k": 40, "min_p": 0.05}
+
 _FLOOR_WARNED = False
+
+
+def _sampling_defaults() -> dict[str, Any]:
+    """Active model's sampling profile: TOKI_SAMPLING env (JSON) merged
+    over the built-in defaults, so a partial registry block still gets
+    the full profile."""
+    merged = dict(DEFAULT_SAMPLING)
+    try:
+        raw = os.environ.get("TOKI_SAMPLING")
+        if raw:
+            from_env = _json.loads(raw)
+            if isinstance(from_env, dict):
+                merged.update({k: v for k, v in from_env.items()
+                               if v is not None})
+    except (ValueError, TypeError):
+        logger.warning("ignoring malformed TOKI_SAMPLING: %r",
+                       os.environ.get("TOKI_SAMPLING"))
+    return merged
+
+
+def _resolve_sampling(
+    *,
+    defaults: dict[str, Any] | None = None,
+    temperature: float | None = None,
+    repeat_penalty: float | None = None,
+    top_p: float | None = None,
+    top_k: int | None = None,
+    min_p: float | None = None,
+    default_temperature: float = 0.4,
+) -> tuple[float, dict[str, Any]]:
+    """Resolve a request's effective sampling profile.
+
+    Returns ``(temperature, sampling)`` where ``sampling`` carries only
+    the non-None repetition/top-k/top-p/min-p values (temperature is a
+    separate positional parameter all the way to llama-server). Client
+    values win; None falls back to the model defaults.
+    """
+    d = defaults if defaults is not None else _sampling_defaults()
+    temp = temperature if temperature is not None else \
+        d.get("temperature", default_temperature)
+    sampling: dict[str, Any] = {}
+    for key, value in (
+        ("repeat_penalty", repeat_penalty),
+        ("top_p", top_p),
+        ("top_k", top_k),
+        ("min_p", min_p),
+    ):
+        if value is None:
+            value = d.get(key)
+        if value is not None:
+            sampling[key] = value
+    return temp, sampling
+
+
+def _responses_sampling_defaults() -> dict[str, Any]:
+    """Sampling profile for the Responses (codex) endpoint: the model's
+    repetition controls but WITHOUT the default temperature, so OpenAI's
+    temperature=1.0 default applies when the client sends nothing
+    (codex streams temperature=0.0 by default, which combined with no
+    penalties is the loop amplifier on agents)."""
+    return {k: v for k, v in _sampling_defaults().items()
+            if k != "temperature"}
 
 
 def _default_chat_template_kwargs(reasoning: str) -> dict:
@@ -171,7 +244,14 @@ class CompletionRequest(BaseModel):
     # Hard bounds instead of trusting the client: llama.cpp truncates
     # out-of-range values silently, which made overrides look broken.
     max_tokens: int = Field(256, ge=1, le=65536)
-    temperature: float = Field(0.0, ge=-2.0, le=2.0)
+    # None = the active model's sampling defaults (temperature 0.4,
+    # repeat_penalty 1.15, top_k 40, min_p 0.05) — greedy-with-no-
+    # penalty is the loop amplifier behind agent harnesses.
+    temperature: float | None = Field(None, ge=-2.0, le=2.0)
+    repeat_penalty: float | None = Field(None, ge=0.0, le=2.0)
+    top_p: float | None = Field(None, ge=0.0, le=1.0)
+    top_k: int | None = Field(None, ge=0, le=100)
+    min_p: float | None = Field(None, ge=0.0, le=1.0)
     max_slots: int = Field(4, ge=1, le=32)
     session_id: str | None = None
     skip_cache: bool = False
@@ -211,7 +291,15 @@ class ChatCompletionRequest(BaseModel):
     # Hard bounds instead of trusting the client: llama.cpp truncates
     # out-of-range values silently, which made overrides look broken.
     max_tokens: int = Field(256, ge=1, le=65536)
-    temperature: float = Field(0.0, ge=-2.0, le=2.0)
+    # None = the active model's sampling defaults (temperature 0.4,
+    # repeat_penalty 1.15, top_k 40, min_p 0.05). A client value always
+    # wins. Greedy decode with no repetition penalty is the loop engine
+    # behind agent harnesses — these defaults break the lock.
+    temperature: float | None = Field(None, ge=-2.0, le=2.0)
+    repeat_penalty: float | None = Field(None, ge=0.0, le=2.0)
+    top_p: float | None = Field(None, ge=0.0, le=1.0)
+    top_k: int | None = Field(None, ge=0, le=100)
+    min_p: float | None = Field(None, ge=0.0, le=1.0)
     max_slots: int = Field(4, ge=1, le=32)
     session_id: str | None = None
     stream: bool = False
@@ -254,6 +342,12 @@ class ResponsesRequest(BaseModel):
     max_output_tokens: int | None = Field(None, ge=1, le=65536)
     temperature: float = Field(1.0, ge=0.0, le=2.0)
     top_p: float | None = Field(None, ge=0.0, le=1.0)
+    # Repetition controls (toki extension, same knobs as chat): None
+    # falls back to the model's sampling profile. Codex sends no
+    # penalties by default, which is the loop amplifier on agents.
+    repeat_penalty: float | None = Field(None, ge=0.0, le=2.0)
+    top_k: int | None = Field(None, ge=0, le=100)
+    min_p: float | None = Field(None, ge=0.0, le=1.0)
     stream: bool = False
     tools: list | None = None
     tool_choice: str | dict | None = None
@@ -652,6 +746,7 @@ def create_app(
         chat_template_kwargs: dict | None = None,
         tools: list | None = None,
         tool_choice: str | dict | None = None,
+        sampling: dict | None = None,
     ) -> Any:
         """Generator that yields SSE-formatted OpenAI chunks.
 
@@ -718,6 +813,7 @@ def create_app(
                     chat_template_kwargs=chat_template_kwargs,
                     tools=tools,
                     tool_choice=tool_choice,
+                    sampling=sampling,
                 ):
                     kind = item["kind"]
                     if kind == "delta":
@@ -765,6 +861,7 @@ def create_app(
                 temperature=temperature,
                 max_slots=max_slots,
                 session_id=session_id,
+                sampling=sampling,
             )
             text = result.output_text
             chunk_size = 4  # characters per chunk
@@ -976,6 +1073,19 @@ def create_app(
             else default_reasoning
         )
         ctk = _default_chat_template_kwargs(reasoning_mode)
+        # Temperature keeps OpenAI's responses default (1.0) when the
+        # client sends nothing; repetition controls fall back to the
+        # model's profile (codex sends no penalties by default, which
+        # is the loop amplifier on agents).
+        temperature, sampling = _resolve_sampling(
+            defaults=_responses_sampling_defaults(),
+            temperature=req.temperature,
+            repeat_penalty=req.repeat_penalty,
+            top_p=req.top_p,
+            top_k=req.top_k,
+            min_p=req.min_p,
+            default_temperature=1.0,
+        )
         resp_id = f"resp-{int(time.time() * 1000)}"
         msg_id = f"msg-{resp_id}"
         created = int(time.time())
@@ -1017,12 +1127,13 @@ def create_app(
                 messages,
                 max_tokens=_resolve_max_tokens(max_tokens,
                                                reasoning=reasoning_mode),
-                temperature=req.temperature,
+                temperature=temperature,
                 max_slots=_resolve_max_slots(req.max_slots),
                 session_id=req.session_id,
                 chat_template_kwargs=ctk,
                 tools=_normalize_responses_tools(req.tools),
                 tool_choice=_normalize_responses_tool_choice(req.tool_choice),
+                sampling=sampling,
             ):
                 kind = item["kind"]
                 if kind == "delta":
@@ -1199,6 +1310,13 @@ def create_app(
 
     @app.post("/v1/completions")
     async def completions(req: CompletionRequest) -> Response:
+        temperature, sampling = _resolve_sampling(
+            temperature=req.temperature,
+            repeat_penalty=req.repeat_penalty,
+            top_p=req.top_p,
+            top_k=req.top_k,
+            min_p=req.min_p,
+        )
         try:
             if req.stream:
                 completion_id = f"cmpl-{int(time.time() * 1000)}"
@@ -1207,12 +1325,13 @@ def create_app(
                         req.prompt,
                         None,
                         req.max_tokens,
-                        req.temperature,
+                        temperature,
                         _resolve_max_slots(req.max_slots),
                         req.session_id,
                         req.model,
                         completion_id,
                         is_chat=False,
+                        sampling=sampling,
                     ),
                     media_type="text/event-stream",
                 )
@@ -1220,9 +1339,10 @@ def create_app(
                 engine.serve_native,
                 req.prompt,
                 max_tokens=_resolve_max_tokens(req.max_tokens, reasoning="off"),
-                temperature=req.temperature,
+                temperature=temperature,
                 max_slots=_resolve_max_slots(req.max_slots),
                 session_id=req.session_id,
+                sampling=sampling,
             )
             # Record metrics.
             state = engine.slot_state()
@@ -1296,6 +1416,13 @@ def create_app(
         # tool_call_id fields for agentic clients). llama-server applies
         # the chat template appropriate for the loaded model.
         messages = [m.model_dump(exclude_none=True) for m in req.messages]
+        temperature, sampling = _resolve_sampling(
+            temperature=req.temperature,
+            repeat_penalty=req.repeat_penalty,
+            top_p=req.top_p,
+            top_k=req.top_k,
+            min_p=req.min_p,
+        )
         try:
             if req.stream:
                 completion_id = f"chatcmpl-{int(time.time() * 1000)}"
@@ -1304,7 +1431,7 @@ def create_app(
                         None,  # no flat prompt
                         messages,
                         req.max_tokens,
-                        req.temperature,
+                        temperature,
                         _resolve_max_slots(req.max_slots),
                         req.session_id,
                         req.model,
@@ -1313,6 +1440,7 @@ def create_app(
                         chat_template_kwargs=req.chat_template_kwargs,
                         tools=req.tools,
                         tool_choice=req.tool_choice,
+                        sampling=sampling,
                     ),
                     media_type="text/event-stream",
                 )
@@ -1325,12 +1453,13 @@ def create_app(
                 engine.serve_chat,
                 messages,
                 max_tokens=_resolve_max_tokens(req.max_tokens, reasoning=default_reasoning),
-                temperature=req.temperature,
+                temperature=temperature,
                 max_slots=_resolve_max_slots(req.max_slots),
                 session_id=req.session_id,
                 chat_template_kwargs=ctk,
                 tools=req.tools,
                 tool_choice=req.tool_choice,
+                sampling=sampling,
             )
             state = engine.slot_state()
             slot_ctx = next(
@@ -1422,17 +1551,27 @@ def create_app(
                 else default_reasoning
             )
             ctk = _default_chat_template_kwargs(reasoning_mode)
+            temperature, sampling = _resolve_sampling(
+                defaults=_responses_sampling_defaults(),
+                temperature=req.temperature,
+                repeat_penalty=req.repeat_penalty,
+                top_p=req.top_p,
+                top_k=req.top_k,
+                min_p=req.min_p,
+                default_temperature=1.0,
+            )
             result = await _run_engine(
                 engine.serve_chat,
                 messages,
                 max_tokens=_resolve_max_tokens(max_tokens,
                                                reasoning=reasoning_mode),
-                temperature=req.temperature,
+                temperature=temperature,
                 max_slots=_resolve_max_slots(req.max_slots),
                 session_id=req.session_id,
                 chat_template_kwargs=ctk,
                 tools=_normalize_responses_tools(req.tools),
                 tool_choice=_normalize_responses_tool_choice(req.tool_choice),
+                sampling=sampling,
             )
             state = engine.slot_state()
             slot_ctx = next(

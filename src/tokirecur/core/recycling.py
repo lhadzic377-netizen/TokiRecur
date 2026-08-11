@@ -247,6 +247,7 @@ class RecyclingEngine:
         max_slots: int = 1,
         session_id: str | None = None,
         max_context_tokens: int | None = None,
+        sampling: dict | None = None,
     ) -> RecyclingResult:
         """Run the recycling algorithm using llama-server's IN-MEMORY
         slot cache instead of explicit save/restore.
@@ -304,6 +305,7 @@ class RecyclingEngine:
                 max_tokens=max_tokens,
                 temperature=temperature,
                 cache_prompt=cache_prompt,
+                sampling=sampling,
             ),
             tokenize_text=prompt,
             max_tokens=max_tokens,
@@ -325,6 +327,7 @@ class RecyclingEngine:
         chat_template_kwargs: dict | None = None,
         tools: list | None = None,
         tool_choice: str | dict | None = None,
+        sampling: dict | None = None,
     ) -> RecyclingResult:
         """Run the recycling algorithm with OpenAI-format messages.
 
@@ -364,6 +367,7 @@ class RecyclingEngine:
                 chat_template_kwargs=chat_template_kwargs,
                 tools=tools,
                 tool_choice=tool_choice,
+                sampling=sampling,
             ),
             tokenize_text=routing_text,
             max_tokens=max_tokens,
@@ -578,6 +582,7 @@ class RecyclingEngine:
         chat_template_kwargs: dict | None = None,
         tools: list | None = None,
         tool_choice: str | dict | None = None,
+        sampling: dict | None = None,
     ) -> AsyncIterator[dict]:
         """Streaming variant of :meth:`serve_chat`.
 
@@ -618,6 +623,7 @@ class RecyclingEngine:
             chat_template_kwargs=chat_template_kwargs,
             tools=tools,
             tool_choice=tool_choice,
+            sampling=sampling,
         ):
             if item.get("kind") == "delta":
                 yield {"kind": "delta", "delta": item.get("delta", "")}

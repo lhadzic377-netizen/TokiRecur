@@ -129,6 +129,20 @@ except Exception:  # noqa: BLE001 — never let path resolution crash import
 
 DEFAULT_AUTH = os.environ.get("TOKI_AUTH_TOKEN", "demo-token")
 
+# Sampling defaults for the daemon's OpenAI-compatible endpoints.
+# Greedy decode (temperature 0.0) with no repetition penalty is the
+# loop engine behind agent harnesses: identical context reproduces
+# identical tokens → the same tool call forever. These values break
+# that lock without touching the KV cache (sampling is decode-time).
+# Iterate here or per-model via the registry `sampling:` block.
+# Client-supplied values always win over these defaults.
+DEFAULT_SAMPLING: dict[str, Any] = {
+    "temperature": 0.4,
+    "repeat_penalty": 1.15,
+    "top_k": 40,
+    "min_p": 0.05,
+}
+
 # Behavioral guardrail injected into the CLI harness configs (opencode,
 # openclaw, hermes, codex) so agentic models don't lock into repeating
 # the same tool call / message. Never written if the user already has
@@ -241,6 +255,11 @@ class ModelSpec:
     # `--reasoning off` to llama-server for templates that honor it
     # (stock Qwen3.5); ignored by templates that hard-code thinking.
     reasoning: str = "auto"
+    # Per-model sampling overrides merged over ctl.DEFAULT_SAMPLING by
+    # the daemon (threaded as TOKI_SAMPLING at spawn). Keys:
+    # temperature / repeat_penalty / top_k / top_p / min_p. Empty
+    # (default) means the global defaults apply unchanged.
+    sampling: dict[str, Any] = field(default_factory=dict)
     # Tracks how the spec entered the registry. "default" for the
     # built-in DEFAULT_MODELS (always treated as configured, even when
     # they lack an explicit `binary`); "pulled" for entries created by
@@ -577,6 +596,16 @@ def _build_spec(m: dict[str, Any]) -> ModelSpec:
     m.setdefault("extra_args", [])
     m.setdefault("source", "default")
     return ModelSpec(raw=raw, **m)
+
+
+def merged_sampling(spec: ModelSpec) -> dict[str, Any]:
+    """Effective sampling profile for a spec: global defaults overlaid
+    with the spec's registry ``sampling:`` block. Passed to the daemon
+    as ``TOKI_SAMPLING`` (JSON) at spawn so per-request resolution in
+    the API layer always has the active model's profile."""
+    merged = dict(DEFAULT_SAMPLING)
+    merged.update(spec.sampling or {})
+    return merged
 
 
 # Process-wide registry cache: {registry_path_str -> [ModelSpec]}.
@@ -1758,6 +1787,7 @@ def start_model(spec: ModelSpec, wait: bool = True) -> None:
             "TOKI_MAX_CONTEXT_TOKENS": str(effective),
             "TOKI_MAX_SLOTS": str(slots),
             "TOKI_REASONING": spec.reasoning,
+            "TOKI_SAMPLING": json.dumps(merged_sampling(spec)),
         }
         proc = subprocess.Popen(
             [

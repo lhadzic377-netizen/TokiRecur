@@ -41,6 +41,7 @@ class _Backend:
         max_tokens: int = 256,
         temperature: float = 0.0,
         cache_prompt: bool = True,
+        sampling: dict | None = None,
     ) -> dict[str, Any]:
         toks = self.tokenize(prompt)
         prev = self.slot_kv.get(slot_id, [])
@@ -86,7 +87,7 @@ class _BackendNoDisk:
     def cache_info(self, slot_id: int) -> dict[str, Any]:
         return {"n_past": 0, "model_id": "fake"}
 
-    def complete_native(self, prompt, *, slot_id, max_tokens=256, temperature=0.0, cache_prompt=True):
+    def complete_native(self, prompt, *, slot_id, max_tokens=256, temperature=0.0, cache_prompt=True, sampling=None):
         toks = self.tokenize(prompt)
         return {
             "text": "ok",
