@@ -241,6 +241,39 @@ def test_hermes_config_writer_keeps_user_system_prompt(env, with_pulled_model):
     assert cfg["agent"]["system_prompt"] == "Be snarky."
 
 
+def test_anti_loop_prompt_discipline_budget():
+    """The guardrail must stay minimal (paper: instruction dropout /
+    "contextual overload") and fully positive (v2's "Don't repeat"
+    phrasing invited self-monitoring). Guards against regrowth."""
+    text = ctl.ANTI_LOOP_SYSTEM_PROMPT
+    rules = [line for line in text.splitlines() if line and line[0].isdigit()]
+    assert len(rules) <= 6
+    assert len(text.split()) <= 60
+    # Zero negations: don't/dont/never/no/not must not appear as words.
+    negations = {w.lower().rstrip(",") for w in text.split()} & {
+        "don't", "dont", "never", "no", "not"}
+    assert not negations, f"negation sneaked back into the prompt: {negations}"
+    assert "autonomous agent" not in text.lower()
+    # One primitive idea per rule: a single sentence each (the leading
+    # "N." list number is not a sentence period).
+    for rule in rules:
+        assert rule.split(".", 1)[1].count(".") <= 1
+
+
+def test_opencode_md_upgrades_v2_block(env, with_pulled_model):
+    spec = with_pulled_model["35b"]
+    md = env / "tokirecur-anti-loop.md"
+    md.write_text(
+        "<!-- toki-recur: anti-loop rules v2 -->\n\n"
+        "Working rules\n\n1. Work one step at a time. Old v2 text.\n"
+    )
+    ctl.write_opencode_config(spec, path=env / "opencode.json")
+    text = md.read_text()
+    assert ctl._ANTI_LOOP_MARKER in text
+    assert "Old v2 text." not in text
+    assert ctl.ANTI_LOOP_SYSTEM_PROMPT in text
+
+
 def test_sync_cli_configs_writes_all(env, with_pulled_model, monkeypatch):
     spec = with_pulled_model["laguna"]
     monkeypatch.setenv("CODEX_HOME", str(env / "codex-home"))

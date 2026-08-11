@@ -142,14 +142,22 @@ DEFAULT_AUTH = os.environ.get("TOKI_AUTH_TOKEN", "demo-token")
 # nothing that can be read as "keep going" ("do not skip steps" fought
 # with "stop when done" and pushed the model into long self-monitoring
 # loops). Keep it short: each extra rule costs attention.
+#
+# v3 (post-35-page research review): ZERO negations (v2's "Don't repeat"
+# phrasing still invited the model to self-monitor — "am I repeating?"),
+# every rule is one primitive idea (Toki Pona-style decomposition), the
+# failure rule carries a concrete tactic ("change something") AND a retry
+# cap ("once more") to kill the infinite same-request loop, and rule 4 is
+# a positive output contract that doubles as the ask-when-stuck fallback.
+# Guarded by a unit test (rules/words/negation budget) so it can't grow
+# back into "contextual overload" territory.
 ANTI_LOOP_SYSTEM_PROMPT = (
     "Working rules\n\n"
-    "1. Work one step at a time.\n"
-    "2. When a step succeeds, move on to the next.\n"
-    "3. When a step fails, try a different way. Don't repeat the same "
-    "attempt.\n"
-    "4. Say something new each turn. Don't repeat what you already said.\n"
-    "5. Stop as soon as the task is done, then give a short answer.\n"
+    "1. Do one step at a time.\n"
+    "2. When a step works, continue with the next one.\n"
+    "3. When a step fails, change something and try once more.\n"
+    "4. End each turn with one new thing: a result, a question, or done.\n"
+    "5. When the task is finished, stop and answer briefly.\n"
 )
 
 # Reference defaults: registry entries matching these names (source ==
@@ -2140,7 +2148,7 @@ def _backup(path: Path) -> None:
 # AGENTS.md-style bootstrap file (openclaw workspace, codex global).
 # Bump _ANTI_LOOP_VERSION when the prompt text changes so re-syncs
 # REPLACE a stale toki block instead of leaving old text behind.
-_ANTI_LOOP_VERSION = 2
+_ANTI_LOOP_VERSION = 3
 _ANTI_LOOP_MARKER = f"<!-- toki-recur: anti-loop rules v{_ANTI_LOOP_VERSION} -->"
 # Matches any toki-owned block from ANY version (v1 wrote an unversioned
 # marker) up to the next HTML comment or the end of the file.
