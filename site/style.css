@@ -296,6 +296,103 @@ h1 .accent { color: var(--accent); }
 
 .card p { color: var(--dim); font-size: 14px; line-height: 1.65; }
 
+/* ── pricing ─────────────────────────────────────────────── */
+
+.pricing-card {
+  max-width: 720px;
+  margin: 32px auto 0;
+  text-align: left;
+  padding: 36px 32px;
+}
+
+.price-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.price {
+  font-size: clamp(72px, 9vw, 104px);
+  font-weight: 750;
+  letter-spacing: -0.04em;
+  line-height: 1;
+  color: var(--fg);
+}
+
+.price-suffix {
+  color: var(--dim);
+  font-size: 18px;
+  font-weight: 500;
+}
+
+.pricing-card h3 {
+  font-size: 22px;
+  font-weight: 700;
+  margin-bottom: 12px;
+  letter-spacing: -0.01em;
+}
+
+.pricing-blurb {
+  color: var(--dim);
+  font-size: 14.5px;
+  line-height: 1.7;
+  margin-bottom: 22px;
+}
+
+.pricing-includes {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 22px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 22px;
+  font-size: 14.5px;
+  line-height: 1.5;
+}
+
+.pricing-includes li {
+  color: var(--fg);
+  position: relative;
+  padding-left: 24px;
+}
+
+.pricing-includes li::before {
+  content: "✓";
+  position: absolute;
+  left: 0;
+  top: 0;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.pricing-fine {
+  color: var(--dim);
+  font-size: 13.5px;
+  line-height: 1.65;
+  border-top: 1px dashed var(--border);
+  padding-top: 18px;
+  margin: 18px 0 0;
+}
+
+.pricing-fine-joke {
+  font-style: italic;
+  color: var(--dimmer);
+}
+
+.pricing-tagline {
+  text-align: center;
+  margin-top: 36px;
+  color: var(--dim);
+  font-size: 15px;
+  font-style: italic;
+}
+
+@media (max-width: 720px) {
+  .pricing-includes { grid-template-columns: 1fr; }
+  .pricing-card { padding: 28px 22px; }
+}
+
 /* ── how it works ───────────────────────────────────────── */
 
 .steps { list-style: none; display: grid; gap: 14px; }
@@ -633,6 +730,11 @@ footer {
 }
 
 .reveal.in-view { opacity: 1; transform: none; }
+
+/* Pricing sits late in the page; the global stagger hits a 5s+ delay
+   before the IntersectionObserver fires. Reset it to zero so direct
+   anchor jumps don't leave the section blank. */
+#pricing .reveal { transition-delay: 0s; }
 
 /* ── responsive ─────────────────────────────────────────── */
 
