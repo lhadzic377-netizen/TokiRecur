@@ -27,6 +27,23 @@ from textual.widgets import Button, Input, Label, Select, Static
 from ..ctl import load_registry, model_status, read_client_modes, write_client_mode
 from . import art
 
+# Fields whose change requires a llama-server restart (the spec's
+# launch window changes; the running server can't honour the new
+# value). Mirrors ctl._RESTART_REQUIRED_FIELDS — kept here so the
+# launcher doesn't have to import a private symbol.
+_RESTART_REQUIRED_FIELDS = frozenset({
+    "ctx_size", "kv", "parallel", "binary", "gguf",
+    "llama_port", "daemon_port",
+})
+
+# Fields whose change replaces the running model with a *different*
+# one (not just a tuning). Triggers a harder-stop confirmation.
+_MODEL_SWAP_FIELDS = frozenset({"gguf", "binary"})
+
+# Fields whose change only affects CLI client configs (opencode.json
+# advertises contextWindow/limit.output). No daemon restart needed.
+_SYNC_ONLY_FIELDS = frozenset({"max_tokens", "model_id", "reasoning"})
+
 
 @dataclass(frozen=True)
 class LaunchApp:
@@ -198,6 +215,10 @@ class LauncherApp(App[dict | None]):
                 }
             except Exception:
                 self._statuses[spec.name] = {}
+        # Live values change when llama-server boots/restarts; the
+        # settings row cache must reflect that, otherwise we'd render
+        # stale "live: 8192" forever.
+        invalidate_settings_rows()
         self._refresh += 1
 
     def watch__refresh(self, _: int) -> None:
@@ -214,7 +235,7 @@ class LauncherApp(App[dict | None]):
                 return
             self.model_idx = (self.model_idx + delta) % len(self.specs)
         elif self.focus_pane == "settings":
-            rows = _settings_rows(self.specs)
+            rows = _settings_rows(self.specs, app=self)
             if not rows:
                 return
             self.settings_idx = (self.settings_idx + delta) % len(rows)
@@ -251,7 +272,7 @@ class LauncherApp(App[dict | None]):
         self._refresh += 1
 
     def _current_setting(self) -> tuple[str, str, str] | None:
-        rows = _settings_rows(self.specs)
+        rows = _settings_rows(self.specs, app=self)
         if not rows:
             return None
         idx = max(0, min(self.settings_idx, len(rows) - 1))
@@ -266,12 +287,27 @@ class LauncherApp(App[dict | None]):
         if current is None:
             return
         name, field, value = current
-        choices = _SETTINGS_CHOICES.get(field)
+        # Look up the spec so the dropdown can be spec-aware (e.g.
+        # ctx_size filtered against the model's max + RAM clamp).
+        spec = next((s for s in self.specs if s.name == name), None)
+        choices = (
+            _choices_for_field(spec, field)
+            if spec is not None
+            else _SETTINGS_CHOICES.get(field)
+        )
+        # For the text-editor path, use the registry value, not the
+        # "reg:X · live:Y" display string — the user types a value,
+        # not a sentence.
+        edit_value = (
+            str(getattr(spec, field, ""))
+            if spec is not None and not value.startswith("reg:")
+            else value
+        )
         if choices is not None:
-            screen = SettingsChoiceScreen(name, field, value, choices)
+            screen = SettingsChoiceScreen(name, field, edit_value, choices)
             self.push_screen(screen, self._on_choice_dismissed)
         else:
-            screen = SettingsEditScreen(name, field, value)
+            screen = SettingsEditScreen(name, field, edit_value)
             self.push_screen(screen, self._on_edit_dismissed)
 
     def _on_choice_dismissed(self, result: str | None) -> None:
@@ -285,14 +321,39 @@ class LauncherApp(App[dict | None]):
             if current is None:
                 return
             name, field, value = current
+            spec = next((s for s in self.specs if s.name == name), None)
+            edit_value = (
+                str(getattr(spec, field, ""))
+                if spec is not None and not value.startswith("reg:")
+                else value
+            )
             self.push_screen(
-                SettingsEditScreen(name, field, value), self._on_edit_dismissed
+                SettingsEditScreen(name, field, edit_value), self._on_edit_dismissed
             )
             return
+        # result is a real choice value (not the custom sentinel).
+        # Skip the choice-modal and commit directly.
         self._on_edit_dismissed(result)
+        return
 
     def _on_edit_dismissed(self, new_value: str | None) -> None:
-        """Commit the edit (or no-op on cancel). Called by the modal."""
+        """Commit the edit (or no-op on cancel). Called by the modal.
+
+        Branches on the field class to do the right downstream work:
+          * Restart-required (ctx_size, kv, parallel, gguf, binary,
+            llama_port, daemon_port) → confirmation modal, then
+            update_spec_field(apply=True) which restarts the daemon.
+          * Sync-only (max_tokens, model_id, reasoning) → write the
+            registry and re-sync opencode/openclaw/hermes/codex
+            configs without touching the running daemon.
+          * No-op (always_on, boot) → registry write only.
+
+        The legacy behaviour ("registry only, no daemon work") used to
+        be the only path and is what made the panel lie: the panel
+        showed the new value but opencode.json still advertised the
+        old contextWindow, and llama-server still ran with the old
+        -c flag. See `update_spec_field(apply=...)` for the contract.
+        """
         if new_value is None:
             self.notify("edit cancelled", timeout=2)
             return
@@ -300,18 +361,71 @@ class LauncherApp(App[dict | None]):
         if current is None:
             return
         name, field, _ = current
+        if field in _RESTART_REQUIRED_FIELDS:
+            # Modal: ask first. Use a different label for the model-swap
+            # fields (gguf / binary) — those change the model entirely,
+            # not just its tuning.
+            if field in _MODEL_SWAP_FIELDS:
+                title = f"{name}.{field} → {new_value}"
+                body = (
+                    f"This replaces the running model with a different one.\n\n"
+                    f"Current model: {name}\n"
+                    f"New {field}: {new_value}\n\n"
+                    f"llama-server will be stopped and restarted."
+                )
+            else:
+                title = f"{name}.{field} = {new_value}"
+                body = (
+                    "llama-server will be stopped and restarted with the new setting.\n"
+                    "Approximate downtime: a few seconds.\n\n"
+                    "Proceed?"
+                )
+            self.push_screen(
+                ConfirmRestartScreen(title, body),
+                lambda ok: self._commit_edit(name, field, new_value, apply=bool(ok)),
+            )
+            return
+        # Sync-only and no-op fields go straight to the commit step.
+        self._commit_edit(name, field, new_value, apply=field in _SYNC_ONLY_FIELDS)
+
+    def _commit_edit(self, name: str, field: str, new_value: str, apply: bool) -> None:
+        """Write the registry, optionally apply the downstream effect,
+        and surface what happened to the user."""
         from .. import ctl as ctl_mod
         try:
-            ctl_mod.update_spec_field(name, field, new_value)
+            ctl_mod.update_spec_field(name, field, new_value, apply=apply)
         except (ValueError, KeyError) as e:
             self.notify(str(e), timeout=4, severity="error")
+            return
+        except (RuntimeError, OSError) as e:
+            # Restart required but failed (binary not built, RAM too
+            # low, etc.). Registry still holds the new value; tell the
+            # user the restart failed and the next launch will use it.
+            self.specs = ctl_mod.load_registry()
+            invalidate_settings_rows()
+            self._refresh += 1
+            self.notify(
+                f"{name}.{field} = {new_value}  (saved, but restart failed: {e})",
+                timeout=6, severity="warning",
+            )
             return
         # Reload specs so the row shows the new value.
         self.specs = ctl_mod.load_registry()
         invalidate_settings_rows()
-        self.notify(
-            f"{name}.{field} = {new_value}", timeout=3,
-        )
+        if field in _RESTART_REQUIRED_FIELDS:
+            self.notify(
+                f"{name}.{field} = {new_value}  ·  restarted, configs synced",
+                timeout=3,
+            )
+        elif field in _SYNC_ONLY_FIELDS:
+            self.notify(
+                f"{name}.{field} = {new_value}  ·  configs synced",
+                timeout=3,
+            )
+        else:
+            self.notify(
+                f"{name}.{field} = {new_value}", timeout=3,
+            )
         self._refresh += 1
 
     def action_toggle_mode(self) -> None:
@@ -540,7 +654,7 @@ class LauncherApp(App[dict | None]):
         gets the yellow accent so the user can see what Enter will edit."""
         out: list[Text] = []
         out.append(Text(self._GUT + "Settings", style=f"bold {art.YELLOW}"))
-        rows = _settings_rows(self.specs)
+        rows = _settings_rows(self.specs, app=self)
         if not rows:
             out.append(Text(self._GUT + "(no models in registry)",
                             style="dim"))
@@ -759,6 +873,74 @@ class SettingsEditScreen(ModalScreen[str | None]):
         self.dismiss(None)
 
 
+class ConfirmRestartScreen(ModalScreen[bool]):
+    """Two-button confirmation modal: are you sure you want to restart
+    llama-server? Dismisses with True on confirm, False on cancel.
+
+    Used before any settings edit that requires restarting the daemon
+    (ctx_size, kv, parallel, gguf, binary, llama_port, daemon_port).
+    The model-swap fields (gguf, binary) use a different body copy.
+    """
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel", show=False, priority=True),
+    ]
+
+    DEFAULT_CSS = """
+    ConfirmRestartScreen {
+        align: center middle;
+    }
+    #confirm-dialog {
+        width: 70;
+        height: auto;
+        padding: 1 2;
+        background: $boost;
+        border: round $warning;
+    }
+    #confirm-dialog Label {
+        width: 100%;
+        content-align: center middle;
+    }
+    #confirm-title {
+        margin-bottom: 1;
+    }
+    #confirm-body {
+        text-align: center;
+    }
+    #confirm-buttons {
+        width: 100%;
+        height: auto;
+        margin-top: 1;
+        align: right middle;
+    }
+    #confirm-buttons Button {
+        margin-left: 1;
+    }
+    """
+
+    def __init__(self, title: str, body: str) -> None:
+        super().__init__()
+        self._title = title
+        self._body = body
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="confirm-dialog"):
+            yield Label(self._title, id="confirm-title")
+            yield Label(self._body, id="confirm-body")
+            with Horizontal(id="confirm-buttons"):
+                yield Button("Cancel", id="confirm-cancel")
+                yield Button("Proceed", id="confirm-ok", variant="warning")
+
+    def on_mount(self) -> None:
+        self.query_one("#confirm-ok", Button).focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id == "confirm-ok")
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
+
 class SettingsChoiceScreen(ModalScreen[str | None]):
     """Modal that asks for a new value from preset choices.
 
@@ -858,15 +1040,87 @@ class SettingsChoiceScreen(ModalScreen[str | None]):
 _SETTINGS_ROWS_CACHE: dict[int, tuple[tuple[str, str, str], ...]] = {}
 
 
-def _settings_rows(specs: Any) -> tuple[tuple[str, str, str], ...]:
+def _live_value(app: LauncherApp, spec: Any, field: str) -> Any:
+    """Effective value for the field — registry value is the plan, this
+    is what's actually running. Falls back to the registry on first
+    boot or when the model isn't loaded.
+
+    Uses the status poll that already runs every 3 seconds (slot_ctx
+    is captured there).
+    """
+    if field in ("ctx_size", "max_tokens"):
+        st = app._statuses.get(spec.name, {}) if app is not None else {}
+        slot = st.get("ctx")
+        if slot:
+            return slot
+    return getattr(spec, field, None)
+
+
+def _choices_for_field(spec: Any, field: str) -> dict[str, str] | None:
+    """Return the dropdown choices for ``field`` on ``spec``.
+
+    Static fields (parallel, kv, reasoning, always_on, boot) get the
+    same choices for every model. Dynamic fields (ctx_size) get a
+    spec-aware list filtered against the GGUF's max context and the
+    RAM clamp from ``_fit_plan`` — so the user can never pick a value
+    that would be rejected by ``_check_ram`` at launch.
+
+    The ``custom…`` option is always appended; power users can still
+    type any value through the text editor (the text-modal path then
+    reuses ``update_spec_field`` which still validates).
+    """
+    base = _SETTINGS_CHOICES.get(field)
+    if base is None or field != "ctx_size":
+        return base
+    # Spec-aware ctx_size: filter the preset list against the model's
+    # GGUF max context (e.g. a 9B at 40960 max shouldn't offer 131072).
+    from .. import ctl as ctl_mod
+    cap = spec.ctx_size
+    model_max = ctl_mod._model_max_ctx(spec)
+    if model_max:
+        cap = min(cap, model_max)
+    # The RAM clamp is the smaller of the two. We approximate it with
+    # the live `_fit_plan` value (what llama-server would actually
+    # boot with on this box). If we can't read RAM, fall back to the
+    # registry cap so the user at least sees what's configured.
+    try:
+        plan_ctx = ctl_mod._fit_plan(spec)[0]
+        if plan_ctx:
+            cap = min(cap, plan_ctx)
+    except (RuntimeError, OSError, ValueError):
+        pass
+    filtered: dict[str, str] = {}
+    for label, value in base.items():
+        if value == _CUSTOM_VALUE:
+            continue
+        try:
+            if int(value) <= cap:
+                filtered[label] = value
+        except (ValueError, TypeError):
+            filtered[label] = value
+    filtered["custom…"] = _CUSTOM_VALUE
+    return filtered
+
+
+def _settings_rows(
+    specs: Any,
+    app: LauncherApp | None = None,
+) -> tuple[tuple[str, str, str], ...]:
     """Flatten every editable spec field into (name, field, value) rows.
 
     Read-only spec fields (``name``, ``source``) are skipped so the
     settings pane only exposes things the user can actually change.
 
+    ``value`` is the LIVE value when one is available (slot context,
+    running kv precision). The render step compares it to the
+    registry value and surfaces a two-column layout when they differ,
+    so the user can see "what's planned" vs "what's running".
+
     Cached by the `specs` list's identity (`id(specs)`) so re-renders
     with the same registry state are O(1). The launcher invalidates
-    the cache after `update_spec_field` reloads the registry.
+    the cache after `update_spec_field` reloads the registry. The
+    cache also drops on every status poll refresh (live values change
+    when llama-server boots or restarts).
     """
     key = id(specs)
     cached = _SETTINGS_ROWS_CACHE.get(key)
@@ -879,8 +1133,21 @@ def _settings_rows(specs: Any) -> tuple[tuple[str, str, str], ...]:
         for field in _SETTINGS_FIELDS:
             if field not in ctl_mod._EDITABLE_FIELDS:
                 continue
-            value = getattr(spec, field, None)
-            rows.append((spec.name, field, "" if value is None else str(value)))
+            reg_value = getattr(spec, field, None)
+            live_value = _live_value(app, spec, field)
+            # When the live value agrees with the registry, render the
+            # plain value. When they differ, render "registry · live"
+            # so the user can see what's actually running.
+            mismatched = (
+                live_value is not None
+                and reg_value is not None
+                and str(live_value) != str(reg_value)
+            )
+            if mismatched:
+                value = f"reg:{reg_value} · live:{live_value}"
+            else:
+                value = "" if reg_value is None else str(reg_value)
+            rows.append((spec.name, field, value))
     out = tuple(rows)
     _SETTINGS_ROWS_CACHE[key] = out
     return out

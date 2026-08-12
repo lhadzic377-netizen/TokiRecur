@@ -205,6 +205,14 @@ def test_settings_edit_modal_commits_new_value():
     We bypass the Input widget's text editing (too fragile to simulate
     via pilot.press) and drive the launcher's callback directly — that
     is the path the modal's Submitted handler invokes.
+
+    gguf is a model-swap field (restart-required + harder-stop), so the
+    commit goes through ConfirmRestartScreen. Drive the modal flow:
+    push the edit dismiss → assert the confirm modal opens → press
+    Proceed → registry writes. The restart itself doesn't run because
+    the daemon isn't reachable in tests, so the spec still gets the
+    new gguf value before the runtime error fires (caught and surfaced
+    as a warning notification, registry still updated).
     """
     async def run_app():
         app = LauncherApp()
@@ -215,6 +223,10 @@ def test_settings_edit_modal_commits_new_value():
             # We're on the first row (9b.gguf). Call the dismiss callback
             # the modal would invoke on submit.
             app._on_edit_dismissed("/tmp/new-9b.gguf")
+            await pilot.pause()
+            # The confirm modal opened; press Proceed.
+            assert app.screen.__class__.__name__ == "ConfirmRestartScreen"
+            await pilot.click("#confirm-ok")
             await pilot.pause()
             new_gguf = app.specs[0].gguf
         return new_gguf
@@ -390,7 +402,14 @@ def _setting_row_index(app, field: str) -> int:
 
 def test_settings_dropdown_save_commits_preset():
     """Enter on a dropdown field opens a choice modal; picking a preset
-    and pressing Save writes it to the registry."""
+    and pressing Save writes it to the registry.
+
+    kv is a restart-required field, so the commit goes through the
+    ConfirmRestartScreen after the choice modal dismisses. Press
+    Proceed on the confirm modal; the restart itself fails (no live
+    daemon in tests) but the registry write still happens before the
+    RuntimeError fires — caught and surfaced as a warning.
+    """
     from textual.widgets import Select
 
     async def run_app():
@@ -406,6 +425,10 @@ def test_settings_dropdown_save_commits_preset():
             select = app.screen.query_one("#settings-choice-select", Select)
             select.value = "q8_0"
             await pilot.click("#settings-save")
+            await pilot.pause()
+            # Choice screen dismissed; the restart-required modal opened.
+            assert app.screen.__class__.__name__ == "ConfirmRestartScreen"
+            await pilot.click("#confirm-ok")
             await pilot.pause()
             return app.specs[0].kv
 
@@ -454,3 +477,189 @@ def test_settings_dropdown_custom_chains_to_text_modal():
 
     assert asyncio.run(run_app()) == "SettingsEditScreen"
 
+
+
+# ── Settings panel v2: live values + confirmation modal + dynamic choices ──
+
+
+def test_settings_renders_two_columns_when_registry_and_live_differ():
+    """When the live slot context disagrees with the registry value
+    (e.g. the user just edited 131072 but RAM-clamped to 64000), the
+    settings row shows both numbers so the user can see what's running."""
+    # 9b defaults to ctx_size 200000. Inject a fake status poll so the
+    # "live" value disagrees with the registry.
+    from tokirecur import ctl
+    from tokirecur.tui.launcher import _settings_rows
+
+    class FakeApp:
+        _statuses = {"9b": {"ctx": 64000}}
+
+    rows = _settings_rows(ctl.load_registry(), app=FakeApp())
+    ctx_rows = [(n, f, v) for n, f, v in rows if f == "ctx_size"]
+    assert len(ctx_rows) >= 1
+    # At least one ctx_size row shows the two-column format.
+    assert any("reg:" in v and "live:" in v for _, _, v in ctx_rows), (
+        f"expected reg:/live: in some ctx row, got {ctx_rows!r}"
+    )
+
+
+def test_settings_renders_single_value_when_registry_and_live_match():
+    """When the live slot context matches the registry, show the plain
+    value (no reg: / live: prefix)."""
+    from tokirecur import ctl
+    from tokirecur.tui.launcher import _settings_rows
+
+    class FakeApp:
+        _statuses = {"9b": {"ctx": 200000}}
+
+    rows = _settings_rows(ctl.load_registry(), app=FakeApp())
+    ctx_rows = [(n, f, v) for n, f, v in rows if f == "ctx_size"]
+    # 9b's ctx_size is 200000 (default), live is 200000 — no prefix.
+    matching = [v for _, _, v in ctx_rows if v == "200000"]
+    assert matching
+
+
+def test_settings_choices_for_ctx_filters_over_model_max(monkeypatch):
+    """The dynamic ctx_size dropdown excludes values above the model's
+    GGUF max context. A 9B with general.context_length=40960 shouldn't
+    offer 131072."""
+    from tokirecur.tui.launcher import _choices_for_field
+
+    class FakeSpec:
+        ctx_size = 200000  # registry value
+        gguf = "/tmp/fake.gguf"
+
+    # Stub _model_max_ctx to return 40960 (a small-model cap).
+    from tokirecur import ctl
+    monkeypatch.setattr(ctl, "_model_max_ctx", lambda spec: 40960)
+    # RAM plan says we can fit 200000 — that should NOT widen the cap.
+    monkeypatch.setattr(ctl, "_fit_plan", lambda spec, **kw: (200000, "f16", 1))
+
+    choices = _choices_for_field(FakeSpec(), "ctx_size")
+    assert choices is not None
+    # All preset integers above 40960 should be filtered out.
+    for label, value in choices.items():
+        if value in ("__custom__",):
+            continue
+        assert int(value) <= 40960, (
+            f"choice {label}={value} exceeds model max 40960"
+        )
+    # custom… option is always preserved.
+    assert "__custom__" in choices.values()
+
+
+def test_settings_choices_for_non_ctx_fields_are_static(monkeypatch):
+    """Non-ctx_size fields return the same dict for every spec."""
+    from tokirecur.tui.launcher import _SETTINGS_CHOICES, _choices_for_field
+
+    class FakeSpec:
+        pass
+
+    assert _choices_for_field(FakeSpec(), "kv") == _SETTINGS_CHOICES["kv"]
+    assert _choices_for_field(FakeSpec(), "parallel") == _SETTINGS_CHOICES["parallel"]
+    assert _choices_for_field(FakeSpec(), "reasoning") == _SETTINGS_CHOICES["reasoning"]
+
+
+def test_settings_sync_only_field_does_not_show_confirm():
+    """Editing max_tokens (sync-only) commits directly without a
+    ConfirmRestartScreen."""
+    async def run_app():
+        app = LauncherApp()
+        async with app.run_test(size=(100, 34)) as pilot:
+            await pilot.pause()
+            await pilot.press("s")
+            await pilot.pause()
+            # Navigate to max_tokens (sync-only). The first row is gguf;
+            # max_tokens is several rows down in the default ordering.
+            app.settings_idx = _setting_row_index(app, "max_tokens")
+            app._on_edit_dismissed("4096")
+            await pilot.pause()
+            # No confirm modal opened; the registry was updated.
+            assert app.screen.__class__.__name__ != "ConfirmRestartScreen"
+            return app.specs[0].max_tokens
+
+    assert asyncio.run(run_app()) == 4096
+
+
+def test_settings_noop_field_does_not_show_confirm():
+    """Editing always_on (no-op field) commits directly."""
+    async def run_app():
+        app = LauncherApp()
+        async with app.run_test(size=(100, 34)) as pilot:
+            await pilot.pause()
+            await pilot.press("s")
+            await pilot.pause()
+            app.settings_idx = _setting_row_index(app, "always_on")
+            app._on_edit_dismissed("true")
+            await pilot.pause()
+            assert app.screen.__class__.__name__ != "ConfirmRestartScreen"
+            return app.specs[0].always_on
+
+    assert asyncio.run(run_app()) is True
+
+
+def test_settings_restart_required_field_opens_confirm_modal():
+    """Editing ctx_size (restart-required) pushes the ConfirmRestartScreen
+    and the registry is NOT updated until the user presses Proceed."""
+    async def run_app():
+        app = LauncherApp()
+        async with app.run_test(size=(100, 34)) as pilot:
+            await pilot.pause()
+            await pilot.press("s")
+            await pilot.pause()
+            original_ctx = app.specs[0].ctx_size
+            app._on_edit_dismissed("8192")
+            await pilot.pause()
+            # Confirm modal should be on screen.
+            assert app.screen.__class__.__name__ == "ConfirmRestartScreen"
+            # Registry NOT updated yet (modal gates the apply).
+            assert app.specs[0].ctx_size == original_ctx
+            # Press Cancel: registry still untouched, modal dismisses.
+            await pilot.click("#confirm-cancel")
+            await pilot.pause()
+            assert app.specs[0].ctx_size == original_ctx
+        return None
+
+    asyncio.run(run_app())
+
+
+def test_settings_restart_required_confirm_proceed_triggers_apply(monkeypatch):
+    """Pressing Proceed on the confirm modal drives the apply path:
+    update_spec_field(apply=True) is called, which calls use_model."""
+    from tokirecur import ctl as ctl_mod
+
+    use_model_calls: list[str] = []
+    sync_calls: list[str] = []
+
+    def fake_use_model(name, **kwargs):
+        use_model_calls.append(name)
+        return ctl_mod.get_model(name)
+
+    def fake_sync(spec, **kwargs):
+        sync_calls.append(spec.name)
+
+    monkeypatch.setattr(ctl_mod, "use_model", fake_use_model)
+    monkeypatch.setattr(ctl_mod, "sync_cli_configs", fake_sync)
+
+    async def run_app():
+        app = LauncherApp()
+        async with app.run_test(size=(100, 34)) as pilot:
+            await pilot.pause()
+            await pilot.press("s")
+            await pilot.pause()
+            # Navigate to ctx_size (restart-required, not model-swap —
+            # so the test doesn't have to navigate the harder-stop modal).
+            app.settings_idx = _setting_row_index(app, "ctx_size")
+            app._on_edit_dismissed("8192")
+            await pilot.pause()
+            assert app.screen.__class__.__name__ == "ConfirmRestartScreen"
+            await pilot.click("#confirm-ok")
+            await pilot.pause()
+            return app.specs[0].ctx_size
+
+    new_ctx = asyncio.run(run_app())
+    assert new_ctx == 8192
+    assert use_model_calls == ["9b"]
+    # sync_cli_configs was NOT called separately (use_model calls it
+    # internally); the TUI relies on use_model's existing sync.
+    assert sync_calls == []

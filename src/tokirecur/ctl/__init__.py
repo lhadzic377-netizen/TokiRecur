@@ -810,16 +810,47 @@ _EDITABLE_FIELDS: dict[str, Callable[[str], Any]] = {
 }
 
 
+# Fields whose change requires a llama-server restart (the spec's
+# launch window changes; the running server cannot honour the new value).
+_RESTART_REQUIRED_FIELDS = frozenset({
+    "ctx_size", "kv", "parallel", "binary", "gguf",
+    "llama_port", "daemon_port",
+})
+
+# Fields whose change only affects CLI client configs (opencode.json
+# advertises contextWindow/limit.output). No daemon restart needed.
+_SYNC_ONLY_FIELDS = frozenset({
+    "max_tokens", "model_id", "reasoning",
+})
+
+
 def update_spec_field(
     name: str,
     field: str,
     value: str,
     registry: Path | None = None,
+    apply: bool = False,
 ) -> ModelSpec:
     """Update one registry field on a named spec, validate, persist.
 
     Returns the updated spec so the caller can refresh its view.
     Raises ``ValueError`` for unknown fields or invalid values.
+
+    When ``apply=True`` the function also drives the right downstream
+    effect so the edit actually takes effect on the running stack:
+
+      * ``ctx_size``, ``kv``, ``parallel``, ``binary``, ``gguf``,
+        ``llama_port``, ``daemon_port`` → ``use_model(name)`` (stops
+        the running daemon if any, restarts with the new settings,
+        rewrites the four CLI configs).
+      * ``max_tokens``, ``model_id``, ``reasoning`` → ``sync_cli_configs``
+        only (no daemon restart).
+      * ``always_on``, ``boot`` → registry-only (no restart, no sync).
+
+    ``apply=False`` (the default) preserves the legacy behaviour: write
+    the registry and return, leave the running stack alone. Existing
+    CLI / installer callers keep working unchanged; only the TUI
+    settings panel passes ``apply=True``.
     """
     if field not in _EDITABLE_FIELDS:
         raise ValueError(
@@ -863,6 +894,35 @@ def update_spec_field(
             yaml.safe_dump({"models": [s.raw for s in specs]}, sort_keys=False),
         )
         invalidate_registry_cache(reg)
+
+    # Downstream orchestration. Only runs when the caller asked for it
+    # (the TUI passes apply=True; existing CLI/installer callers stay
+    # on the legacy "registry only" path).
+    if apply:
+        if field in _RESTART_REQUIRED_FIELDS:
+            # use_model() stops the running daemon (if any), restarts
+            # with the new settings, and rewrites the four CLI configs.
+            # We swallow errors so the caller's UX still shows the
+            # registry write succeeded even if the restart hiccups —
+            # the user can retry from the same screen.
+            try:
+                use_model(name, stop_others=False, registry=reg)
+            except (RuntimeError, OSError) as exc:
+                logger.warning(
+                    "could not restart '%s' after %s change: %s",
+                    name, field, exc,
+                )
+                raise
+        elif field in _SYNC_ONLY_FIELDS:
+            try:
+                sync_cli_configs(new_spec)
+            except Exception as exc:
+                logger.warning(
+                    "could not sync CLI configs after %s.%s change: %s",
+                    name, field, exc,
+                )
+        # always_on / boot: registry-only, nothing to do.
+
     return new_spec
 
 

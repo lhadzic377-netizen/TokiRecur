@@ -2291,3 +2291,163 @@ def test_default_ngl_zero_for_intel_igpu_only(monkeypatch):
 
     monkeypatch.setenv("TOKI_NGL", "7")
     assert ctl._default_ngl() == 7
+
+
+# ── Settings: update_spec_field(apply=...) downstream orchestration ──
+
+
+def test_update_spec_field_apply_false_does_not_restart_or_sync(seeded_env, monkeypatch):
+    """Default behaviour: write the registry, do nothing else. Pre-existing
+    callers (CLI installers, daemon startup) keep working unchanged."""
+    started: list[str] = []
+    synced: list[str] = []
+
+    def fake_use_model(name, **kwargs):
+        started.append(name)
+        # Mimic use_model raising if the binary is missing — the test
+        # only checks that update_spec_field did not call it.
+        raise RuntimeError("daemon not running in test")
+
+    def fake_sync(spec, **kwargs):
+        synced.append(spec.name)
+
+    monkeypatch.setattr(ctl, "use_model", fake_use_model)
+    monkeypatch.setattr(ctl, "sync_cli_configs", fake_sync)
+
+    ctl.update_spec_field("9b", "ctx_size", "8192", apply=False)
+    ctl.update_spec_field("9b", "max_tokens", "2048", apply=False)
+
+    assert started == []
+    assert synced == []
+    # Registry still has the new value.
+    assert ctl.get_model("9b").ctx_size == 8192
+    assert ctl.get_model("9b").max_tokens == 2048
+
+
+def test_update_spec_field_apply_true_restart_required_calls_use_model(
+    seeded_env, monkeypatch
+):
+    """apply=True + a restart-required field (ctx_size) calls use_model."""
+    started: list[tuple[str, dict]] = []
+    synced: list[str] = []
+
+    def fake_use_model(name, **kwargs):
+        started.append((name, kwargs))
+        return ctl.get_model(name)
+
+    def fake_sync(spec, **kwargs):
+        synced.append(spec.name)
+
+    monkeypatch.setattr(ctl, "use_model", fake_use_model)
+    monkeypatch.setattr(ctl, "sync_cli_configs", fake_sync)
+
+    ctl.update_spec_field("9b", "ctx_size", "8192", apply=True)
+
+    # use_model was called for restart-required fields. sync_cli_configs
+    # was NOT called separately — use_model already calls it internally
+    # (the TUI notification relies on that to avoid double work).
+    assert len(started) == 1
+    assert started[0][0] == "9b"
+    # stop_others=False so we don't disturb other models.
+    assert started[0][1].get("stop_others") is False
+    assert synced == []
+
+
+def test_update_spec_field_apply_true_restart_required_all_fields(
+    seeded_env, monkeypatch
+):
+    """Every restart-required field triggers use_model when apply=True."""
+    started: list[str] = []
+
+    def fake_use_model(name, **kwargs):
+        started.append(name)
+        return ctl.get_model(name)
+
+    monkeypatch.setattr(ctl, "use_model", fake_use_model)
+    monkeypatch.setattr(ctl, "sync_cli_configs", lambda *a, **kw: None)
+
+    for field in ("ctx_size", "kv", "parallel", "binary", "gguf",
+                  "llama_port", "daemon_port"):
+        started.clear()
+        value = {
+            "ctx_size": "8192",
+            "kv": "q8_0",
+            "parallel": "1",
+            "binary": "/usr/bin/llama-server",
+            "gguf": "/tmp/foo.gguf",
+            "llama_port": "9999",
+            "daemon_port": "9998",
+        }[field]
+        ctl.update_spec_field("9b", field, value, apply=True)
+        assert started == ["9b"], f"{field!r} did not trigger use_model"
+
+
+def test_update_spec_field_apply_true_sync_only_calls_sync_not_use_model(
+    seeded_env, monkeypatch
+):
+    """Sync-only fields re-sync CLI configs without restarting the daemon."""
+    started: list[str] = []
+    synced: list[str] = []
+
+    def fake_use_model(name, **kwargs):
+        started.append(name)
+        return ctl.get_model(name)
+
+    def fake_sync(spec, **kwargs):
+        synced.append(spec.name)
+
+    monkeypatch.setattr(ctl, "use_model", fake_use_model)
+    monkeypatch.setattr(ctl, "sync_cli_configs", fake_sync)
+
+    for field in ("max_tokens", "model_id", "reasoning"):
+        synced.clear()
+        started.clear()
+        value = {"max_tokens": "4096", "model_id": "9b-renamed",
+                 "reasoning": "off"}[field]
+        ctl.update_spec_field("9b", field, value, apply=True)
+        assert started == [], f"{field!r} should not restart daemon"
+        assert synced == ["9b"], f"{field!r} should sync CLI configs"
+
+
+def test_update_spec_field_apply_true_noop_field_does_nothing_extra(
+    seeded_env, monkeypatch
+):
+    """always_on / boot are registry-only; apply=True does nothing extra."""
+    started: list[str] = []
+    synced: list[str] = []
+
+    def fake_use_model(name, **kwargs):
+        started.append(name)
+        return ctl.get_model(name)
+
+    def fake_sync(spec, **kwargs):
+        synced.append(spec.name)
+
+    monkeypatch.setattr(ctl, "use_model", fake_use_model)
+    monkeypatch.setattr(ctl, "sync_cli_configs", fake_sync)
+
+    ctl.update_spec_field("9b", "always_on", "true", apply=True)
+    ctl.update_spec_field("9b", "boot", "true", apply=True)
+
+    assert started == []
+    assert synced == []
+    # Registry still updated.
+    assert ctl.get_model("9b").always_on is True
+    assert ctl.get_model("9b").boot is True
+
+
+def test_update_spec_field_restart_failed_returns_spec_anyway(seeded_env, monkeypatch):
+    """When use_model raises (binary missing, RAM too low, etc.) the
+    registry write still succeeds and the function propagates the
+    exception so the caller can decide how to surface it (the TUI
+    shows a warning notification in that case)."""
+    def fake_use_model(name, **kwargs):
+        raise RuntimeError("llama-server binary not built")
+
+    monkeypatch.setattr(ctl, "use_model", fake_use_model)
+    monkeypatch.setattr(ctl, "sync_cli_configs", lambda *a, **kw: None)
+
+    with pytest.raises(RuntimeError, match="binary not built"):
+        ctl.update_spec_field("9b", "ctx_size", "8192", apply=True)
+    # Registry still has the new value.
+    assert ctl.get_model("9b").ctx_size == 8192
