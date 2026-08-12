@@ -343,6 +343,13 @@
       progress bar while the real output still streams live.</p>
   </section>
 
+  <section class="honesty">
+    <p class="overline reveal">A note on compatibility</p>
+    <h2 class="reveal">Some models work. Some need a tweak. We're honest about it.</h2>
+    <p class="honesty-body reveal"><code>toki model pull</code> accepts every GGUF on Hugging Face, so the answer to "does this model work?" depends on the model, the quant, and your hardware. Some GGUFs boot clean and chat on the first try. Others need a chat template swap, a smaller context, a different quant, or a small edit to the registry. We test what we recommend and fix what we ship, but we won't pretend every combination works the same.</p>
+    <p class="honesty-body reveal">It will keep getting better. The failure modes we hit this week — broken chat templates, runtime crashes on a quant, ETXTBSY on a binary swap — feed the next round of fixes. Better auto-detection, fewer surprises, more recovery paths baked in. The code is open, the issues are public, and the path from "this model is broken" to "this model works" is one PR away.</p>
+  </section>
+
   <section id="architecture">
     <p class="overline reveal">Architecture</p>
     <h2 class="reveal">One cache, every client.</h2>
