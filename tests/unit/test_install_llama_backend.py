@@ -1,10 +1,12 @@
 """Unit tests for `toki model install-llama` backend/asset selection.
 
 Covers: backend auto-detection, the OS/arch -> asset pattern map, the
-newest-release walk, and ROCm env wiring. No network calls and no
-processes are spawned.
+newest-release walk, ROCm env wiring, ETXTBSY-safe binary replace,
+and retry-on-disconnect for the streaming download. No network calls
+and no real processes are spawned.
 """
 
+import os
 from pathlib import Path
 
 import pytest
@@ -396,3 +398,203 @@ def test_llama_args_use_mlx_for_mlx_binary():
     # And NOT the llama-server flag set:
     assert "-c" not in args
     assert "-ngl" not in args
+
+
+# ── install-llama: ETXTBSY-safe replace + retry-on-disconnect ─────────────
+
+
+def test_safe_copy_replace_renames_existing_dst_before_writing(tmp_path, monkeypatch):
+    """When the destination exists, ``_safe_copy_replace`` must rename
+    it aside first so the kernel doesn't refuse the write with
+    ETXTBSY (errno 26) — that's the fix for the "Text file busy" traceback
+    users hit when an old llama-server is still running."""
+    from tokirecur.cli import _safe_copy_replace
+
+    src = tmp_path / "src.bin"
+    src.write_bytes(b"new-content")
+    dst = tmp_path / "dst.bin"
+    dst.write_bytes(b"old-content-being-executed")
+
+    # Capture the rename order to prove the rename happens BEFORE the copy.
+    import shutil as _shutil
+    events: list[str] = []
+    real_rename = Path.rename
+
+    def tracking_rename(self, target):
+        events.append(f"rename:{self.name}")
+        return real_rename(self, target)
+
+    real_copy2 = _shutil.copy2
+
+    def tracking_copy2(s, d):
+        events.append(f"copy:{Path(s).name}->{Path(d).name}")
+        return real_copy2(s, d)
+
+    monkeypatch.setattr(Path, "rename", tracking_rename)
+    monkeypatch.setattr(_shutil, "copy2", tracking_copy2)
+
+    _safe_copy_replace(src, dst)
+
+    # Rename happened first, then copy.
+    assert events[0].startswith("rename:"), events
+    assert any(e.startswith("copy:") for e in events), events
+    # The renamed-aside file still has the old content (proves rename
+    # actually moved the old bytes, not just the new ones).
+    backup = dst.with_name(dst.name + f".stale.{os.getpid()}")
+    assert backup.exists()
+    assert backup.read_bytes() == b"old-content-being-executed"
+    # The destination now has the new bytes.
+    assert dst.read_bytes() == b"new-content"
+
+
+def test_safe_copy_replace_no_existing_dst(tmp_path):
+    """When the destination doesn't exist yet (fresh install), copy
+    directly — no rename, no backup."""
+    from tokirecur.cli import _safe_copy_replace
+
+    src = tmp_path / "src.bin"
+    src.write_bytes(b"fresh")
+    dst = tmp_path / "dst.bin"
+
+    _safe_copy_replace(src, dst)
+    assert dst.read_bytes() == b"fresh"
+    assert not list(tmp_path.glob("dst.bin.stale.*"))
+
+
+def test_sweep_stale_backups_removes_dead_pid(tmp_path):
+    """``.stale.<pid>`` backups whose owning pid is no longer alive
+    get cleaned up; live-pid orphans stay so the running daemon's mmap
+    isn't broken."""
+    from tokirecur.cli import _sweep_stale_backups
+
+    # Pick a pid that almost certainly isn't alive on the test box.
+    dead_pid = 2_000_000_000  # way past max valid pid on Linux
+    backup = tmp_path / "llama-server.stale.dead"
+    backup.write_bytes(b"orphan")
+
+    # Rename to use the dead-pid suffix.
+    target = tmp_path / f"llama-server.stale.{dead_pid}"
+    backup.rename(target)
+
+    _sweep_stale_backups(tmp_path, "llama-server")
+    assert not target.exists()
+
+
+def test_sweep_stale_backups_keeps_live_pid(tmp_path):
+    """A backup whose owning pid is alive (the current test process)
+    stays on disk — deleting it would break the process's mmap."""
+    from tokirecur.cli import _sweep_stale_backups
+
+    live_pid = os.getpid()
+    target = tmp_path / f"llama-server.stale.{live_pid}"
+    target.write_bytes(b"live")
+
+    _sweep_stale_backups(tmp_path, "llama-server")
+    assert target.exists()
+    target.unlink()  # tidy up
+
+
+def test_stream_download_with_retry_recovers_after_remote_protocol_error(tmp_path, monkeypatch):
+    """A transient RemoteProtocolError on the first attempt should
+    trigger a retry; the second attempt succeeds."""
+    import httpx
+
+    from tokirecur import cli as cli_mod
+    from tokirecur.cli import _stream_download_with_retry
+
+    dest = tmp_path / "blob"
+    attempts: list[int] = []
+
+    class FakeResp:
+        status_code = 200
+        def raise_for_status(self): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def iter_bytes(self, chunk_size):
+            # Always yield a single small chunk.
+            yield b"ok"
+
+    class FakeStreamCtx:
+        def __enter__(self): return FakeResp()
+        def __exit__(self, *a): return False
+
+    class FakeApi:
+        def stream(self, method, url):
+            attempts.append(len(attempts) + 1)
+            if len(attempts) == 1:
+                # First attempt: stream tears down mid-body.
+                class BadResp:
+                    def raise_for_status(self): pass
+                    def iter_bytes(self, chunk_size):
+                        raise httpx.RemoteProtocolError(
+                            "Server disconnected without sending a response."
+                        )
+                return BadResp()  # Not a context manager — caller will get
+                                  # the iter_bytes exception directly.
+            return FakeStreamCtx()
+
+    # Make the first FakeApi.stream return an object whose iter_bytes
+    # raises (no __enter__ needed since api.stream is called with `as`).
+    class BadApi:
+        def stream(self, method, url):
+            attempts.append(len(attempts) + 1)
+            if len(attempts) == 1:
+                class R:
+                    def __enter__(self): return self
+                    def __exit__(self, *a): return False
+                    def raise_for_status(self): pass
+                    def iter_bytes(self, chunk_size):
+                        raise httpx.RemoteProtocolError(
+                            "Server disconnected without sending a response."
+                        )
+                return R()
+            return FakeStreamCtx()
+
+    # Speed up retry sleeps in tests.
+    monkeypatch.setattr(cli_mod, "_DOWNLOAD_ATTEMPTS", 3)
+    monkeypatch.setattr(cli_mod.time, "sleep", lambda s: None)
+
+    _stream_download_with_retry(BadApi(), "https://example.test/x.tar.gz", dest)
+    assert attempts == [1, 2]
+    assert dest.read_bytes() == b"ok"
+
+
+def test_stream_download_with_retry_exhausts_attempts_then_raises(tmp_path, monkeypatch):
+    """If every attempt fails with a retryable error, surface a single
+    ClickException with the actionable hint — not the raw 60-line
+    httpx/httpcore traceback the old code raised."""
+    import httpx
+    from click.exceptions import ClickException
+
+    from tokirecur import cli as cli_mod
+    from tokirecur.cli import _stream_download_with_retry
+
+    dest = tmp_path / "blob"
+
+    class BadApi:
+        def stream(self, method, url):
+            class R:
+                def __enter__(self): return self
+                def __exit__(self, *a): return False
+                def raise_for_status(self): pass
+                def iter_bytes(self, chunk_size):
+                    raise httpx.RemoteProtocolError(
+                        "Server disconnected without sending a response."
+                    )
+            return R()
+
+    monkeypatch.setattr(cli_mod, "_DOWNLOAD_ATTEMPTS", 3)
+    monkeypatch.setattr(cli_mod.time, "sleep", lambda s: None)
+
+    with pytest.raises(ClickException) as exc_info:
+        _stream_download_with_retry(
+            BadApi(), "https://example.test/x.tar.gz", dest,
+            label="download foo.tar.gz",
+        )
+    msg = str(exc_info.value)
+    # User-facing hint, not raw exception text.
+    assert "after 3 attempts" in msg
+    assert "download foo.tar.gz" in msg
+    assert "TOKI_GITHUB_TOKEN" in msg
+    # Truncate between attempts so the file isn't poisoned by the partial write.
+    assert dest.exists() and dest.stat().st_size == 0

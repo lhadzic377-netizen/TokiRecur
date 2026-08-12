@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import sys
+import time
 from pathlib import Path
 
 import click
+import httpx
 from rich.console import Console
 from rich.panel import Panel
 
@@ -1218,6 +1221,141 @@ def _asset_patterns(os_name: str, arch: str) -> list[tuple[str, str]]:
     ]
 
 
+# Number of times to retry a streaming download from the GitHub
+# release-asset CDN before giving up. The body of a release asset is
+# typically tens of MB; transient TCP resets / TLS RSTs / captive-portal
+# interference are common enough that one retry is usually enough, but
+# we budget three attempts with exponential backoff to ride out the
+# rare multi-second outage without a wall of traceback.
+_DOWNLOAD_ATTEMPTS = 3
+# Retryable transport errors during a streaming GET. pygithub is built
+# on `requests`+`urllib3` and surfaces these via httpx when the
+# underlying response stream tears down mid-body.
+_RETRYABLE_STREAM_ERRORS: tuple[type[BaseException], ...] = (
+    httpx.RemoteProtocolError,
+    httpx.ConnectError,
+    httpx.ReadError,
+    httpx.TimeoutException,
+    ConnectionError,
+    OSError,  # catches ECONNRESET / EPIPE / ETXTBSY-after-rename races
+)
+
+
+def _safe_copy_replace(src: Path, dst: Path) -> None:
+    """Copy ``src`` over ``dst`` safely even when ``dst`` is the active
+    executable of a running process.
+
+    On POSIX, ``shutil.copy2`` (and ``os.replace`` / ``os.rename``) over
+    an mmap'd executable returns ETXTBSY (errno 26 — "Text file busy").
+    The fix is to rename the old file aside first; the unlinked inode
+    stays alive for any process that has it open, while the directory
+    entry now points at a fresh inode that accepts writes.
+
+    On Windows the running executable is locked differently and rename
+    may fail; ``shutil.copy2`` will then succeed if no process holds
+    the destination open. The behaviour we expose is: POSIX uses
+    rename-then-copy; Windows falls back to direct copy.
+
+    Raises a clear ``click.ClickException`` on ETXTBSY after the rename
+    path (should be unreachable on POSIX — kept as a safety net) and
+    surfaces the original OSError otherwise so the caller can decide.
+    """
+    if dst.exists():
+        backup = dst.with_name(dst.name + f".stale.{os.getpid()}")
+        try:
+            dst.rename(backup)
+        except OSError as exc:
+            # Windows: rename across an open executable can fail with
+            # PermissionError. Fall back to a direct copy (which will
+            # succeed if nothing has dst open, and fail with a clear
+            # ETXTBSY if something does).
+            if exc.errno not in (13, 22):  # EACCES / EINVAL on Windows
+                raise
+        else:
+            # Leave the backup in place; the running daemon's mmap keeps
+            # it alive. ``_sweep_stale_backups`` cleans it up once the
+            # owning pid has exited.
+            shutil.copy2(src, dst)
+            return
+    shutil.copy2(src, dst)
+
+
+def _sweep_stale_backups(bin_dir: Path, exe_name: str) -> None:
+    """Remove ``<exe_name>.stale.<pid>`` backups whose owning pid has
+    exited. Live pid → leave alone (the running daemon still needs the
+    inode); dead pid → unlink. Bound the cleanup to a single bin_dir so
+    it's cheap and never touches anything outside the install dir.
+    """
+    pattern = f"{exe_name}.stale.*"
+    for stale in bin_dir.glob(pattern):
+        suffix = stale.name.rsplit(".", 1)[-1]
+        try:
+            pid = int(suffix)
+        except ValueError:
+            # Not a pid; remove it as an unowned orphan.
+            try:
+                stale.unlink()
+            except OSError:
+                pass
+            continue
+        try:
+            os.kill(pid, 0)  # signal 0 → check alive, never delivers
+        except (ProcessLookupError, OSError):
+            # Dead (or permission denied — safe to ignore, leave it).
+            try:
+                stale.unlink()
+            except OSError:
+                pass
+
+
+def _stream_download_with_retry(
+    api, url: str, dest: Path, *, label: str = "download",
+) -> None:
+    """Stream ``url`` into ``dest`` with retry-on-disconnect. Replaces
+    ``dest`` between attempts (truncate) so a half-written previous
+    attempt doesn't poison the next one. Surfaces a clear
+    ``click.ClickException`` after the retry budget is exhausted —
+    never the raw 60-line traceback.
+    """
+    last_err: BaseException | None = None
+    for attempt in range(1, _DOWNLOAD_ATTEMPTS + 1):
+        try:
+            # Truncate between attempts so we never append a partial
+            # body to bytes from a previous interrupted response.
+            with open(dest, "wb") as fh:
+                with api.stream("GET", url) as resp:
+                    resp.raise_for_status()
+                    for chunk in resp.iter_bytes(1 << 20):
+                        fh.write(chunk)
+            return
+        except _RETRYABLE_STREAM_ERRORS as exc:
+            last_err = exc
+            if attempt >= _DOWNLOAD_ATTEMPTS:
+                break
+            wait = 2 ** attempt  # 2s, 4s
+            click.echo(
+                f"{label}: stream interrupted ({type(exc).__name__}); "
+                f"retrying in {wait}s ({attempt}/{_DOWNLOAD_ATTEMPTS - 1})…"
+            )
+            time.sleep(wait)
+    # All attempts exhausted; surface a single actionable error.
+    host = url.split("/releases/", 1)[0] + "/…"
+    raise click.ClickException(
+        f"{label}: failed to download after {_DOWNLOAD_ATTEMPTS} attempts "
+        f"({type(last_err).__name__}: {last_err}).\n"
+        f"  source: {host}\n"
+        f"  target: {dest}\n"
+        f"  likely causes:\n"
+        f"    - transient network / DNS / captive-portal interruption\n"
+        f"    - GitHub unauthenticated rate-limit on the release asset CDN\n"
+        f"    - corporate proxy stripping chunked transfer-encoding\n"
+        f"  fixes:\n"
+        f"    - retry: re-run `toki model install-llama`\n"
+        f"    - auth:  export TOKI_GITHUB_TOKEN=<PAT> then re-run\n"
+        f"    - VPN:   disable / change VPN / proxy and re-run\n"
+    )
+
+
 def _pick_asset(
     assets: list[dict],
     patterns: list[tuple[str, str]],
@@ -1266,17 +1404,15 @@ def _download_and_unpack_zip(api, asset: dict, bin_dir: Path,
     strips that folder so ``llama-server.exe``, ``ggml-cuda.dll``,
     ``cudart64_13.dll`` etc. land directly in bin_dir.
     """
-    import shutil
     import tempfile
     import zipfile
     with tempfile.TemporaryDirectory(prefix="toki-llama-") as tmp:
         tmp_dir = Path(tmp)
         zip_path = tmp_dir / asset["name"]
-        with api.stream("GET", asset["browser_download_url"]) as resp:
-            resp.raise_for_status()
-            with open(zip_path, "wb") as fh:
-                for chunk in resp.iter_bytes(1 << 20):
-                    fh.write(chunk)
+        _stream_download_with_retry(
+            api, asset["browser_download_url"], zip_path,
+            label=f"{progress_prefix}download {asset['name']}",
+        )
         if zip_path.suffix == ".zip":
             with zipfile.ZipFile(zip_path) as zf:
                 zf.extractall(tmp_dir)
@@ -1287,6 +1423,10 @@ def _download_and_unpack_zip(api, asset: dict, bin_dir: Path,
                     tf.extractall(tmp_dir, filter="data")
                 except TypeError:
                     tf.extractall(tmp_dir)
+        # Clear stale backups before writing the sidecar files; same
+        # rationale as in install_llama — a previous interrupted install
+        # may have left .stale.<pid> orphans to clean up.
+        _sweep_stale_backups(bin_dir, Path(asset["name"]).stem)
         for src in tmp_dir.rglob("*"):
             if not src.is_file() or src == zip_path:
                 continue
@@ -1294,13 +1434,12 @@ def _download_and_unpack_zip(api, asset: dict, bin_dir: Path,
             target_name = "/".join(rel.parts[1:]) if len(rel.parts) > 1 else rel.name
             target = bin_dir / target_name
             target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, target)
+            _safe_copy_replace(src, target)
 
 
 def _detect_gfx_version() -> str | None:
     """Parse `rocminfo` for the first gfxNNN target (e.g. gfx1151)."""
     import re
-    import shutil
     import subprocess
 
     rocminfo = shutil.which("rocminfo")
@@ -1360,12 +1499,9 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
     a note is printed.
     """
     import platform
-    import shutil
     import subprocess
     import tempfile
     import zipfile
-
-    import httpx
 
     from ..ctl import set_binary
 
@@ -1553,11 +1689,10 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
 
     with tempfile.TemporaryDirectory(prefix="toki-llama-") as tmp:
         zip_path = Path(tmp) / asset["name"]
-        with api.stream("GET", asset["browser_download_url"]) as resp:
-            resp.raise_for_status()
-            with open(zip_path, "wb") as fh:
-                for chunk in resp.iter_bytes(1 << 20):
-                    fh.write(chunk)
+        _stream_download_with_retry(
+            api, asset["browser_download_url"], zip_path,
+            label=f"download {asset['name']}",
+        )
         # Windows assets are .zip; Linux/macOS are .tar.gz (and older
         # releases used .zip everywhere, so accept both).
         if zip_path.suffix == ".zip":
@@ -1577,10 +1712,14 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
             raise RuntimeError(f"no {exe_name} found in the release archive")
         src = matches[0]
         dst = bin_dir / exe_name
-        shutil.copy2(src, dst)
+        # Clear any stale backups from previous interrupted installs
+        # whose owning pid has since exited; leaves live-pid orphans
+        # alone (the running daemon's mmap still depends on them).
+        _sweep_stale_backups(bin_dir, exe_name)
+        _safe_copy_replace(src, dst)
         for side in src.parent.iterdir():
             if side.is_file() and side != src:
-                shutil.copy2(side, bin_dir / side.name)
+                _safe_copy_replace(side, bin_dir / side.name)
 
         # CUDA 13.x ships cudart/cublas as a separate runtime archive
         # (the main archive has no cudart64_*.dll inside ggml-cuda.dll);
