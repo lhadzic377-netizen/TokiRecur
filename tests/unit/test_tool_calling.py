@@ -361,6 +361,17 @@ def test_nested_schema_patterns_stripped():
     assert out["properties"]["code"] == {}
 
 
+def test_property_named_pattern_preserved():
+    schema = {
+        "type": "object",
+        "properties": {"pattern": {"type": "string"}},
+        "required": ["pattern"],
+    }
+    out = _strip_patterns(schema)
+    assert out["properties"]["pattern"] == {"type": "string"}
+    assert out["required"] == ["pattern"]
+
+
 def test_sanitize_tools_strips_patterns_and_defaults_parameters():
     tools = [
         {"type": "function", "function": {"name": "no_params"}},

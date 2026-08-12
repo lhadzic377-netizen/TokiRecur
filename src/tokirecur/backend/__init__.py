@@ -49,7 +49,16 @@ def _strip_patterns(node: Any) -> Any:
     if isinstance(node, dict):
         out: dict[str, Any] = {}
         for key, value in node.items():
-            if key in ("pattern", "minLength", "maxLength"):
+            # Only strip the ``pattern``/``minLength``/``maxLength``
+            # *keywords* (string regexes and integer lengths). Property
+            # definitions are dicts, so a property *named* ``pattern``
+            # (e.g. the ``glob`` tool) must be preserved — stripping it
+            # leaves an empty ``properties`` schema whose grammar forces
+            # tool calls with empty ``{}`` arguments.
+            if (
+                key in ("pattern", "minLength", "maxLength")
+                and isinstance(value, (str, int, float))
+            ):
                 continue
             out[key] = _strip_patterns(value)
         return out
