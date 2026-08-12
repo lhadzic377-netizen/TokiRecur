@@ -381,6 +381,10 @@ h1 .accent { color: var(--accent); }
   margin-right: auto;
 }
 
+/* Push the CTAs down so they don't sit on top of the punchline
+   (joke text or "Other tiers: $0…"). */
+.pricing-card .cta { margin-top: 32px; }
+
 .pricing-fine-joke {
   font-style: italic;
   color: var(--dimmer);
