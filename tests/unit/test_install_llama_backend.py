@@ -571,6 +571,9 @@ def test_stream_download_with_retry_exhausts_attempts_then_raises(tmp_path, monk
 
     dest = tmp_path / "blob"
 
+    # Force the curl path to fail so we exercise the httpx fallback.
+    monkeypatch.setattr(cli_mod.shutil, "which", lambda name: None)
+
     class BadApi:
         def stream(self, method, url):
             class R:
@@ -592,9 +595,179 @@ def test_stream_download_with_retry_exhausts_attempts_then_raises(tmp_path, monk
             label="download foo.tar.gz",
         )
     msg = str(exc_info.value)
-    # User-facing hint, not raw exception text.
-    assert "after 3 attempts" in msg
+    # New error message format: actionable hint, not raw exception text.
+    assert "failed to download" in msg
+    assert "RemoteProtocolError" in msg
     assert "download foo.tar.gz" in msg
     assert "TOKI_GITHUB_TOKEN" in msg
     # Truncate between attempts so the file isn't poisoned by the partial write.
     assert dest.exists() and dest.stat().st_size == 0
+
+
+def test_curl_download_writes_file_and_returns(tmp_path, monkeypatch):
+    """Happy path: curl runs, exits 0, dest is non-empty."""
+    from tokirecur.cli import _curl_download
+
+    dest = tmp_path / "blob"
+    calls: list[list[str]] = []
+
+    class _Result:
+        returncode = 0
+        stderr = ""
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        dest.write_bytes(b"hello-curl")
+        return _Result()
+
+    monkeypatch.setattr("tokirecur.cli.subprocess.run", fake_run)
+    _curl_download("/usr/bin/curl", "https://example.test/x", dest,
+                   label="download x", token=None)
+    assert dest.read_bytes() == b"hello-curl"
+    assert calls and "--retry-all-errors" in calls[0]
+    assert "--max-time" in calls[0]
+    # No token → no Authorization header.
+    assert not any("Authorization" in a for a in calls[0])
+
+
+def test_curl_download_passes_bearer_token(tmp_path, monkeypatch):
+    """When GITHUB_TOKEN is set, curl gets an Authorization header."""
+    from tokirecur.cli import _curl_download
+
+    dest = tmp_path / "blob"
+    calls: list[list[str]] = []
+
+    class _Result:
+        returncode = 0
+        stderr = ""
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        dest.write_bytes(b"x")
+        return _Result()
+
+    monkeypatch.setenv("TOKI_GITHUB_TOKEN", "ghp_test123")
+    monkeypatch.setattr("tokirecur.cli.subprocess.run", fake_run)
+    _curl_download("/usr/bin/curl", "https://example.test/x", dest,
+                   label="download x", token="ghp_test123")
+    assert any(a == "Authorization: Bearer ghp_test123" for a in calls[0])
+
+
+def test_curl_download_raises_on_zero_byte_output(tmp_path, monkeypatch):
+    """curl --fail aborts on 4xx/5xx, leaving dest empty. That's our
+    signal to fall back to httpx, not a hard failure."""
+    from tokirecur.cli import _curl_download, _RetryableDownloadError
+
+    dest = tmp_path / "blob"
+
+    class _Result:
+        returncode = 0  # curl didn't error, but produced no body
+        stderr = ""
+
+    def fake_run(cmd, **kwargs):
+        # Don't create dest — simulates curl aborting on 4xx.
+        return _Result()
+
+    monkeypatch.setattr("tokirecur.cli.subprocess.run", fake_run)
+    with pytest.raises(_RetryableDownloadError) as exc_info:
+        _curl_download("/usr/bin/curl", "https://example.test/x", dest,
+                       label="download x", token=None)
+    assert "0 bytes" in str(exc_info.value)
+
+
+def test_curl_download_raises_on_nonzero_exit(tmp_path, monkeypatch):
+    """Non-zero curl exit (timeout, connection refused) is a retryable
+    signal, not a hard failure."""
+    from tokirecur.cli import _curl_download, _RetryableDownloadError
+
+    dest = tmp_path / "blob"
+
+    class _Result:
+        returncode = 56  # CURLE_RECV_ERROR
+        stderr = "Failure when receiving data from the peer"
+
+    def fake_run(cmd, **kwargs):
+        return _Result()
+
+    monkeypatch.setattr("tokirecur.cli.subprocess.run", fake_run)
+    with pytest.raises(_RetryableDownloadError) as exc_info:
+        _curl_download("/usr/bin/curl", "https://example.test/x", dest,
+                       label="download x", token=None)
+    msg = str(exc_info.value)
+    assert "56" in msg
+    assert "Failure when receiving data" in msg
+
+
+def test_stream_download_uses_curl_when_available(tmp_path, monkeypatch):
+    """When curl is on PATH, the primary path runs curl and never
+    touches the httpx client at all."""
+    from tokirecur import cli as cli_mod
+    from tokirecur.cli import _stream_download_with_retry
+
+    dest = tmp_path / "blob"
+    curl_called: list[str] = []
+    httpx_called: list[str] = []
+
+    class _Result:
+        returncode = 0
+        stderr = ""
+
+    def fake_run(cmd, **kwargs):
+        curl_called.append(cmd[0])
+        dest.write_bytes(b"from-curl")
+        return _Result()
+
+    def fake_which(name):
+        return "/usr/bin/curl" if name == "curl" else None
+
+    class BadApi:
+        def stream(self, *a, **kw):
+            httpx_called.append("should-not-be-called")
+            raise AssertionError("api.stream should not be called when curl succeeds")
+
+    monkeypatch.setattr(cli_mod.shutil, "which", fake_which)
+    monkeypatch.setattr(cli_mod.subprocess, "run", fake_run)
+    _stream_download_with_retry(
+        BadApi(), "https://example.test/x", dest, label="download x",
+    )
+    assert curl_called == ["/usr/bin/curl"]
+    assert httpx_called == []
+    assert dest.read_bytes() == b"from-curl"
+
+
+def test_stream_download_falls_back_to_httpx_when_curl_fails(tmp_path, monkeypatch):
+    """When curl fails (e.g. CDN keeps dropping the connection even
+    with --retry-all-errors), fall back to the in-process httpx path
+    before giving up."""
+    from tokirecur import cli as cli_mod
+    from tokirecur.cli import _stream_download_with_retry
+
+    dest = tmp_path / "blob"
+
+    class _Result:
+        returncode = 22  # HTTP 4xx — curl --fail aborts
+        stderr = "HTTP error 404"
+
+    def fake_run(cmd, **kwargs):
+        return _Result()
+
+    class GoodApi:
+        def stream(self, method, url):
+            class R:
+                def __enter__(self): return self
+                def __exit__(self, *a): return False
+                def raise_for_status(self): pass
+                def iter_bytes(self, chunk_size):
+                    yield b"from-"
+                    yield b"httpx"
+            return R()
+
+    def fake_which(name):
+        return "/usr/bin/curl" if name == "curl" else None
+
+    monkeypatch.setattr(cli_mod.shutil, "which", fake_which)
+    monkeypatch.setattr(cli_mod.subprocess, "run", fake_run)
+    _stream_download_with_retry(
+        GoodApi(), "https://example.test/x", dest, label="download x",
+    )
+    assert dest.read_bytes() == b"from-httpx"

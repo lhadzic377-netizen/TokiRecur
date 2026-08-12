@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -1311,13 +1312,40 @@ def _sweep_stale_backups(bin_dir: Path, exe_name: str) -> None:
 def _stream_download_with_retry(
     api, url: str, dest: Path, *, label: str = "download",
 ) -> None:
-    """Stream ``url`` into ``dest`` with retry-on-disconnect. Replaces
-    ``dest`` between attempts (truncate) so a half-written previous
-    attempt doesn't poison the next one. Surfaces a clear
-    ``click.ClickException`` after the retry budget is exhausted —
-    never the raw 60-line traceback.
+    """Stream ``url`` into ``dest`` with retry-on-disconnect.
+
+    Prefers ``curl`` because its ``--retry-all-errors`` semantics are
+    battle-tested for the "Server disconnected without sending a
+    response" pattern GitHub's release CDN shows under load. When curl
+    is missing or also fails, falls back to the in-process httpx path
+    with bounded exponential backoff. Surfaces a single actionable
+    ``click.ClickException`` after the combined retry budget is
+    exhausted — never the raw 60-line httpx/httpcore traceback.
     """
+    # Pygithub stores the token on the underlying Requester; for the
+    # plain httpx.Client path we read it from the same env vars so curl
+    # can authenticate identically.
+    token = (
+        os.environ.get("GITHUB_TOKEN")
+        or os.environ.get("TOKI_GITHUB_TOKEN")
+    )
+
     last_err: BaseException | None = None
+    curl_path = shutil.which("curl")
+    if curl_path:
+        try:
+            _curl_download(
+                curl_path, url, dest, label=label, token=token,
+            )
+            return
+        except _RetryableDownloadError as exc:
+            last_err = exc
+            click.echo(
+                f"{label}: curl path failed; falling back to httpx…"
+            )
+
+    # httpx fallback (in-process, no shell). Three attempts with
+    # exponential backoff.
     for attempt in range(1, _DOWNLOAD_ATTEMPTS + 1):
         try:
             # Truncate between attempts so we never append a partial
@@ -1338,11 +1366,71 @@ def _stream_download_with_retry(
                 f"retrying in {wait}s ({attempt}/{_DOWNLOAD_ATTEMPTS - 1})…"
             )
             time.sleep(wait)
-    # All attempts exhausted; surface a single actionable error.
+    _raise_download_error(label, url, dest, last_err)
+
+
+class _RetryableDownloadError(RuntimeError):
+    """Internal signal that the curl path failed and the caller should
+    try the in-process fallback (or, if curl was the last resort,
+    surface the actionable error to the user)."""
+
+
+def _curl_download(
+    curl_path: str, url: str, dest: Path, *,
+    label: str, token: str | None,
+) -> None:
+    """Stream ``url`` to ``dest`` using ``curl`` with native retry.
+
+    Raises ``_RetryableDownloadError`` on any non-zero exit, on a 0-byte
+    body (curl ``--fail`` aborts mid-download on 4xx/5xx and leaves the
+    target file empty), or on a binary that's not actually present.
+    """
+    cmd = [
+        curl_path,
+        "--fail",                # 4xx/5xx → non-zero exit, no body
+        "--location",            # follow GitHub release redirects
+        "--show-error",          # surface errors on stderr
+        "--silent",              # suppress progress meter
+        "--max-time", "600",     # 10-minute hard ceiling
+        "--connect-timeout", "30",
+        "--retry", "8",
+        "--retry-delay", "2",
+        "--retry-all-errors",    # retry on ANY error incl. TCP reset / TLS RST
+        "--retry-max-time", "300",  # give up on retrying after 5 min
+        "-o", str(dest),
+        url,
+    ]
+    if token:
+        cmd.insert(-1, "-H")
+        cmd.insert(-1, f"Authorization: Bearer {token}")
+
+    click.echo(f"{label}: using curl with --retry-all-errors…")
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        stderr = (result.stderr or "").strip()
+        raise _RetryableDownloadError(
+            f"curl exited {result.returncode}: "
+            f"{stderr or 'unknown error'}"
+        )
+    # curl --fail aborts on HTTP 4xx/5xx, leaving dest empty/partial
+    # (or never creating it). Either way the request never got a body.
+    if not dest.exists() or dest.stat().st_size == 0:
+        raise _RetryableDownloadError(
+            "curl wrote 0 bytes (likely 4xx/5xx — "
+            "check the URL or your GitHub token)"
+        )
+
+
+def _raise_download_error(
+    label: str, url: str, dest: Path, last_err: BaseException | None,
+) -> None:
+    """Surface a single actionable error after the combined retry budget
+    is exhausted. Never the raw 60-line httpx/httpcore traceback."""
     host = url.split("/releases/", 1)[0] + "/…"
+    name = type(last_err).__name__ if last_err else "UnknownError"
+    msg = str(last_err) if last_err else "no error captured"
     raise click.ClickException(
-        f"{label}: failed to download after {_DOWNLOAD_ATTEMPTS} attempts "
-        f"({type(last_err).__name__}: {last_err}).\n"
+        f"{label}: failed to download ({name}: {msg}).\n"
         f"  source: {host}\n"
         f"  target: {dest}\n"
         f"  likely causes:\n"
@@ -1499,7 +1587,6 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
     a note is printed.
     """
     import platform
-    import subprocess
     import tempfile
     import zipfile
 
