@@ -314,13 +314,18 @@ footer {
   background: var(--surface);
 }
 
-.reveal {
+/* Same progressive-enhancement pattern as the main site: animation
+   only fires when the inline script in <head> has set html.js-ready.
+   Without JS, .reveal is at its natural visible state — no
+   invisible content ever, no matter how the IntersectionObserver
+   behaves. */
+html.js-ready .reveal {
   opacity: 0;
   transform: translateY(10px);
   transition: opacity 0.45s ease, transform 0.45s ease;
 }
 
-.reveal.in-view { opacity: 1; transform: none; }
+html.js-ready .reveal.in-view { opacity: 1; transform: none; }
 
 @media (max-width: 820px) {
   .layout { grid-template-columns: 1fr; gap: 0; }
@@ -332,5 +337,5 @@ footer {
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
-  .reveal { opacity: 1; transform: none; }
+  html.js-ready .reveal { opacity: 1; transform: none; }
 }

@@ -773,14 +773,19 @@ footer {
 
 /* ── animations ─────────────────────────────────────────── */
 
-.reveal {
+/* Animation only fires when JS has marked the document as ready.
+   Without JS, every .reveal element is at its natural visible state —
+   no animation, but no invisible content either. The inline script in
+   <head> sets html.js-ready before any rendering, so the hidden
+   state only ever applies when JS is actually going to flip it back. */
+html.js-ready .reveal {
   opacity: 0;
   transform: translateY(12px);
   transition: opacity 0.5s ease, transform 0.5s ease;
   transition-delay: var(--d, 0s);
 }
 
-.reveal.in-view { opacity: 1; transform: none; }
+html.js-ready .reveal.in-view { opacity: 1; transform: none; }
 
 /* ── responsive ─────────────────────────────────────────── */
 
@@ -811,5 +816,5 @@ footer {
     animation: none !important;
     transition: none !important;
   }
-  .reveal { opacity: 1; transform: none; }
+  html.js-ready .reveal { opacity: 1; transform: none; }
 }
