@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tokirecur"
-version = "0.2.30"
+dynamic = ["version"]
 description = "Toki Recur — KV cache reuse for LLM inference. Drop-in prefix caching across CUDA, ROCm, and Vulkan."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -51,6 +51,12 @@ tokirecur-bench = "tokirecur.bench.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.dynamic]
+# Single source of truth: src/tokirecur/__init__.py:__version__.
+# Bump there, not here, to avoid the two-place drift the old
+# static `version = "…"` line caused.
+version = {attr = "tokirecur.__version__"}
 
 [tool.setuptools.package-data]
 # Runtime assets must ship in the wheel: the TUI stylesheet and the

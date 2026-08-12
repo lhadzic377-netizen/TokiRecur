@@ -80,7 +80,6 @@ def serve(
     memory_budget_mb: int,
 ) -> None:
     """Start the tokirecur daemon."""
-    import httpx
     import uvicorn  # noqa: F401
 
     from ..api.app import create_app
@@ -330,7 +329,6 @@ def doctor(fix: bool) -> None:
 
     click.echo(diagnose.run())
     # Stack health (existing checks, unchanged in spirit).
-    import httpx
 
     rows = []
     try:
@@ -968,7 +966,6 @@ def use(name: str, keep_others: bool, wait: bool, sync_only: bool,
         # grandchildren attached. SIG_IGN on SIGCHLD is the POSIX way
         # to opt into the kernel's auto-reap.
         import signal
-        import time
         # SIGCHLD does not exist on Windows; the auto-reap trick is a
         # POSIX-only nicety, skip it elsewhere.
         if hasattr(signal, "SIGCHLD"):
@@ -1528,7 +1525,6 @@ def _download_and_unpack_zip(api, asset: dict, bin_dir: Path,
 def _detect_gfx_version() -> str | None:
     """Parse `rocminfo` for the first gfxNNN target (e.g. gfx1151)."""
     import re
-    import subprocess
 
     rocminfo = shutil.which("rocminfo")
     if not rocminfo:
