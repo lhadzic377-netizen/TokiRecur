@@ -22,7 +22,7 @@ import threading
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
@@ -73,6 +73,15 @@ def _rate_ok(key: str) -> bool:
 app = FastAPI(title="Toki Recur site", docs_url=None, redoc_url=None)
 
 
+# StaticFiles(html=True) only auto-serves index.html for directory
+# requests; explicit routes let /pricing resolve to pricing.html so
+# the marketing URL stays clean (no .html suffix). Registered before
+# the catch-all mount so the route wins the lookup.
+@app.get("/pricing", include_in_schema=False)
+async def pricing() -> FileResponse:
+    return FileResponse(SITE_DIR / "pricing.html", media_type="text/html")
+
+
 @app.get("/api/wishlist")
 async def wishlist_get() -> dict:
     return {"count": _read_count()}
@@ -93,3 +102,4 @@ async def wishlist_post(request: Request, body: WishlistDelta) -> JSONResponse:
 
 
 app.mount("/", StaticFiles(directory=SITE_DIR, html=True), name="site")
+
