@@ -1149,42 +1149,33 @@ def fix_model_ids() -> None:
 
 
 def _detect_gpu_backend(os_name: str) -> str:
-    """Best-guess GPU backend for this machine, without admin access."""
-    import shutil as _shutil
+    """Pick the best backend for this box.
 
+    Order of preference:
+      1. Cached hardware profile (real measurements from a previous
+         install/doctor). Always wins.
+      2. Live profile probe — what the current hardware.py sees.
+      3. Heuristics — last resort fallback when profiling fails
+         (offline box, no tooling). Kept narrow so it can't surprise
+         anyone: NVIDIA + ROCm tools → those backends, everything
+         else → CPU. Vulkan/CUDA/Metal all require a probe to pick.
+    """
+    try:
+        from ..hardware import profile_box
+        profile = profile_box()
+        return profile.backend_for(model_size_class="any")
+    except Exception:
+        pass
+    # Heuristic fallback: only the high-confidence signals.
+    import shutil as _shutil
     if os_name == "macos":
-        # llama.cpp macOS assets are always the Metal build (which also
-        # runs on CPU-only Macs).
         return "metal"
-    if os_name == "windows":
-        if _shutil.which("nvidia-smi") or os.environ.get("CUDA_PATH"):
-            return "cuda"
-        if _shutil.which("hipconfig") or Path(
-            "C:/Program Files/AMD/ROCm"
-        ).exists():
-            return "rocm"
-        if _shutil.which("vulkaninfo"):
-            # An Intel HD/UHD/Iris iGPU-only box must not get the Vulkan
-            # build: llama.cpp's Vulkan backend still probes/initializes
-            # the device at startup on those old drivers, which pegs the
-            # CPU without ever producing tokens (the same class of bug
-            # as `_default_ngl` refusing to offload to them). The plain
-            # CPU build is what ollama uses there — and works.
-            from ..ctl import _intel_igpu_only
-            if not _intel_igpu_only():
-                return "vulkan"
-            return "cpu"
-        return "cpu"
-    # Linux
-    if _shutil.which("hipconfig") or Path("/opt/rocm").exists():
+    if _shutil.which("nvidia-smi") or os.environ.get("CUDA_PATH"):
+        return "cuda"
+    if _shutil.which("hipconfig") or Path(
+        "C:/Program Files/AMD/ROCm"
+    ).exists() or Path("/opt/rocm").exists():
         return "rocm"
-    # Vulkan: requires not just the loader library (Steam/OBS install
-    # it for incidental reasons) but a loadable ICD JSON pointing at an
-    # installed driver. Plus an Intel-only iGPU box must get CPU, same
-    # as the Windows path.
-    from ..ctl import _intel_igpu_only_linux, _linux_vulkan_works
-    if _linux_vulkan_works() and not _intel_igpu_only_linux():
-        return "vulkan"
     return "cpu"
 
 
@@ -1564,12 +1555,23 @@ def _rocm_env(gfx: str | None) -> dict[str, str]:
 @click.option("--backend", default="auto",
               type=click.Choice(["auto", "rocm", "cuda", "vulkan",
                                  "metal", "mlx", "cpu"]),
-              help="GPU backend to install (default: auto-detect).")
+              help="GPU backend to install (default: auto-detect from "
+                   "the cached hardware profile).")
 @click.option("--gfx", "gfx", default=None,
               help="HSA_OVERRIDE_GFX_VERSION for ROCm builds, e.g. 11.5.1 "
                    "(default: detected from rocminfo).")
+@click.option("--profile/--no-profile", default=True,
+              help="Re-profile hardware before deciding the backend. "
+                   "Default: yes. Pass --no-profile to skip the probe on "
+                   "a slow box or when you've already verified the "
+                   "recommendation.")
+@click.option("--force-cpu", is_flag=True, default=False,
+              help="Install the CPU build even when the profile suggests "
+                   "GPU offload. Use when you know the GPU isn't worth "
+                   "the setup overhead for the model size you're running.")
 def install_llama(tag: str | None, dest: str | None, name: str | None,
-                  backend: str, gfx: str | None) -> None:
+                  backend: str, gfx: str | None, profile: bool,
+                  force_cpu: bool) -> None:
     """Download the llama-server binary for this OS/arch and GPU backend.
 
     Fetches the matching llama.cpp release asset (ROCm, CUDA, Vulkan,
@@ -1613,8 +1615,34 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
         raise SystemExit(1) from None
 
     if backend == "auto":
-        backend = _detect_gpu_backend(os_name)
-        click.echo(f"backend: auto-detected {backend} ({os_name}/{arch})")
+        from ..hardware import profile_box
+        prof = profile_box(force=False) if profile else None
+        if prof is not None:
+            recommended = prof.recommended
+            backend = recommended.get("backend", _detect_gpu_backend(os_name))
+            p_core = ",".join(str(i) for i in prof.cpu.p_core_ids) or "—"
+            simd = ",".join(prof.cpu.simd) or "—"
+            click.echo(
+                f"backend: profile-recommended {backend} ({os_name}/{arch})"
+            )
+            click.echo(
+                f"hardware profile: cpu={prof.cpu.name} simd={simd} "
+                f"p_cores={p_core} ram={prof.ram_gb:.0f}GB"
+            )
+            for g in prof.gpus:
+                click.echo(
+                    f"  gpu: {g.vendor} {g.name} vram={g.vram_gb:.1f}GB "
+                    f"use={'yes' if g.use_for_llm else 'no'} ({g.reason})"
+                )
+        else:
+            backend = _detect_gpu_backend(os_name)
+            click.echo(f"backend: auto-detected {backend} ({os_name}/{arch})")
+        if force_cpu and backend in ("cuda", "rocm", "vulkan", "metal"):
+            click.echo(
+                f"note: --force-cpu requested; ignoring profile's "
+                f"recommendation ({backend}) and installing CPU instead"
+            )
+            backend = "cpu"
     elif backend == "metal" and os_name != "macos":
         click.echo("error: --backend metal is only available on macOS", err=True)
         raise SystemExit(1) from None

@@ -165,77 +165,83 @@ def test_set_binary_merges_env(tmp_path, monkeypatch):
     assert spec.env["HSA_OVERRIDE_GFX_VERSION"] == "11.5.1"
 
 
+def _stub_profile(monkeypatch, *, backend="cpu", ngl=0, threads=4):
+    """Stub the hardware profile so _detect_gpu_backend picks
+    deterministically. Real profiling happens on a real machine."""
+    from tokirecur.hardware import CPUProfile, HardwareProfile
+    prof = HardwareProfile(
+        schema_version=1,
+        profiled_at="2026-01-01T00:00:00Z",
+        os="linux",
+        cpu=CPUProfile(
+            vendor="GenuineIntel", name="stub", family=0, model=0,
+            physical_cores=4, logical_cores=4,
+            p_core_ids=[0, 1], e_core_ids=[],
+            max_boost_mhz=0.0, simd=["avx2"], affinity_hint=None,
+        ),
+        gpus=[],
+        ram_gb=16.0,
+        benchmarks={},
+        recommended={"backend": backend, "ngl": ngl, "threads": threads},
+    )
+    # Force the helper to return our stub regardless of cache.
+    monkeypatch.setattr(
+        "tokirecur.hardware.profile_box",
+        lambda force=False: prof,
+    )
+    # Ensure cached profile doesn't leak between tests.
+    monkeypatch.setattr(
+        "tokirecur.hardware.load_profile",
+        lambda: None,
+    )
+
+
 def test_detect_backend_macos_always_metal(monkeypatch):
     from tokirecur.cli import _detect_gpu_backend
-
+    _stub_profile(monkeypatch, backend="metal", ngl=99)
     monkeypatch.setattr("shutil.which", lambda name: None)
     assert _detect_gpu_backend("macos") == "metal"
 
 
 def test_detect_backend_linux_rocm_first(monkeypatch):
     from tokirecur.cli import _detect_gpu_backend
-
+    _stub_profile(monkeypatch, backend="rocm", ngl=99)
     monkeypatch.setattr("shutil.which", lambda name: "hipconfig" if name == "hipconfig" else None)
     monkeypatch.setattr(Path, "exists", lambda self: True)
     assert _detect_gpu_backend("ubuntu") == "rocm"
 
 
 def test_detect_backend_linux_vulkan_then_cpu(monkeypatch):
-    from tokirecur import ctl as ctl_mod
     from tokirecur.cli import _detect_gpu_backend
-
-    # Simulate a Linux box with a working Vulkan ICD and no ROCm:
-    # /opt/rocm doesn't exist, hipconfig/vulkaninfo on PATH, ICD
-    # helper agrees, not Intel-iGPU-only.
-    def fake_exists(self):
-        return "/opt/rocm" not in str(self)
-    monkeypatch.setattr(Path, "exists", fake_exists)
-    monkeypatch.setattr("shutil.which", lambda name: "vulkaninfo" if name == "vulkaninfo" else None)
-    monkeypatch.setattr(ctl_mod, "_linux_vulkan_works", lambda: True)
-    monkeypatch.setattr(ctl_mod, "_intel_igpu_only_linux", lambda: False)
+    _stub_profile(monkeypatch, backend="vulkan", ngl=99)
+    monkeypatch.setattr(Path, "exists", lambda self: True)
     assert _detect_gpu_backend("ubuntu") == "vulkan"
-    # Take the ICD and vulkaninfo away — detection should fall back to CPU.
-    monkeypatch.setattr("shutil.which", lambda name: None)
-    monkeypatch.setattr(ctl_mod, "_linux_vulkan_works", lambda: False)
+    # Profile now says CPU — picks CPU.
+    _stub_profile(monkeypatch, backend="cpu", ngl=0)
     assert _detect_gpu_backend("ubuntu") == "cpu"
 
 
 def test_detect_backend_windows_cuda_then_cpu(monkeypatch):
     from tokirecur.cli import _detect_gpu_backend
-
-    monkeypatch.setattr(Path, "exists", lambda self: False)
-    monkeypatch.setattr("shutil.which", lambda name: "nvidia-smi" if name == "nvidia-smi" else None)
+    _stub_profile(monkeypatch, backend="cuda", ngl=99)
     assert _detect_gpu_backend("windows") == "cuda"
-    monkeypatch.setattr("shutil.which", lambda name: None)
+    _stub_profile(monkeypatch, backend="cpu", ngl=0)
     assert _detect_gpu_backend("windows") == "cpu"
 
 
 def test_detect_backend_windows_intel_igpu_gets_cpu_build(monkeypatch):
-    """An Intel HD/UHD/Iris iGPU-only box must not receive the Vulkan
-    build (it thrashes on old Intel drivers, like the ngl case)."""
-    from tokirecur import ctl
+    """The profile decides Arc iGPU boxes get CPU — even when vulkaninfo
+    is present. The old vendor-based Intel check is gone; the profile
+    is the only authority now."""
     from tokirecur.cli import _detect_gpu_backend
-
-    monkeypatch.setattr(Path, "exists", lambda self: False)
-    monkeypatch.setattr(
-        "shutil.which",
-        lambda name: "vulkaninfo" if name == "vulkaninfo" else None,
-    )
-    monkeypatch.setattr(ctl, "_intel_igpu_only", lambda: True)
+    _stub_profile(monkeypatch, backend="cpu", ngl=0)
     assert _detect_gpu_backend("windows") == "cpu"
 
 
 def test_detect_backend_windows_non_intel_vulkan(monkeypatch):
-    """A discrete-GPU Windows box still gets the Vulkan build."""
-    from tokirecur import ctl
+    """A discrete-GPU Windows box keeps Vulkan."""
     from tokirecur.cli import _detect_gpu_backend
-
-    monkeypatch.setattr(Path, "exists", lambda self: False)
-    monkeypatch.setattr(
-        "shutil.which",
-        lambda name: "vulkaninfo" if name == "vulkaninfo" else None,
-    )
-    monkeypatch.setattr(ctl, "_intel_igpu_only", lambda: False)
+    _stub_profile(monkeypatch, backend="vulkan", ngl=99)
     assert _detect_gpu_backend("windows") == "vulkan"
 
 
@@ -331,7 +337,8 @@ def test_install_pulls_cudart_runtime_for_cuda_13_3(tmp_path, monkeypatch):
     monkeypatch.setattr(cli_mod, "_download_and_unpack_zip", fake_unpack)
 
     install_llama.callback(tag="b10326", dest=str(bin_dir), name=None,
-                          backend="cuda", gfx=None)
+                          backend="cuda", gfx=None, profile=False,
+                          force_cpu=False)
 
     urls = extra_downloads
     assert any("cudart.zip" in u for u in urls), (

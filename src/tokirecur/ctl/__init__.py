@@ -1745,8 +1745,37 @@ def _llama_args(spec: ModelSpec, ctx_override: int | None = None,
     ]
     # Offload to the GPU when one is present. Registry `extra_args` may
     # already pin `-ngl` (or the long form); never duplicate it.
-    if not any(a in ("-ngl", "--n-gpu-layers") for a in spec.extra_args):
-        args += ["-ngl", str(_default_ngl())]
+    ngl_pinned = any(a in ("-ngl", "--n-gpu-layers") for a in spec.extra_args)
+    ngl = _default_ngl() if not ngl_pinned else None
+    if ngl is not None:
+        args += ["-ngl", str(ngl)]
+
+    # CPU-mode tuning: when no GPU is in play (ngl == 0), the profile
+    # gives us thread count, batch sizes, mlock, and a taskset prefix
+    # for P-core affinity on hybrid Intel chips. None of these are
+    # useful on GPU paths — the GPU does the matmul, not the CPU.
+    if (ngl == 0) and not any(a in ("-t", "--threads") for a in spec.extra_args):
+        try:
+            from ..hardware import profile_box
+            prof = profile_box()
+        except Exception:
+            prof = None
+        if prof is not None:
+            threads = max(2, int(prof.recommended.get("threads", 4)))
+            args += ["-t", str(threads)]
+            args += ["--mlock"]
+            # Batch sizes — only set if the registry didn't already.
+            if not any(a in ("-b", "--batch-size") for a in spec.extra_args):
+                args += ["-b", "2048"]
+            if not any(a in ("-ub", "--ubatch-size") for a in spec.extra_args):
+                args += ["-ub", "512"]
+            # P-core affinity: wrap the binary with taskset so matmul
+            # threads land on the perf cores on hybrid Intel CPUs.
+            # We do this here (not via subprocess args) because taskset
+            # is an executable wrapper, not a llama-server flag.
+            affinity = prof.cpu.affinity_hint
+            if affinity and shutil.which("taskset"):
+                args = affinity.split() + args
     if kv != "f16":
         args += ["--cache-type-k", kv, "--cache-type-v", kv]
     if spec.reasoning == "off":
