@@ -122,44 +122,18 @@ if [[ $EUID -ne 0 ]]; then
       exit 1
     fi
 
-    # If the registry is empty, auto-pull a small default model so the
-    # user can `toki` immediately. A 0.8B Q4_K_M is ~500 MB and runs in
-    # a couple of minutes on a normal connection; pick a bigger default
-    # on machines that look like they have headroom (>= 16 GB RAM).
+    # Models are never downloaded by the installer — the user picks and
+    # installs their own. Just tell them how.
     if ! "$TOKI" model list | grep -q .; then
-      if [[ "$(uname -s)" == "Darwin" ]]; then
-        # macOS: hard to read total RAM portably; default to the
-        # 0.8B model which fits any Apple Silicon Mac.
-        DEFAULT_REPO="Qwen/Qwen3-0.6B-GGUF"
-        DEFAULT_FILE="Qwen3-0.6B-Q4_K_M.gguf"
-        DEFAULT_NAME="qwen3-0.6b"
-      else
-        TOTAL_RAM_GB=$(awk '/MemTotal/ {print int($2/1024/1024)}' /proc/meminfo 2>/dev/null || echo 8)
-        if [[ "$TOTAL_RAM_GB" -ge 16 ]]; then
-          DEFAULT_REPO="Qwen/Qwen3-8B-GGUF"
-          DEFAULT_FILE="Qwen3-8B-Q4_K_M.gguf"
-          DEFAULT_NAME="qwen3-8b"
-        else
-          DEFAULT_REPO="Qwen/Qwen3-0.6B-GGUF"
-          DEFAULT_FILE="Qwen3-0.6B-Q4_K_M.gguf"
-          DEFAULT_NAME="qwen3-0.6b"
-        fi
-      fi
       echo ""
-      _yellow_bar "starter model" 88
-      echo "Registry is empty — pulling a starter model ($DEFAULT_REPO)..."
-      echo "(set TOKI_SKIP_DEFAULT_MODEL=1 to skip this)"
-      if [[ "${TOKI_SKIP_DEFAULT_MODEL:-0}" != "1" ]]; then
-        if "$TOKI" model pull "$DEFAULT_REPO" --name "$DEFAULT_NAME" \
-              --file "$DEFAULT_FILE"; then
-          echo ""
-          echo "Activating $DEFAULT_NAME (writes opencode/openclaw/hermes/codex configs)..."
-          "$TOKI" model use "$DEFAULT_NAME" || true
-        else
-          echo "warning: starter model pull failed. Pull one manually:" >&2
-          echo "  $TOKI model pull Qwen/Qwen3-0.6B-GGUF --name qwen3-0.6b" >&2
-        fi
-      fi
+      _yellow_bar "no models yet" 88
+      echo "Toki Recur is installed. No models were downloaded."
+      echo "Install your own model when you're ready, e.g.:"
+      echo ""
+      echo "  $TOKI model pull Qwen/Qwen3-8B-GGUF --name qwen3-8b --file Qwen3-8B-Q4_K_M.gguf"
+      echo "  $TOKI model use qwen3-8b"
+      echo ""
+      echo "(see '$TOKI model pull --help' and '$TOKI model list' for all options)"
     fi
 
     # 0.2.17: a re-install / upgrade over an existing registry also heals

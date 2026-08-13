@@ -129,36 +129,20 @@ if ($UserPath -notmatch [regex]::Escape($Scripts)) {
     $env:Path = $Scripts + ';' + $env:Path
 }
 
-# ---- Starter model + agent config wiring (0.2.17: plug-and-play) ----
+# ---- Agent config wiring (0.2.17: plug-and-play) ----
 #
 # Windows never wired the four agent configs at install time, so direct
 # agent launches hit stale/absent configs (hermes "model '<name>' not
-# found"). Pull a starter model when the registry is empty, then sync
-# opencode/openclaw/hermes/codex (--sync-only writes configs without
-# booting a model). Re-runs over an existing registry heal old configs.
+# found"). Toki Recur never downloads models — the user installs their
+# own. This block only re-syncs opencode/openclaw/hermes/codex configs
+# (--sync-only writes configs without booting a model) when a model is
+# already registered.
 
 $Models = & $Toki model list
 if (-not $Models) {
-    $DefaultRepo = 'Qwen/Qwen3-8B-GGUF'
-    $DefaultFile = 'Qwen3-8B-Q4_K_M.gguf'
-    $DefaultName = 'qwen3-8b'
-    try {
-        $RamGb = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)
-        if ($RamGb -lt 16) {
-            $DefaultRepo = 'Qwen/Qwen3-0.6B-GGUF'
-            $DefaultFile = 'Qwen3-0.6B-Q4_K_M.gguf'
-            $DefaultName = 'qwen3-0.6b'
-        }
-    } catch {}
-    Write-Host "[+] no models registered - pulling a starter model ($DefaultRepo)..."
-    & $Toki model pull $DefaultRepo --name $DefaultName --file $DefaultFile
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "[+] wiring opencode/openclaw/hermes/codex to '$DefaultName'..."
-        & $Toki model use $DefaultName --sync-only
-    } else {
-        Write-Host "warning: starter model pull failed. Pull one later:" -ForegroundColor Yellow
-        Write-Host "  toki model pull Qwen/Qwen3-8B-GGUF --name qwen3-8b" -ForegroundColor Yellow
-    }
+    Write-Host "[+] no models registered - install your own, e.g.:" -ForegroundColor Yellow
+    Write-Host "    toki model pull Qwen/Qwen3-8B-GGUF --name qwen3-8b --file Qwen3-8B-Q4_K_M.gguf"
+    Write-Host "    toki model use qwen3-8b"
 } else {
     $ActiveLine = (& $Toki model status | Select-String '^active model: (.+)$')
     if ($ActiveLine -and $ActiveLine.Matches[0].Groups[1].Value.Trim() -ne 'none') {
