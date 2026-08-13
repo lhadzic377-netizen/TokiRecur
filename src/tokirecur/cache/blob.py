@@ -25,6 +25,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import struct
 from pathlib import Path
 
@@ -36,6 +37,12 @@ TRKV_VERSION = 1
 # Backwards-compat: the original BlobWriter exposed MAGIC/VERSION.
 MAGIC = TRKV_MAGIC
 VERSION = TRKV_VERSION
+
+# cache_ids are content-addressed (SHA-256 hex prefixes) — nothing but
+# hex belongs in a file name. This is also a path-traversal guard for
+# the DELETE /cache/{cache_id} endpoint: any character outside the set
+# is rejected before it can reach the filesystem.
+_CACHE_ID_RE = re.compile(r"^[0-9a-f]{1,64}$")
 
 # 4-byte magic + 4-byte version + 4-byte meta_len = 12-byte fixed header.
 _HEADER = struct.Struct(">4s I I")
@@ -131,6 +138,14 @@ class BlobReader:
 
 
 def blob_path(cache_dir: Path, cache_id: str) -> Path:
+    """Return the sidecar path for ``cache_id``.
+
+    Raises :class:`ValueError` if ``cache_id`` is not a plain hex id —
+    this is the path-traversal guard for the DELETE /cache/{cache_id}
+    endpoint, which must not let a caller reach outside ``cache_dir``.
+    """
+    if not _CACHE_ID_RE.fullmatch(cache_id):
+        raise ValueError(f"invalid cache_id: {cache_id!r}")
     return cache_dir / f"{cache_id}.trkv"
 
 

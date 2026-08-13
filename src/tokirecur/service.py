@@ -20,7 +20,6 @@ from .ctl import load_registry
 
 UNIT_DIR = Path.home() / ".config" / "systemd" / "user"
 UNIT_NAME = "toki-model@.service"
-DEFAULT_TOKEN = "demo-token"
 
 
 def _systemd_available() -> bool:
@@ -69,11 +68,11 @@ WantedBy=default.target
 
 def unit_text() -> str:
     token = _resolve_token()
-    if token == DEFAULT_TOKEN:
+    if token is None:
         print(
-            "warning: auth token is the well-known default 'demo-token'; "
-            "set TOKI_AUTH_TOKEN (or ~/.config/tokirecur/auth) to a real "
-            "secret before exposing the daemon beyond localhost.",
+            "warning: no auth token configured; the daemon accepts "
+            "loopback requests only. Set TOKI_AUTH_TOKEN (or "
+            "~/.config/tokirecur/auth) before exposing it beyond localhost.",
             file=sys.stderr,
         )
     auth_line = f"Environment=TOKI_AUTH_TOKEN={token}\n" if token else ""

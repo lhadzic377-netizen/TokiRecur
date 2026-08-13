@@ -316,7 +316,7 @@ toki bench --model 9b --workload agent_long_context \
 # Available workloads:
 #   agent_long_context   ~90% cache hit (long fixed system prompt + queries)
 #   agent_25 / agent_50 / agent_100   25 / 50 / 100 prompts
-#   realistic_mixed      216 prompts across 5 real-world categories
+#   realistic_mixed      201 prompts across 5 real-world categories
 #   stress_adversarial   301 prompts with adversarial patterns
 #   rag_chunks           ~90% cache hit (shared document prefix)
 #   mixed                ~50% cache hit (mixed traffic)
@@ -575,7 +575,7 @@ The benchmark supports four workloads:
 | `rag_chunks`          | ~90% | RAG with shared document prefixes |
 | `mixed`               | ~50% | Mixed chat traffic |
 | `no_overlap`          | 0%    | Baseline / worst-case validation |
-| `realistic_mixed`     | ~95% | **216 prompts across 5 real-world categories** (RAG, tool-using, multi-turn, support, one-off) |
+| `realistic_mixed`     | ~95% | **201 prompts across 5 real-world categories** (RAG, tool-using, multi-turn, support, one-off) |
 | `stress_adversarial`  | varies | **301 prompts with adversarial patterns** (burst, near-miss, sequential, tiny, novel) |
 
 ## Scoring
@@ -653,7 +653,7 @@ Run on an AMD Ryzen AI MAX+ 395 (Ryzen AI Halo), max-tokens=32.
 | `no_overlap` | +15.1% | +17.0% | 0.0% | 12.0 | F |
 | `stress_adversarial` | +33.2% | +52.1% | 57.2% | 64.2 | D |
 
-The headline number is `realistic_mixed`: 216 prompts across 5 real-world
+The headline number is `realistic_mixed`: 201 prompts across 5 real-world
 categories (RAG, tool-using, multi-turn, support, one-off). Across all four
 models the pattern holds — the bigger and sparser the model, the better the
 relative caching gains:

@@ -47,7 +47,8 @@ def _load(path: Path) -> dict:
         return tomllib.load(fh)
 
 
-def test_codex_config_writer(env):
+def test_codex_config_writer(env, monkeypatch):
+    monkeypatch.setenv("TOKI_AUTH_TOKEN", "test-tok-0123456789abcdef")
     spec = _spec(env)
     cfg_path = env / "codex" / "config.toml"
     out = ctl.write_codex_config(spec, [spec], path=cfg_path)
@@ -59,7 +60,7 @@ def test_codex_config_writer(env):
     assert prov["base_url"] == "http://127.0.0.1:8787/v1"
     assert prov["wire_api"] == "responses"
     assert prov["env_key"] == "TOKI_AUTH_TOKEN"
-    assert prov["env"]["TOKI_AUTH_TOKEN"] == ctl.DEFAULT_AUTH
+    assert prov["env"]["TOKI_AUTH_TOKEN"] == "test-tok-0123456789abcdef"
     ctl.write_codex_config(spec, [spec], path=cfg_path)
     assert Path(str(cfg_path) + ".bak-model").exists()
     # Anti-loop guardrail: codex has NO system_prompt config key (v1's

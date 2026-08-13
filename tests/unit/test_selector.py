@@ -126,10 +126,12 @@ def test_codex_no_token_when_unconfigured(monkeypatch, tmp_path):
     monkeypatch.delenv("TOKI_AUTH_TOKEN", raising=False)
     monkeypatch.setattr("tokirecur.selector.Path.home", lambda: tmp_path)
     plan = launch_cmd("chat", "codex", spec())
-    # No token configured anywhere: codex still gets DEFAULT_AUTH (the
-    # daemon accepts it on loopback) — otherwise codex fails with
-    # "missing environment variable TOKI_AUTH_TOKEN".
-    assert plan["env"]["TOKI_AUTH_TOKEN"] == "demo-token"
+    # No token configured anywhere: codex still gets a token (the
+    # generated default, which the daemon accepts on loopback) —
+    # otherwise codex fails with "missing environment variable
+    # TOKI_AUTH_TOKEN". It must never be a well-known value.
+    assert plan["env"]["TOKI_AUTH_TOKEN"]
+    assert plan["env"]["TOKI_AUTH_TOKEN"] != "demo-token"
 
 
 def test_default_index():

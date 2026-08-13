@@ -63,7 +63,7 @@ toki bench --model ~/Downloads/Qwen3.5-9B-Q4_K_M.gguf \
         <tr><td><code>rag_chunks</code></td><td>~90%</td><td>RAG with shared document prefixes</td></tr>
         <tr><td><code>mixed</code></td><td>~50%</td><td>Mixed chat traffic</td></tr>
         <tr><td><code>no_overlap</code></td><td>0%</td><td>Baseline / worst-case validation</td></tr>
-        <tr><td><code>realistic_mixed</code></td><td>~95%</td><td>216 prompts across 5 real-world categories (RAG, tool-using, multi-turn, support, one-off)</td></tr>
+        <tr><td><code>realistic_mixed</code></td><td>~95%</td><td>201 prompts across 5 real-world categories (RAG, tool-using, multi-turn, support, one-off)</td></tr>
         <tr><td><code>stress_adversarial</code></td><td>varies</td><td>301 prompts with adversarial patterns (burst, near-miss, sequential, tiny, novel)</td></tr>
       </tbody>
     </table>
@@ -102,7 +102,7 @@ toki bench --model ~/Downloads/Qwen3.5-9B-Q4_K_M.gguf \
       </tbody>
     </table>
 
-    <p>The headline number is <code>realistic_mixed</code>: 216 prompts across 5 real-world categories (RAG, tool-using, multi-turn, support, one-off), TTFT cut by two thirds, prefill nearly 6x faster, 88% cache hit rate, composite 84.4 (A). The <code>summarization</code> and <code>code_review</code> workloads are even stronger (A+). Low scores on <code>no_overlap</code> and the adversarial workloads are expected, zero-overlap prompts are the worst case for prefix caching, and the stress workload is designed to surface edge cases (false-positive hits from cosine similarity, minimal savings on short prompts, underperforming sequential growth).</p>
+    <p>The headline number is <code>realistic_mixed</code>: 201 prompts across 5 real-world categories (RAG, tool-using, multi-turn, support, one-off), TTFT cut by two thirds, prefill nearly 6x faster, 88% cache hit rate, composite 84.4 (A). The <code>summarization</code> and <code>code_review</code> workloads are even stronger (A+). Low scores on <code>no_overlap</code> and the adversarial workloads are expected, zero-overlap prompts are the worst case for prefix caching, and the stress workload is designed to surface edge cases (false-positive hits from cosine similarity, minimal savings on short prompts, underperforming sequential growth).</p>
 
     <h3>Qwen3.6-35B-A3B (UD-Q4_K_M)</h3>
     <table>

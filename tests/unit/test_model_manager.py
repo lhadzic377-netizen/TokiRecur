@@ -194,7 +194,8 @@ def test_openclaw_config_writer(env, with_pulled_model, monkeypatch):
     assert agents_md.read_text().count(ctl.ANTI_LOOP_SYSTEM_PROMPT) == 1
 
 
-def test_hermes_config_writer(env, with_pulled_model):
+def test_hermes_config_writer(env, with_pulled_model, monkeypatch):
+    monkeypatch.setenv("TOKI_AUTH_TOKEN", "test-tok-0123456789abcdef")
     spec = with_pulled_model["9b"]
     cfg_path = env / "config.yaml"
     cfg_path.write_text(yaml.safe_dump({
@@ -218,7 +219,7 @@ def test_hermes_config_writer(env, with_pulled_model):
     expected_ids = {s.model_id for s in ctl.load_registry()}
     assert set(entry["models"]) == expected_ids
     assert cfg["model"] == {
-        "api_key": "demo-token",
+        "api_key": "test-tok-0123456789abcdef",
         "base_url": "http://127.0.0.1:8787/v1",
         "default": "qwen3.5-9b",
         "provider": "llamacpp",

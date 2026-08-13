@@ -21,7 +21,7 @@ from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.table import Table
 
-from .ctl import DEFAULT_AUTH, model_status, read_active
+from .ctl import auth_token, model_status, read_active
 
 console = Console()
 
@@ -94,10 +94,10 @@ def launch_cmd(interface: str, client: str, spec: Any) -> dict:
         # variable (`env` in the provider config only names it; there is
         # no inline-key form). Inject the daemon's token so codex works
         # without the user exporting anything — and when no token is
-        # configured, inject DEFAULT_AUTH, the same value the other
-        # three clients already embed (the daemon accepts anything on
+        # configured, inject a generated default, the same value the other
+        # clients embed (the daemon accepts anything on
         # loopback when no token is configured).
-        tok = _auth_token() or DEFAULT_AUTH
+        tok = _auth_token() or auth_token()
         env["TOKI_AUTH_TOKEN"] = tok
 
     if interface == "chat":

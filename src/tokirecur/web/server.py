@@ -142,14 +142,18 @@ def _configured_token() -> str | None:
     return None
 
 
-def _is_same_origin(request: Request) -> bool:
-    """Reject requests whose Origin doesn't match the Host we serve."""
-    origin = request.headers.get("origin")
+def _is_same_origin(conn: Request | WebSocket) -> bool:
+    """Reject requests whose Origin doesn't match the Host we serve.
+
+    Works for both HTTP (``Request``) and WebSocket (``WebSocket``)
+    connections — both expose ``.headers`` and ``.url``.
+    """
+    origin = conn.headers.get("origin")
     if not origin:
         return True  # no Origin header (same-origin navigations, curl, etc.)
     try:
         parsed = urlparse(origin)
-        return parsed.netloc == request.url.netloc and parsed.scheme in ("http", "https")
+        return parsed.netloc == conn.url.netloc and parsed.scheme in ("http", "https")
     except Exception:
         return False
 
@@ -361,6 +365,9 @@ def create_web_app(
         # The UI is always open: the handshake needs no session cookie.
         # The server authenticates daemon calls with its own configured
         # credential (`auth_token = web_token or payload token`).
+        if not _is_same_origin(websocket):
+            await websocket.close(code=1008)
+            return
         await websocket.accept()
         try:
             while True:

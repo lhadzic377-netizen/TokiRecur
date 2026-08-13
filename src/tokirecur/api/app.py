@@ -22,6 +22,7 @@ requests/minute.
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json as _json
 import logging
 import os
@@ -428,7 +429,7 @@ def _check_auth(request: Request) -> None:
             headers={"WWW-Authenticate": "Bearer"},
         )
     provided = auth[len("Bearer "):].strip()
-    if provided != expected:
+    if not hmac.compare_digest(provided.encode("utf-8"), expected.encode("utf-8")):
         METRICS.auth_failures.inc()
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -460,11 +461,11 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         logger.info("Toki Recur daemon starting")
-        if _get_auth_token() == "demo-token":
+        if _get_auth_token() is None:
             logger.warning(
-                "auth token is the well-known default 'demo-token'; set "
-                "TOKI_AUTH_TOKEN (or ~/.config/tokirecur/auth) to a real "
-                "secret before exposing the daemon beyond localhost",
+                "no auth token configured; the daemon accepts loopback "
+                "requests only. Set TOKI_AUTH_TOKEN (or "
+                "~/.config/tokirecur/auth) before exposing it beyond localhost",
             )
         yield
         logger.info("Toki Recur daemon shutting down")
@@ -1662,8 +1663,14 @@ def create_app(
     async def cache_delete(cache_id: str) -> dict:
         from ..cache.blob import blob_path
 
+        try:
+            blob = blob_path(cache_dir, cache_id)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="invalid cache_id",
+            ) from None
         removed = index.delete(cache_id)
-        blob = blob_path(cache_dir, cache_id)
         if blob.exists():
             blob.unlink()
         if not removed:

@@ -738,11 +738,11 @@ def _multiturn_session_setup() -> str:
 
 
 def workload_realistic_mixed() -> Workload:
-    """200 prompts modeled on real agent traffic distribution.
+    """201 prompts modeled on real agent traffic distribution.
 
     5 categories:
       - RAG with document (60): large shared document + varied queries
-      - Tool-using agent (50): shared tool definitions + varied queries
+      - Tool-using agent (51): shared tool definitions + varied queries
       - Multi-turn chat (40 across 8 sessions): context grows each turn
       - Customer support (30): small shared system prompt
       - One-off queries (20): no shared prefix (should miss)

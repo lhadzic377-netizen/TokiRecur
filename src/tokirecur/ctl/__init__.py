@@ -19,6 +19,7 @@ import logging
 import math
 import os
 import re
+import secrets
 import shutil
 import signal
 import subprocess
@@ -127,7 +128,20 @@ try:
 except Exception:  # noqa: BLE001 — never let path resolution crash import
     pass
 
-DEFAULT_AUTH = os.environ.get("TOKI_AUTH_TOKEN", "demo-token")
+def auth_token() -> str:
+    """Auth token used in client configs when none is configured.
+
+    Honors TOKI_AUTH_TOKEN if set; otherwise a fresh random token, so
+    the fallback is never a well-known value (the daemon accepts it on
+    loopback when no token is configured).
+    """
+    return os.environ.get("TOKI_AUTH_TOKEN") or secrets.token_urlsafe(32)
+
+
+# Back-compat alias: historically a module-level constant frozen at
+# import. Call auth_token() to get a value that honors env changes made
+# after import (e.g. under tests).
+DEFAULT_AUTH = auth_token()
 
 # Sampling defaults for the daemon's OpenAI-compatible endpoints.
 # Greedy decode (temperature 0.0) with no repetition penalty is the
@@ -2479,7 +2493,7 @@ def _provider_entry(spec: ModelSpec, mode: str = "managed") -> dict[str, Any]:
         "npm": "@ai-sdk/openai-compatible",
         "options": {
             "baseURL": f"{base}/v1",
-            "apiKey": DEFAULT_AUTH,
+            "apiKey": auth_token(),
         },
         "models": {
             spec.model_id: {
@@ -2590,7 +2604,7 @@ def write_openclaw_config(
         providers[f"tokirecur-{s.name}"] = {
             "api": "openai-completions",
             "baseUrl": f"{base}/v1",
-            "apiKey": DEFAULT_AUTH,
+            "apiKey": auth_token(),
             "timeoutSeconds": 3600,
             "models": [
                 {
@@ -2692,7 +2706,7 @@ def write_hermes_config(
     entry = {
         "name": "llamacpp",
         "base_url": f"{base}/v1",
-        "api_key": DEFAULT_AUTH,
+        "api_key": auth_token(),
         "models": models_with_ctx,
         "default_model": spec.model_id,
         "_toki": True,  # marker so a future re-write can find it
@@ -2711,7 +2725,7 @@ def write_hermes_config(
     # "llamacpp" key would keep pointing requests at llama-server.
     providers["llamacpp"] = {
         "api": f"{base}/v1",
-        "api_key": DEFAULT_AUTH,
+        "api_key": auth_token(),
         "models": models_with_ctx,
         "default_model": spec.model_id,
         "name": "Toki Recur (llamacpp)",
@@ -2726,7 +2740,7 @@ def write_hermes_config(
         cfg["model"] = model_cfg
     model_cfg.update(
         {
-            "api_key": DEFAULT_AUTH,
+            "api_key": auth_token(),
             "base_url": f"{base}/v1",
             "default": spec.model_id,
             "provider": "llamacpp",
@@ -2830,7 +2844,7 @@ def write_codex_config(
             # declares the variable name; codex requires the real var in
             # its process environment (launcher injection, or exported).
             "env_key": "TOKI_AUTH_TOKEN",
-            "env": {"TOKI_AUTH_TOKEN": DEFAULT_AUTH},
+            "env": {"TOKI_AUTH_TOKEN": auth_token()},
         }
 
     top["model_provider"] = f"tokirecur-{spec.name}"
