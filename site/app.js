@@ -67,7 +67,7 @@ document.addEventListener("DOMContentLoaded", () => {
         }
       });
     },
-    { threshold: 0.15 }
+    { threshold: 0.05 }
   );
   groups.forEach((el) => io.observe(el));
 });

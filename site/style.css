@@ -776,12 +776,16 @@ footer {
    Without JS, every .reveal element is at its natural visible state —
    no animation, but no invisible content either. The inline script in
    <head> sets html.js-ready before any rendering, so the hidden
-   state only ever applies when JS is actually going to flip it back. */
+   state only ever applies when JS is actually going to flip it back.
+
+   Stagger delay is capped at 0.3s: the JS stagger is `0.1s * index`
+   across every observed element, so a late-section reveal can
+   otherwise wait 3-5s before it even starts animating. */
 html.js-ready .reveal {
   opacity: 0;
   transform: translateY(12px);
-  transition: opacity 0.5s ease, transform 0.5s ease;
-  transition-delay: var(--d, 0s);
+  transition: opacity 0.35s ease, transform 0.35s ease;
+  transition-delay: min(var(--d, 0s), 0.3s);
 }
 
 html.js-ready .reveal.in-view { opacity: 1; transform: none; }
