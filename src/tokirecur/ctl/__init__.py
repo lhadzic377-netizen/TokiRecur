@@ -1582,9 +1582,9 @@ def _default_ngl() -> int:
         return 0
     if shutil.which("hipconfig") or os.path.exists("/opt/rocm"):
         return 99
-    if shutil.which("vulkaninfo") or os.path.exists(
-        "/usr/lib/x86_64-linux-gnu/libvulkan.so.1"
-    ):
+    # Same Vulkan detection as the installer: loader alone isn't enough,
+    # Intel-iGPU-only boxes should get CPU too.
+    if _linux_vulkan_works() and not _intel_igpu_only_linux():
         return 99
     return 0
 
@@ -1620,6 +1620,79 @@ def _intel_igpu_only() -> bool:
         return False
     intel_igpu = "Intel" in names[0] and "Arc" not in names[0]
     return intel_igpu and len(names) == 1
+
+
+def _linux_vulkan_works() -> bool:
+    """True when this Linux box has at least one loadable Vulkan ICD.
+
+    ``libvulkan.so.1`` is the loader; without an ICD JSON in
+    ``/usr/share/vulkan/icd.d/`` pointing at an installed driver
+    library, every Vulkan call returns VK_ERROR_INCOMPATIBLE_DRIVER
+    and llama-server's Vulkan backend can probe/init forever without
+    producing tokens. Many Ubuntu installs have the loader (Steam,
+    OBS, browsers) without any usable ICD, so checking for the loader
+    alone produces a vulkan-on-CPU build that hangs at runtime.
+    """
+    import json
+
+    loader_paths = (
+        Path("/usr/lib/x86_64-linux-gnu/libvulkan.so.1"),
+        Path("/usr/lib/aarch64-linux-gnu/libvulkan.so.1"),
+        Path("/usr/lib/libvulkan.so.1"),
+    )
+    if not any(p.exists() for p in loader_paths):
+        return False
+    icd_dir = Path("/usr/share/vulkan/icd.d")
+    if not icd_dir.is_dir():
+        return False
+    for icd_json in icd_dir.glob("*.json"):
+        try:
+            data = json.loads(icd_json.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        lib_path = (data.get("ICD") or {}).get("library_path") or ""
+        if not lib_path:
+            continue
+        # ICD library_path can be absolute or relative. The loader
+        # checks a few standard locations in order.
+        candidates = [
+            Path(lib_path),
+            Path("/usr/lib") / lib_path,
+            Path("/usr/lib/x86_64-linux-gnu") / lib_path,
+            Path("/usr/lib/aarch64-linux-gnu") / lib_path,
+        ]
+        if any(c.is_file() for c in candidates):
+            return True
+    return False
+
+
+def _intel_igpu_only_linux() -> bool:
+    """True when this Linux box's only GPU is an Intel iGPU.
+
+    Reads PCI vendor IDs from ``/sys/class/drm`` (no vulkaninfo
+    required, no subprocess) and looks for the 0x8086 Intel vendor.
+    Treats the box as iGPU-only when Intel is present and no
+    NVIDIA (0x10de) or AMD/ATI (0x1002) discrete GPU shows up. Mirrors
+    the Windows check so the same Vulkan-driver-bug class of iGPUs
+    (Skylake/Kaby Lake/Coffee Lake UHD) get CPU builds on Linux too.
+    """
+    drm_root = Path("/sys/class/drm")
+    if not drm_root.is_dir():
+        return False
+    vendors: set[str] = set()
+    for card in drm_root.glob("card*"):
+        # Skip render nodes (card0 renders as renderD128) — those are
+        # for offscreen rendering, not a separate GPU.
+        if not (card / "device").is_dir():
+            continue
+        try:
+            vendors.add((card / "device" / "vendor").read_text().strip())
+        except OSError:
+            continue
+    if "0x8086" not in vendors:
+        return False
+    discrete = vendors & {"0x10de", "0x1002"}
+    return not discrete
 
 
 def _model_aliases(spec: ModelSpec) -> list[str]:

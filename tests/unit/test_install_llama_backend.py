@@ -181,12 +181,22 @@ def test_detect_backend_linux_rocm_first(monkeypatch):
 
 
 def test_detect_backend_linux_vulkan_then_cpu(monkeypatch):
+    from tokirecur import ctl as ctl_mod
     from tokirecur.cli import _detect_gpu_backend
 
-    monkeypatch.setattr(Path, "exists", lambda self: False)
+    # Simulate a Linux box with a working Vulkan ICD and no ROCm:
+    # /opt/rocm doesn't exist, hipconfig/vulkaninfo on PATH, ICD
+    # helper agrees, not Intel-iGPU-only.
+    def fake_exists(self):
+        return "/opt/rocm" not in str(self)
+    monkeypatch.setattr(Path, "exists", fake_exists)
     monkeypatch.setattr("shutil.which", lambda name: "vulkaninfo" if name == "vulkaninfo" else None)
+    monkeypatch.setattr(ctl_mod, "_linux_vulkan_works", lambda: True)
+    monkeypatch.setattr(ctl_mod, "_intel_igpu_only_linux", lambda: False)
     assert _detect_gpu_backend("ubuntu") == "vulkan"
+    # Take the ICD and vulkaninfo away — detection should fall back to CPU.
     monkeypatch.setattr("shutil.which", lambda name: None)
+    monkeypatch.setattr(ctl_mod, "_linux_vulkan_works", lambda: False)
     assert _detect_gpu_backend("ubuntu") == "cpu"
 
 
@@ -771,3 +781,209 @@ def test_stream_download_falls_back_to_httpx_when_curl_fails(tmp_path, monkeypat
         GoodApi(), "https://example.test/x", dest, label="download x",
     )
     assert dest.read_bytes() == b"from-httpx"
+
+
+# ── Linux Vulkan detection (loader-only vs working ICD) ──────────────
+
+
+def test_linux_vulkan_loader_only_returns_false(tmp_path, monkeypatch):
+    """libvulkan.so.1 is installed (Steam, OBS, browsers all pull it
+    in) but no ICD JSON exists — the Vulkan build would hang at
+    runtime. Detection should return False so the install picks CPU."""
+    from tokirecur import ctl
+
+    # No loader, no ICD. Helper short-circuits to False.
+    monkeypatch.setattr(
+        "tokirecur.ctl.Path",
+        _make_path_stub(tmp_path, loader_exists=False, icd_dir_exists=False),
+    )
+    assert ctl._linux_vulkan_works() is False
+
+
+def test_linux_vulkan_loader_only_no_icd_returns_false(tmp_path, monkeypatch):
+    """Loader is there (common on Ubuntu) but no ICD JSONs at all —
+    must return False."""
+    from tokirecur import ctl
+
+    monkeypatch.setattr(
+        "tokirecur.ctl.Path",
+        _make_path_stub(tmp_path, loader_exists=True, icd_dir_exists=False),
+    )
+    assert ctl._linux_vulkan_works() is False
+
+
+def test_linux_vulkan_icd_present_but_driver_missing_returns_false(tmp_path, monkeypatch):
+    """ICD JSON present but the library_path it references doesn't exist —
+    the loader will fail to load this ICD. Must return False."""
+    from tokirecur import ctl
+
+    icd_dir = tmp_path / "icd.d"
+    icd_dir.mkdir()
+    (icd_dir / "fake_icd.json").write_text(
+        '{"ICD": {"library_path": "/nonexistent/libvulkan_fake.so"}}'
+    )
+    monkeypatch.setattr(
+        "tokirecur.ctl.Path",
+        _make_path_stub(
+            tmp_path, loader_exists=True, icd_dir=icd_dir, icd_has_loadable=False,
+        ),
+    )
+    assert ctl._linux_vulkan_works() is False
+
+
+def test_linux_vulkan_icd_with_loadable_driver_returns_true(tmp_path, monkeypatch):
+    """A real ICD JSON pointing at a library that actually exists on disk
+    means llama.cpp's Vulkan build can initialise a device."""
+    from tokirecur import ctl
+
+    driver = tmp_path / "libvulkan_fake.so"
+    driver.write_bytes(b"")
+    icd_dir = tmp_path / "icd.d"
+    icd_dir.mkdir()
+    (icd_dir / "fake_icd.json").write_text(
+        f'{{"ICD": {{"library_path": "{driver}"}}}}'
+    )
+    monkeypatch.setattr(
+        "tokirecur.ctl.Path",
+        _make_path_stub(
+            tmp_path, loader_exists=True, icd_dir=icd_dir, icd_has_loadable=True,
+        ),
+    )
+    assert ctl._linux_vulkan_works() is True
+
+
+def test_intel_igpu_only_linux_true_for_intel_only(tmp_path, monkeypatch):
+    from tokirecur import ctl
+
+    _fake_drm(tmp_path, vendors=["0x8086"])
+    monkeypatch.setattr("tokirecur.ctl.Path", _make_drm_stub(tmp_path, ["0x8086"]))
+    assert ctl._intel_igpu_only_linux() is True
+
+
+def test_intel_igpu_only_linux_false_with_discrete_gpu(tmp_path, monkeypatch):
+    from tokirecur import ctl
+
+    monkeypatch.setattr(
+        "tokirecur.ctl.Path",
+        _make_drm_stub(tmp_path, ["0x8086", "0x10de"]),
+    )
+    assert ctl._intel_igpu_only_linux() is False
+
+
+def test_intel_igpu_only_linux_false_with_no_intel(tmp_path, monkeypatch):
+    from tokirecur import ctl
+
+    monkeypatch.setattr("tokirecur.ctl.Path", _make_drm_stub(tmp_path, ["0x1002"]))
+    assert ctl._intel_igpu_only_linux() is False
+
+
+# ── Helpers for stubbing pathlib in the detection tests ──────────────
+
+
+def _make_path_stub(tmp_path, *, loader_exists, icd_dir_exists=True,
+                    icd_dir=None, icd_has_loadable=False):
+    """Build a Path subclass whose existence semantics match the scenario.
+
+    The stub treats the canonical /usr paths as if they existed under
+    ``tmp_path``: ``libvulkan.so.1`` (the loader) and the ICD JSON
+    directory. Library-path candidates resolve relative to the stub
+    tmp dir if ``icd_has_loadable`` is True.
+    """
+    base = Path(str(tmp_path))
+    icd_dir_path = icd_dir if icd_dir is not None else (base / "vulkan" / "icd.d")
+    # Only create the icd_dir if the scenario says it exists; the
+    # test then drives the helper via the stub.
+    if icd_dir_exists:
+        icd_dir_path.mkdir(parents=True, exist_ok=True)
+        # If the scenario says the ICD has a loadable driver, create
+        # a stub library so is_file() returns True for the library_path.
+        if icd_has_loadable:
+            for f in icd_dir_path.glob("*.json"):
+                import json as _json
+                try:
+                    data = _json.loads(f.read_text())
+                except Exception:
+                    continue
+                lib = (data.get("ICD") or {}).get("library_path") or ""
+                if lib:
+                    Path(lib).parent.mkdir(parents=True, exist_ok=True)
+                    Path(lib).write_bytes(b"")
+
+    real_Path = Path
+
+    class _Stub(real_Path):
+        def exists(self):
+            s = str(self)
+            if "libvulkan.so.1" in s:
+                return bool(loader_exists)
+            # If the ICD helper probes the ICD JSON or the library_path
+            # it names, the real file at that path exists (we created
+            # it above when icd_has_loadable=True).
+            return real_Path(str(self)).exists()
+
+        def is_dir(self):
+            s = str(self)
+            # /usr/share/vulkan/icd.d is a directory only when the
+            # scenario says the icd_dir exists.
+            if s == "/usr/share/vulkan/icd.d":
+                return bool(icd_dir_exists)
+            if s == str(icd_dir_path):
+                return bool(icd_dir_exists)
+            return real_Path(str(self)).is_dir()
+
+        def is_file(self):
+            s = str(self)
+            if s.endswith("libvulkan.so.1"):
+                return bool(loader_exists)
+            return real_Path(str(self)).is_file()
+
+        def glob(self, pattern):
+            s = str(self)
+            if s == "/usr/share/vulkan/icd.d" or s == str(icd_dir_path):
+                if icd_dir_exists:
+                    return iter(list(icd_dir_path.glob(pattern)))
+                return iter(())
+            return real_Path(str(self)).glob(pattern)
+
+    return _Stub
+
+
+def _make_drm_stub(tmp_path, vendors):
+    """Build a Path subclass that reports a list of PCI vendor IDs
+    under /sys/class/drm/card* for the Intel-iGPU check."""
+    base = Path(str(tmp_path))
+    drm_root = base / "class" / "drm"
+    drm_root.mkdir(parents=True, exist_ok=True)
+    cards = []
+    for i, v in enumerate(vendors):
+        card = drm_root / f"card{i}"
+        device = card / "device"
+        device.mkdir(parents=True, exist_ok=True)
+        (device / "vendor").write_text(v)
+        cards.append(card)
+
+    real_Path = Path
+
+    class _DRM(real_Path):
+        def is_dir(self):
+            return real_Path(str(self)).is_dir()
+
+        def glob(self, pattern):
+            s = str(self)
+            if s == "/sys/class/drm" or s == str(drm_root):
+                return iter(cards)
+            return real_Path(str(self)).glob(pattern)
+
+    return _DRM
+
+
+def _fake_drm(tmp_path, vendors):
+    """Drop a real /sys/class/drm/card*/device/vendor tree under tmp."""
+    drm_root = tmp_path / "class" / "drm"
+    drm_root.mkdir(parents=True, exist_ok=True)
+    for i, v in enumerate(vendors):
+        card = drm_root / f"card{i}"
+        device = card / "device"
+        device.mkdir(parents=True, exist_ok=True)
+        (device / "vendor").write_text(v)
+

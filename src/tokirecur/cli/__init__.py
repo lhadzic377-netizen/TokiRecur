@@ -1178,9 +1178,12 @@ def _detect_gpu_backend(os_name: str) -> str:
     # Linux
     if _shutil.which("hipconfig") or Path("/opt/rocm").exists():
         return "rocm"
-    if _shutil.which("vulkaninfo") or Path(
-        "/usr/lib/x86_64-linux-gnu/libvulkan.so.1"
-    ).exists():
+    # Vulkan: requires not just the loader library (Steam/OBS install
+    # it for incidental reasons) but a loadable ICD JSON pointing at an
+    # installed driver. Plus an Intel-only iGPU box must get CPU, same
+    # as the Windows path.
+    from ..ctl import _intel_igpu_only_linux, _linux_vulkan_works
+    if _linux_vulkan_works() and not _intel_igpu_only_linux():
         return "vulkan"
     return "cpu"
 
