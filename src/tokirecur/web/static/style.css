@@ -499,6 +499,63 @@ textarea:focus, input:focus {
   color: var(--text-primary);
 }
 
+/* Collapsible thinking block. Native <details>/<summary> so it works
+   without JS, keyboard-accessible out of the box, and animates the
+   open/close for free. The body uses <pre> so newlines in reasoning
+   render verbatim; we override font-family to look like prose. */
+.thinking {
+  margin: 0 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+.thinking[hidden] { display: none; }
+.thinking summary {
+  cursor: pointer;
+  padding: 6px 12px;
+  font-size: 12.5px;
+  color: var(--dim);
+  user-select: none;
+  list-style: none;
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+}
+.thinking summary::-webkit-details-marker { display: none; }
+.thinking summary::before {
+  content: "▸";
+  display: inline-block;
+  transition: transform 0.15s ease;
+  color: var(--dim);
+}
+.thinking[open] summary::before { transform: rotate(90deg); }
+.thinking .think-label { color: var(--dim); font-weight: 500; }
+.thinking .think-bytes { color: var(--dimmer); font-size: 11.5px; }
+.thinking .think-body {
+  margin: 0;
+  padding: 8px 14px 12px;
+  font-family: var(--font);
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--dim);
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  border-top: 1px solid var(--border);
+}
+
+/* Reasoning-but-no-answer hint. Surfaces when a thinking model burns
+   the entire token budget on reasoning and produces no visible text. */
+.no-answer-note {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--raw-soft);
+  border-radius: 8px;
+  background: var(--raw-soft);
+  color: var(--raw);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
 .message .text.error {
   color: var(--raw);
   font-style: italic;

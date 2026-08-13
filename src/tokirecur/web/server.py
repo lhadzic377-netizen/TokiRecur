@@ -484,9 +484,10 @@ def _completion_payload(
 async def _iter_sse_chunks(r) -> AsyncIterator[dict]:
     """Parse an OpenAI-compatible SSE stream.
 
-    Yields {"content": str} for token chunks and, for the final
-    usage chunk, {"usage": {...}, "cache": {...}}. The usage chunk
-    carries no content, so both kinds are easy to tell apart.
+    Yields {"content": str} for token chunks, {"reasoning": str} for
+    thinking-model reasoning deltas, and {"usage": ..., "cache": ...}
+    for the final usage chunk. The usage chunk carries no content
+    or reasoning, so all three kinds are easy to tell apart.
     """
     buffer = ""
     async for chunk_text in r.aiter_text():
@@ -520,6 +521,22 @@ async def _iter_sse_chunks(r) -> AsyncIterator[dict]:
                     chunk = delta.get("content", "")
             if chunk:
                 yield {"content": chunk}
+                continue
+            # Thinking-mode deltas arrive in their own ``reasoning_content``
+            # field. Some templates send it at the top level (e.g. the
+            # daemon's own normaliser), others nest it under
+            # ``choices[0].delta``. Pull from both shapes.
+            reasoning = ""
+            if obj.get("reasoning_content"):
+                reasoning = obj["reasoning_content"]
+            else:
+                choices = obj.get("choices") or []
+                if choices and isinstance(choices, list):
+                    reasoning = choices[0].get("delta", {}).get(
+                        "reasoning_content", ""
+                    ) or ""
+            if reasoning:
+                yield {"reasoning": reasoning}
 
 
 async def _watch_abort(websocket: WebSocket, cancelled: asyncio.Event) -> None:
@@ -584,6 +601,7 @@ async def _do_single(
     started = time.perf_counter()
     first_token_at: float | None = None
     text_chunks: list[str] = []
+    reasoning_chunks: list[str] = []
     cached_metadata: dict[str, Any] = {}
     usage: dict[str, Any] = {}
     error_msg: str | None = None
@@ -619,6 +637,14 @@ async def _do_single(
                                     first_token_at = time.perf_counter()
                                 text_chunks.append(ev["content"])
                                 await ws.send_json({"type": "token", "content": ev["content"]})
+                            elif "reasoning" in ev:
+                                # Forwarded as its own WS event so the
+                                # client can render it collapsed while
+                                # the answer streams.
+                                reasoning_chunks.append(ev["reasoning"])
+                                await ws.send_json(
+                                    {"type": "reasoning", "content": ev["reasoning"]}
+                                )
                             else:
                                 usage = ev.get("usage") or usage
                                 cached_metadata = ev.get("cache") or cached_metadata
@@ -662,6 +688,15 @@ async def _do_single(
         }
         if aborted:
             done_msg["aborted"] = True
+    # If the model produced reasoning but no visible content, flag it
+    # so the client can show a hint instead of an empty message. This
+    # happens on Qwen3 / DeepSeek-R1 templates when the model thinks
+    # all the way to the token ceiling before any answer arrives.
+    reasoning_text = "".join(reasoning_chunks)
+    if reasoning_text and not done_msg.get("text"):
+        done_msg["no_answer"] = True
+    if reasoning_text:
+        done_msg["reasoning"] = reasoning_text
     if cached_metadata:
         done_msg["cache"] = cached_metadata
     await ws.send_json(done_msg)

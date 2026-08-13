@@ -165,6 +165,7 @@ function handleServerMessage(msg) {
   switch (msg.type) {
     case "start": onStart(msg); break;
     case "token": onToken(msg.content); break;
+    case "reasoning": onReasoning(msg.content); break;
     case "done": onDone(msg); break;
     case "compare_start": onCompareStart(msg); break;
     case "compare_token": onCompareToken(msg); break;
@@ -210,12 +211,25 @@ function resetSessionStats() {
 
 let activeMsgEl = null;
 let activeTextEl = null;
+// Thinking-mode state for the in-flight assistant message. Reset on
+// every onStart; populated by streaming "reasoning" events; collapsed
+// at onDone so the next message isn't crowded.
+let activeThinkDetails = null;
+let activeThinkBody = null;
+let activeThinkBytes = null;
+let activeThinkText = "";
 
 function onStart(msg) {
   if (msg.mode === "compare") return; // compare completes via compare_done/summary
   activeMsgEl = renderAssistantMessageShell(msg.mode);
   activeTextEl = activeMsgEl.querySelector(".text");
   activeTextEl.classList.add("streaming-cursor");
+  // Per-message thinking state. Reset on every new message so a
+  // long session doesn't accumulate across turns.
+  activeThinkDetails = activeMsgEl.querySelector("details.thinking");
+  activeThinkBody = activeMsgEl.querySelector(".think-body");
+  activeThinkBytes = activeMsgEl.querySelector(".think-bytes");
+  activeThinkText = "";
 }
 
 function onToken(chunk) {
@@ -224,10 +238,51 @@ function onToken(chunk) {
   scrollToBottom();
 }
 
+function onReasoning(chunk) {
+  // Thinking-mode deltas stream in their own WS event. We render them
+  // into a collapsed <details> block so the user can choose to look at
+  // them but they don't dominate the screen while the answer streams.
+  if (!activeThinkDetails) return;
+  if (activeThinkDetails.hidden) activeThinkDetails.hidden = false;
+  activeThinkText += chunk;
+  activeThinkBody.textContent = activeThinkText;
+  // Live byte count next to the toggle. Approximate token count would
+  // be nicer but bytes are cheap and good enough for a glance.
+  activeThinkBytes.textContent = `${activeThinkText.length} chars`;
+  scrollToBottom();
+}
+
 function onDone(msg) {
   if (activeTextEl) {
     activeTextEl.classList.remove("streaming-cursor");
     activeTextEl.textContent = msg.text;
+  }
+  // Thinking-mode reasoning: use the final consolidated string from
+  // the done message (in case any reasoning arrived after the last
+  // streamed delta — or in case we connected after the stream started).
+  if (activeThinkDetails) {
+    if (typeof msg.reasoning === "string" && msg.reasoning.length > 0) {
+      activeThinkText = msg.reasoning;
+      activeThinkBody.textContent = msg.reasoning;
+      activeThinkBytes.textContent = `${msg.reasoning.length} chars`;
+      activeThinkDetails.hidden = false;
+    }
+    // After the response ends, fold the thinking block back up so it
+    // doesn't crowd the next message. The user can still click the
+    // summary to re-expand.
+    activeThinkDetails.removeAttribute("open");
+  }
+  // Reasoning-but-no-answer case: the model burned the entire budget
+  // thinking and produced no visible content. Surface a hint so the
+  // user knows the reasoning is the only output.
+  if (msg.no_answer && activeTextEl && !activeTextEl.textContent) {
+    const note = document.createElement("div");
+    note.className = "no-answer-note";
+    note.textContent =
+      "Model produced reasoning but no answer — likely ran out of " +
+      "tokens while thinking. Try a higher max_tokens, or disable " +
+      "thinking for this model.";
+    activeMsgEl.querySelector(".body").appendChild(note);
   }
   if (activeMsgEl && msg.metrics) {
     appendMetrics(activeMsgEl, msg.metrics, msg.mode, msg.cache);
@@ -244,6 +299,10 @@ function onDone(msg) {
   }
   activeMsgEl = null;
   activeTextEl = null;
+  activeThinkDetails = null;
+  activeThinkBody = null;
+  activeThinkBytes = null;
+  activeThinkText = "";
   setBusy(false);
 }
 
@@ -500,6 +559,10 @@ function renderAssistantMessageShell(mode) {
   const el = document.createElement("div");
   el.className = "message assistant";
   const tag = mode ? `<span class="mode-tag mode-tag-${mode}">${mode}</span>` : "";
+  // The <details class="thinking"> block is created closed and only
+  // populated when reasoning tokens arrive. <summary> shows the byte
+  // count and acts as the toggle. The block is omitted entirely if
+  // no reasoning ever arrives, so non-thinking models see nothing.
   el.innerHTML = `
     <div class="avatar">AI</div>
     <div class="body">
@@ -507,6 +570,10 @@ function renderAssistantMessageShell(mode) {
         <span class="role">assistant</span>
         ${tag}
       </div>
+      <details class="thinking" hidden>
+        <summary><span class="think-label">thinking</span><span class="think-bytes"></span></summary>
+        <pre class="think-body"></pre>
+      </details>
       <div class="text"></div>
       <div class="metrics"></div>
     </div>

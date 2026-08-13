@@ -251,6 +251,54 @@ class TestIterSseChunks:
         events = [ev async for ev in _iter_sse_chunks(FakeStreamResponse(text))]
         assert events == [{"content": "legacy"}]
 
+    @pytest.mark.asyncio
+    async def test_extracts_top_level_reasoning_content(self):
+        """Qwen3 / DeepSeek-R1 templates stream reasoning at the top
+        level via ``reasoning_content``. The parser should pull it
+        out as a ``reasoning`` event, distinct from ``content``."""
+        text = sse(
+            {"reasoning_content": "let me think about this..."},
+            {"reasoning_content": " step two."},
+            {"content": "the answer"},
+        )
+        events = [ev async for ev in _iter_sse_chunks(FakeStreamResponse(text))]
+        assert events == [
+            {"reasoning": "let me think about this..."},
+            {"reasoning": " step two."},
+            {"content": "the answer"},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_extracts_reasoning_content_from_delta(self):
+        """Some templates nest reasoning under choices[0].delta.
+        The parser should pick that up too."""
+        text = sse(
+            {"choices": [{"index": 0, "delta": {"reasoning_content": "thinking..."}}]},
+            {"choices": [{"index": 0, "delta": {"content": "answer"}}]},
+        )
+        events = [ev async for ev in _iter_sse_chunks(FakeStreamResponse(text))]
+        assert events == [
+            {"reasoning": "thinking..."},
+            {"content": "answer"},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_reasoning_only_no_visible_content(self):
+        """A response that streams reasoning but no answer should
+        yield only reasoning events. The caller is responsible for
+        flagging the no-answer case on the client; the parser just
+        reports what it saw."""
+        text = sse(
+            {"reasoning_content": "thinking really hard"},
+            {"reasoning_content": " about the answer..."},
+        )
+        events = [ev async for ev in _iter_sse_chunks(FakeStreamResponse(text))]
+        assert events == [
+            {"reasoning": "thinking really hard"},
+            {"reasoning": " about the answer..."},
+        ]
+        assert all("content" not in ev for ev in events)
+
 
 # ── Prometheus metrics parsing ─────────────────────────────────────────
 
