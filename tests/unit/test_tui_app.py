@@ -527,6 +527,55 @@ class TestChatLogReasoning:
         answer_idx = rendered.find("Hello world")
         assert 0 <= think_idx < answer_idx
 
+    @pytest.mark.asyncio
+    async def test_reasoning_end_renders_both_lines_to_surface(self):
+        """Regression: end_assistant for a thinking-mode response
+        used to replace the streaming line with the think summary
+        (which calls _rerender) and then append the answer line
+        without rerendering. The answer silently disappeared from the
+        screen until some other event triggered a rerender."""
+        from tokirecur.tui.widgets import ChatLog
+
+        log = ChatLog()
+        log.begin_assistant(message_id=1, mode="cached")
+        log.append_assistant_reasoning("thinking…")
+        log.append_assistant_token("the answer")
+
+        # Capture every surface update so we can inspect what the
+        # screen actually sees after end_assistant returns.
+        updates = []
+        log._surface.update = lambda renderable: updates.append(renderable)
+
+        log.end_assistant(
+            mode="cached", hit=False, soft_hit=False,
+            ttft_ms=10.0, total_ms=50.0, tokens_generated=1,
+            prompt_tokens=4,
+        )
+
+        # The final surface update must contain both the think line
+        # and the answer line. If only the think line is there, the
+        # answer was appended but never rendered.
+        assert updates, "no surface updates captured during end_assistant"
+        final = updates[-1]
+        from rich.console import Console, Group
+
+        # Group holds renderables; flatten to plain text.
+        renderables = (
+            list(final.renderables)
+            if isinstance(final, Group)
+            else [final]
+        )
+        console = Console(width=200, record=True)
+        for r in renderables:
+            console.print(r)
+        rendered = console.export_text()
+        assert "think › thinking…" in rendered, (
+            f"think summary missing from final surface render: {rendered!r}"
+        )
+        assert "the answer" in rendered, (
+            f"answer missing from final surface render: {rendered!r}"
+        )
+
 
 def _line_text(line) -> str:
     """Plain-text rendering of a rich Text line for assertions."""

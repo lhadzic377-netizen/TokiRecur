@@ -178,8 +178,20 @@ class ChatLog(VerticalScroll):
             think_line = Text()
             think_line.append(f"    think › {self._current_assistant_reasoning}",
                               style="dim italic")
-            self._replace_streaming_line(think_line)
+            # Mutate _lines directly instead of going through
+            # _replace_streaming_line, because that helper rerenders
+            # on its own and the answer append below would then miss
+            # the render — the screen would show only the dim
+            # think-summary line and the answer would silently
+            # disappear until some other event triggered a rerender.
+            if (self._streaming_line_idx is not None
+                    and self._streaming_line_idx < len(self._lines)):
+                self._lines[self._streaming_line_idx] = think_line
+            else:
+                self._lines.append(think_line)
             self._lines.append(text)
+            self._trim()
+            self._rerender()
         else:
             self._replace_streaming_line(text)
         self._current_assistant_id = None
