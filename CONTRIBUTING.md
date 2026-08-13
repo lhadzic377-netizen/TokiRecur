@@ -4,6 +4,15 @@ TokiRecur is open source. The code is small, the seams are deliberate, and
 fixes ship through the normal git flow. This document captures the conventions
 so a quick edit doesn't have to rediscover them.
 
+## Contribution model
+
+TokiRecur is maintained by a single maintainer, and every contribution is
+reviewed and approved by them before it lands. The practical rule:
+
+**Nothing merges without an explicit maintainer review.** Direct pushes to
+`main` are restricted. All changes arrive as pull requests from a fork or a
+feature branch, and the maintainer merges them.
+
 ## Local setup
 
 ```bash
@@ -26,20 +35,6 @@ picked up the moment the daemon restarts. No rebuild step.
 ```
 
 The test suite is fast and the loop is short: edit, run pytest, run ruff, commit.
-
-## Smoke-test path
-
-Some changes need a real llama-server. The long-running daemon on this box
-sits on port 8094. Don't touch it. Spin up a throwaway daemon for smoke tests:
-
-```bash
-nohup .venv/bin/toki serve --host 127.0.0.1 --port 8799 \
-    --backend-url http://127.0.0.1:8094 \
-    >/tmp/opencode/toki-serve-smoke.log 2>&1 &
-```
-
-Point your client at `http://127.0.0.1:8799` (raw backend `http://127.0.0.1:8094`).
-Kill it with `pkill -f "toki serve --port 8799"` when done.
 
 ## Conventions
 
@@ -76,10 +71,20 @@ in `src/tokirecur/clilauncher.py` / `clichat.py` — keep that in sync.
 
 ## Filing a PR
 
-- Branch from `master`.
+- Branch from `main`.
 - Title: `<area>: <what>` (e.g. `install-llama: ETXTBSY-safe binary replace`).
 - Body: the symptom, the root cause, the fix. One paragraph each.
 - All checks green: unit tests, ruff, smoke test (if behaviour changed).
+- **Wait for maintainer review.** The maintainer approves and merges every PR;
+  do not merge your own unless you are the maintainer.
+
+## Review process
+
+1. Open the PR with the checklist above satisfied.
+2. The maintainer reviews the diff, runs the checks, and either requests
+   changes or approves.
+3. On approval the maintainer merges. First-time contributors are thanked in
+   `AUTHORS` at merge time.
 
 ## Where things live
 
@@ -95,4 +100,4 @@ in `src/tokirecur/clilauncher.py` / `clichat.py` — keep that in sync.
 | `tests/unit/` | Fast tests, no llama-server required. |
 | `tests/integration/` | End-to-end tests, need a running llama-server. |
 | `AGENTS.md` | Dev-machine gotchas (this box). |
-| `install.sh` / `install.ps1` | One-shot installer; both pick up `master` automatically. |
+| `install.sh` / `install.ps1` | One-shot installer; both pick up `main` automatically. |

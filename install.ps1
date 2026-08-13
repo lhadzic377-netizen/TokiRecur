@@ -19,7 +19,7 @@
 #   nssm install TokiRecur "<venv>\Scripts\toki.exe" serve
 #
 # One-liner (private repo - token required):
-#   $env:TOKI_INSTALL_TOKEN='<PAT>'; $j=irm -Headers @{Authorization='Bearer '+$env:TOKI_INSTALL_TOKEN} 'https://api.github.com/repos/lhadzic377-netizen/TokiRecur/contents/install.ps1?ref=master'; iex ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($j.content)))
+#   $env:TOKI_INSTALL_TOKEN='<PAT>'; $j=irm -Headers @{Authorization='Bearer '+$env:TOKI_INSTALL_TOKEN} 'https://api.github.com/repos/lhadzic377-netizen/TokiRecur/contents/install.ps1?ref=main'; iex ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($j.content)))
 #
 # Re-runnable: re-runs re-fetch the source, reinstall the package, and
 # re-download the binary.
@@ -63,11 +63,11 @@ $Zip = Join-Path $Base 'src.zip'
 # because GitHub answers 404 instead of 401 without auth).
 irm -Headers @{Authorization = 'Bearer ' + $env:TOKI_INSTALL_TOKEN} `
     -OutFile $Zip `
-    'https://api.github.com/repos/lhadzic377-netizen/TokiRecur/zipball/refs/heads/master'
+    'https://api.github.com/repos/lhadzic377-netizen/TokiRecur/zipball/refs/heads/main'
 if (Test-Path $Src) { Remove-Item -Recurse -Force $Src }
 Expand-Archive -Path $Zip -DestinationPath $Src
 Remove-Item -Force $Zip
-# Expand-Archive nests a single TokiRecur-master/ folder; flatten it.
+# Expand-Archive nests a single TokiRecur-main/ folder; flatten it.
 $Nested = Get-ChildItem -Directory $Src | Select-Object -First 1
 if ($Nested) {
     Get-ChildItem -Force $Nested.FullName | Move-Item -Destination $Src -Force

@@ -438,7 +438,7 @@ def self_upgrade(repo: str | None) -> None:
     via ``pip install`` from a git checkout. Collapses the standard
     5-step recovery into one command:
 
-        git fetch origin && git reset --hard origin/master
+        git fetch origin && git reset --hard origin/main
         pip install --force-reinstall .
 
     Refuses to run if the installed package isn't a git checkout.
@@ -477,7 +477,7 @@ def self_upgrade(repo: str | None) -> None:
     if rc != 0:
         click.echo(f"git fetch failed: {out}", err=True)
         raise SystemExit(1) from None
-    rc, out = _run(["git", "reset", "--hard", "origin/master"])
+    rc, out = _run(["git", "reset", "--hard", "origin/main"])
     if rc != 0:
         click.echo(f"git reset failed: {out}", err=True)
         raise SystemExit(1) from None

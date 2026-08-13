@@ -28,7 +28,7 @@ FROM python:3.11-slim AS runtime
 # Minimal runtime labels.
 LABEL org.opencontainers.image.title="Toki Recur" \
       org.opencontainers.image.description="KV cache reuse for LLM inference" \
-      org.opencontainers.image.source="https://github.com/anomalyco/tokirecur" \
+      org.opencontainers.image.source="https://github.com/lhadzic377-netizen/TokiRecur" \
       org.opencontainers.image.licenses="MIT"
 
 # Non-root user for runtime.

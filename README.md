@@ -709,4 +709,9 @@ every push and PR.
 
 ## License
 
-MIT.
+MIT — see [LICENSE](LICENSE). Copyright (c) 2026 Luke Hadzic.
+
+## Support
+
+Questions, security reports, and community help: <contact@tokirecur.com>.
+

@@ -57,7 +57,7 @@ def test_self_upgrade_uses_git_then_pip(tmp_path, monkeypatch):
     # find the indexes of the git/pip commands
     flat = [" ".join(c) for c in calls]
     assert any("git fetch origin" in f for f in flat), flat
-    assert any("git reset --hard origin/master" in f for f in flat), flat
+    assert any("git reset --hard origin/main" in f for f in flat), flat
     assert any("pip install --force-reinstall" in f for f in flat), flat
 
     # Ordering: fetch < reset < pip

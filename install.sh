@@ -223,7 +223,7 @@ else
     rm -rf "$SRC"
     mkdir -p "$SRC"
     curl -fsSL -o /tmp/tokirecur-src.tar.gz \
-        "https://x-access-token:$TOKI_INSTALL_TOKEN@codeload.github.com/lhadzic377-netizen/TokiRecur/tar.gz/refs/heads/master"
+        "https://x-access-token:$TOKI_INSTALL_TOKEN@codeload.github.com/lhadzic377-netizen/TokiRecur/tar.gz/refs/heads/main"
     tar xzf /tmp/tokirecur-src.tar.gz -C "$SRC" --strip-components=1
     rm -f /tmp/tokirecur-src.tar.gz
 fi

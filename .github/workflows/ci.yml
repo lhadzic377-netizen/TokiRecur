@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    branches: [main]
   pull_request:
-    branches: [main, master]
+    branches: [main]
 
 jobs:
   ruff:
@@ -69,7 +69,7 @@ jobs:
         run: |
           TOKI_INSTALL_TOKEN="$INSTALL_TOKEN" curl -fsSL \
             -H "Accept: application/vnd.github.raw" -H "Authorization: Bearer $INSTALL_TOKEN" \
-            "https://x-access-token:$INSTALL_TOKEN@api.github.com/repos/lhadzic377-netizen/TokiRecur/contents/install.sh?ref=master" \
+            "https://x-access-token:$INSTALL_TOKEN@api.github.com/repos/lhadzic377-netizen/TokiRecur/contents/install.sh?ref=main" \
             | sudo TOKI_INSTALL_TOKEN="$INSTALL_TOKEN" bash
       - name: Verify artifacts
         run: |
@@ -103,7 +103,7 @@ jobs:
         run: |
           TOKI_INSTALL_TOKEN="$INSTALL_TOKEN" curl -fsSL \
             -H "Accept: application/vnd.github.raw" -H "Authorization: Bearer $INSTALL_TOKEN" \
-            "https://x-access-token:$INSTALL_TOKEN@api.github.com/repos/lhadzic377-netizen/TokiRecur/contents/install.sh?ref=master" \
+            "https://x-access-token:$INSTALL_TOKEN@api.github.com/repos/lhadzic377-netizen/TokiRecur/contents/install.sh?ref=main" \
             | sudo TOKI_INSTALL_TOKEN="$INSTALL_TOKEN" bash
       - name: Verify artifacts
         run: |
@@ -134,7 +134,7 @@ jobs:
         shell: pwsh
         run: |
           $env:TOKI_INSTALL_TOKEN = "$env:INSTALL_TOKEN"
-          $j=irm -Headers @{Authorization='Bearer '+$env:INSTALL_TOKEN} 'https://api.github.com/repos/lhadzic377-netizen/TokiRecur/contents/install.ps1?ref=master'; iex ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($j.content)))
+          $j=irm -Headers @{Authorization='Bearer '+$env:INSTALL_TOKEN} 'https://api.github.com/repos/lhadzic377-netizen/TokiRecur/contents/install.ps1?ref=main'; iex ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($j.content)))
       - name: Verify artifacts
         shell: pwsh
         run: |

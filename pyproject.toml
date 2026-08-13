@@ -9,7 +9,7 @@ description = "Toki Recur — KV cache reuse for LLM inference. Drop-in prefix c
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
-authors = [{ name = "Toki Recur" }]
+authors = [{ name = "Luke Hadzic", email = "contact@tokirecur.com" }]
 keywords = ["llm", "inference", "kv-cache", "prefix-cache", "rocm", "llama.cpp", "toki-recur"]
 classifiers = [
     "Programming Language :: Python :: 3",
