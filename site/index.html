@@ -338,18 +338,18 @@
 <span class="k">toki</span><span class="c">                                            # opens the launcher: chat, web, models</span></code></pre>
     <p class="note">Runs on any x86_64 or arm64 Linux, macOS, or Windows box, with whatever GPU
       backend your llama-server build has. Optional systemd/launchd daemon mode included.
-      Platform status: <strong>Linux and macOS stable</strong>, <strong>Windows beta</strong> —
-      the Windows installer keeps improving without touching the stable code paths.
+      Platform status: <strong>Linux and macOS stable</strong>, <strong>Windows beta</strong>.
+      The Windows installer keeps improving without touching the stable code paths.
       The installer on macOS/Linux is one script that runs everything behind a yellow
       progress bar while the real output still streams live.</p>
   </section>
 
   <section class="honesty">
     <p class="overline">A note on compatibility</p>
-    <h2>Some models work. Some need a tweak. We're honest about it.</h2>
-    <p class="honesty-body"><code>toki model pull</code> accepts every GGUF on Hugging Face, so the answer to "does this model work?" depends on the model, the quant, and your hardware. Some GGUFs boot clean and chat on the first try. Others need a chat template swap, a smaller context, a different quant, or a small edit to the registry. We test what we recommend and fix what we ship, but we won't pretend every combination works the same.</p>
-    <p class="honesty-body">It will keep getting better. The failure modes we hit this week (broken chat templates, runtime crashes on a quant, ETXTBSY on a binary swap) feed the next round of fixes. Better auto-detection, fewer surprises, more recovery paths baked in. The code is open, the issues are public, and the path from "this model is broken" to "this model works" is one PR away.</p>
-    <p class="honesty-body">Tested on a small set of machines: AMD Strix Halo (Linux), M2 (macOS), Intel i7-8650U (Windows), Intel Core Ultra 155U (Linux), GTX 1650 Mobile (Windows). That's five configs, not a hardware matrix. Different GPU, different VRAM, different kernel, different driver — any one of them can change the outcome. That's where the next bug report usually comes from.</p>
+    <h2>Some models work. Some need a tweak. I'm honest about it.</h2>
+    <p class="honesty-body"><code>toki model pull</code> accepts every GGUF on Hugging Face, so the answer to "does this model work?" depends on the model, the quant, and your hardware. Some GGUFs boot clean and chat on the first try. Others need a chat template swap, a smaller context, a different quant, or a small edit to the registry. I test what I recommend and fix what I ship, but I won't pretend every combination works the same.</p>
+    <p class="honesty-body">It will keep getting better. The failure modes I hit this week (broken chat templates, runtime crashes on a quant, ETXTBSY on a binary swap) feed the next round of fixes. Better auto-detection, fewer surprises, more recovery paths baked in. The code is open, the issues are public, and the path from "this model is broken" to "this model works" is one PR away.</p>
+    <p class="honesty-body">Tested on a small set of machines: AMD Strix Halo (Linux), M2 (macOS), Intel i7-8650U (Windows), Intel Core Ultra 155U (Linux), GTX 1650 Mobile (Windows). That's five configs, not a hardware matrix. Different GPU, different VRAM, different kernel, different driver; any one of them can change the outcome. That's where the next bug report usually comes from.</p>
   </section>
 
   <section id="architecture">
