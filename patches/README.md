@@ -2,6 +2,9 @@
 
 ## Status: not needed
 
+> License: this patch modifies llama.cpp, MIT (c) 2023-2026 The ggml
+> authors. Full text: [`LICENSE.llama-cpp`](../LICENSE.llama-cpp).
+
 As of llama.cpp b3524 (mid-2025), the upstream `llama-server` already
 exposes KV cache save/restore endpoints, gated by the `--slot-save-path`
 flag:

@@ -1,3 +1,10 @@
+# TokiRecur patch for llama.cpp examples/server/server.cpp.
+#
+# This patch modifies llama.cpp, which is MIT licensed:
+#   Copyright (c) 2023-2026 The ggml authors
+#   Full license text: LICENSE.llama-cpp (repo root)
+#   Upstream: https://github.com/ggerganov/llama.cpp
+#
 --- a/examples/server/server.cpp
 +++ b/examples/server/server.cpp
 @@ -1,5 +1,6 @@

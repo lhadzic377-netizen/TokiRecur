@@ -454,6 +454,10 @@ runs the unit-test matrix on Python 3.11 / 3.12 / 3.13 on every push and PR.
 
 MIT — see [LICENSE](LICENSE). Copyright (c) 2026 Luke Hadzic.
 
+The `patches/` directory ships a patch that modifies
+[llama.cpp](https://github.com/ggerganov/llama.cpp), which is MIT licensed
+(c) 2023-2026 The ggml authors — full text in [LICENSE.llama-cpp](LICENSE.llama-cpp).
+
 ## Support
 
 Questions, security reports, and community help: <contact@tokirecur.com>.
