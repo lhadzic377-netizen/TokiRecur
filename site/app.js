@@ -1,4 +1,19 @@
 document.addEventListener("DOMContentLoaded", () => {
+  const navToggle = document.querySelector(".nav-toggle");
+  const navLinks = document.getElementById("nav-links");
+  if (navToggle && navLinks) {
+    const setNav = (open) => {
+      document.body.classList.toggle("nav-open", open);
+      navToggle.setAttribute("aria-expanded", String(open));
+    };
+    navToggle.addEventListener("click", () => {
+      setNav(!document.body.classList.contains("nav-open"));
+    });
+    navLinks.addEventListener("click", (e) => {
+      if (e.target.closest("a")) setNav(false);
+    });
+  }
+
   document.querySelectorAll("pre.code").forEach((pre) => {
     const btn = document.createElement("button");
     btn.className = "copy";
@@ -26,7 +41,7 @@ document.addEventListener("DOMContentLoaded", () => {
   hero.forEach((el) => el.classList.add("in-view"));
 
   const groups = document.querySelectorAll(
-    ".cards .card, .steps .reveal, .stats .stat, #benchmarks tbody .reveal, .arch .reveal, #pricing .reveal, .cta-final .reveal, .code.reveal"
+    ".cards .card, .steps .reveal, .stats .stat, #benchmarks tbody .reveal, .arch .reveal, #pricing .reveal, #watch .reveal, .cta-final .reveal, .code.reveal"
   );
   stagger(groups, 0.1);
 
