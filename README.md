@@ -1,3 +1,7 @@
+<p align="center">
+  <a href="https://tokirecur.com"><img src="site/img/toki.png" alt="toki the bear mascot" width="120" height="120"></a>
+</p>
+
 # Toki Recur
 
 A standalone KV cache reuse system for LLM inference. Drop-in prefix caching that works across CUDA, ROCm, and Vulkan.
