@@ -561,9 +561,9 @@ def test_pull_model_auto_ctx_default_cap(env, hf, monkeypatch):
 
 
 def test_auto_ctx_respects_ram_budget_and_ceiling(env, monkeypatch):
-    """KV at f16 for the 16-layer/8-kv-head model is 64KB/token (x2
-    parallel). A small RAM box gets a small ctx; the 64k ceiling caps
-    even unlimited RAM."""
+    """KV at f16 for the 16-layer/8-kv-head model is 32KB/token
+    (unified KV: parallel doesn't multiply the pool). A small RAM box
+    gets a small ctx; the 64k ceiling caps even unlimited RAM."""
     from tokirecur.ggufmeta import GgufMeta
     gguf = env / "m.gguf"
     gguf.write_bytes(b"")
@@ -571,8 +571,8 @@ def test_auto_ctx_respects_ram_budget_and_ceiling(env, monkeypatch):
         n_embd=1024, n_layer=16, n_head=16, n_head_kv=8,
         context_length=128000))
     monkeypatch.setattr(ctl, "_available_gb", lambda: 6.0)
-    # Budget = 6 - 0 - 4 = 2 GB -> max_fit ~30517, floor 512.
-    assert ctl._auto_ctx_size(gguf, parallel=2, kv="f16") == 30517
+    # Budget = 6 - 0 - 4 = 2 GB -> max_fit ~61035, floor 512.
+    assert ctl._auto_ctx_size(gguf, parallel=2, kv="f16") == 61035
     monkeypatch.setattr(ctl, "_available_gb", lambda: float("inf"))
     # Unlimited RAM -> capped by the 64k ceiling (model max is 128k).
     assert ctl._auto_ctx_size(gguf, parallel=2, kv="f16") == 65536

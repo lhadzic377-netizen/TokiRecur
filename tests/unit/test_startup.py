@@ -38,8 +38,10 @@ def test_kv_bytes_per_token_uses_gqa_dims(env, monkeypatch):
     spec = _spec(env)
     monkeypatch.setattr(ctl, "read_gguf_meta", lambda p: GgufMeta(
         n_embd=4096, n_layer=32, n_head=16, n_head_kv=4))
-    # head_dim 256 * 4 kv heads * 2 (k+v) * 2.0 bytes * 32 layers * 2 slots
-    assert ctl._kv_bytes_per_token(spec) == 256 * 4 * 2 * 2.0 * 32 * 2
+    # head_dim 256 * 4 kv heads * 2 (k+v) * 2.0 bytes * 32 layers.
+    # Unified KV (-kvu) shares one n_ctx pool across slots, so the
+    # slot count does not multiply the per-token estimate.
+    assert ctl._kv_bytes_per_token(spec) == 256 * 4 * 2 * 2.0 * 32
 
 
 def test_clamp_ctx_reduces_on_small_ram(env, monkeypatch):
@@ -49,8 +51,8 @@ def test_clamp_ctx_reduces_on_small_ram(env, monkeypatch):
     # Budget = 16 GB avail - 0 weights - 4 GB headroom = 12 GB.
     clamped = ctl._clamp_ctx(spec, avail_gb=16.0, weight_gb=0.0)
     assert clamped < spec.ctx_size
-    # 12e9 / (256*4*2*2.0*32*2 = 262144 B/token) = 45776
-    assert clamped == 45776
+    # 12e9 / (256*4*2*2.0*32 = 131072 B/token) = 91552
+    assert clamped == 91552
 
 
 def test_clamp_ctx_noop_when_meta_unreadable(env, monkeypatch):
@@ -70,8 +72,8 @@ def test_clamp_ctx_keeps_floor(env, monkeypatch):
     spec = _spec(env)
     monkeypatch.setattr(ctl, "read_gguf_meta", lambda p: GgufMeta(
         n_embd=4096, n_layer=32, n_head=16, n_head_kv=4))
-    # Budget 0.1 GB -> max_fit ~381 tokens, floored up to 512.
-    assert ctl._clamp_ctx(spec, avail_gb=4.1, weight_gb=0.0) == ctl._CTX_FLOOR
+    # Budget 0.06 GB -> max_fit ~457 tokens, floored up to 512.
+    assert ctl._clamp_ctx(spec, avail_gb=4.06, weight_gb=0.0) == ctl._CTX_FLOOR
 
 
 def test_clamp_ctx_zero_budget_keeps_floor(env, monkeypatch):
@@ -93,12 +95,13 @@ def test_fit_plan_picks_biggest_window(env, monkeypatch):
     spec = _spec(env, ctx=200000, parallel=2)
     monkeypatch.setattr(ctl, "read_gguf_meta", lambda p: GgufMeta(
         n_embd=4096, n_layer=32, n_head=16, n_head_kv=4))
-    # 12 GB budget: f16@2 slots fits 45776, q4_1@1 slot reaches the full
-    # 200k. The planner must trade KV precision/slots for the window —
-    # on the 16 GB class that's the difference between "not enough
-    # context" and a usable model.
+    # 12 GB budget: f16 reaches 91552, q4_1 reaches the full 200k.
+    # The planner must trade KV precision for the window — on the
+    # 16 GB class that's the difference between "not enough
+    # context" and a usable model. Unified KV keeps the spec's
+    # slots (parallel no longer costs KV memory).
     assert ctl._fit_plan(spec, avail_gb=16.0, weight_gb=0.0) == (
-        200000, "q4_1", 1)
+        200000, "q4_1", 2)
 
 
 def test_fit_plan_prefers_spec_kv_on_tie(env, monkeypatch):
@@ -109,7 +112,7 @@ def test_fit_plan_prefers_spec_kv_on_tie(env, monkeypatch):
     # q4_1 and q4_0 both reach the 200k cap; the spec's own kv wins the
     # tie (no quality surprise on machines with plenty of RAM).
     assert ctl._fit_plan(spec, avail_gb=16.0, weight_gb=0.0) == (
-        200000, "q4_0", 1)
+        200000, "q4_0", 2)
 
 
 def test_fit_plan_noop_unknown_ram(env, monkeypatch):
@@ -136,10 +139,10 @@ def test_effective_ctx_falls_back_to_plan(env, monkeypatch):
     monkeypatch.setattr(ctl, "read_gguf_meta", lambda p: GgufMeta(
         n_embd=4096, n_layer=32, n_head=16, n_head_kv=4))
     monkeypatch.setattr(ctl, "_available_gb", lambda: 8.0)
-    # 8 GB budget, weights ignored: f16@2 slots fits 30517, but the
-    # planner launches the biggest window that fits — q4_0@1 slot
-    # reaches 108506. The effective context must match what
-    # llama-server actually runs with, not the spec's own worst-case
+    # 8 GB budget, weights ignored: f16 reaches 30517, but the
+    # planner launches the biggest window that fits — q4_0 reaches
+    # 108506. The effective context must match what llama-server
+    # actually runs with, not the spec's own worst-case
     # kv/slots (the "select 65k, still says 31k" bug).
     assert ctl._effective_ctx(spec) == 108506
 

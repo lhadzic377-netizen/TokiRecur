@@ -414,13 +414,19 @@ _CTX_FLOOR = 512
 
 def _kv_bytes_per_token(spec: ModelSpec, kv_type: str | None = None,
                         parallel: int | None = None) -> float | None:
-    """llama.cpp KV cache bytes per token across all layers/slots.
+    """llama.cpp KV cache bytes per token across all layers.
 
     Exact math: per layer, k+v each hold ``head_dim * n_head_kv``
     values, with ``head_dim = n_embd / n_head``. Requires the model's
     GGUF metadata; ``None`` when unreadable (caller skips clamping).
-    ``kv_type``/``parallel`` override the spec's own KV precision and
-    slot count (used by the fit planner to find a config that fits).
+
+    Modern llama.cpp treats ``-c`` as the *total* context: with the
+    unified KV cache (``-kvu``, which Toki always passes) every slot
+    can use the full window against one shared ``n_ctx``-cell pool, so
+    per-token cost does not scale with ``parallel``. The ``kv_type`` /
+    ``parallel`` overrides exist for the fit planner to evaluate
+    alternatives; ``parallel`` only gates ``None`` metadata fallbacks
+    and no longer multiplies the estimate.
     """
     gguf = getattr(spec, "gguf", None)
     if not gguf:
@@ -431,7 +437,7 @@ def _kv_bytes_per_token(spec: ModelSpec, kv_type: str | None = None,
     head_dim = meta.n_embd / meta.n_head
     kv_bytes = _KV_BYTES_PER_ELEM.get(kv_type or spec.kv, 2.0)
     per_layer = head_dim * meta.n_head_kv * 2.0 * kv_bytes
-    return per_layer * meta.n_layer * (parallel if parallel is not None else spec.parallel)
+    return per_layer * meta.n_layer
 
 
 def _model_max_ctx(spec: ModelSpec) -> int | None:
@@ -455,6 +461,11 @@ def _clamp_ctx(spec: ModelSpec, avail_gb: float | None = None,
     metadata is unavailable (or the machine's RAM can't be measured)
     the configured ``ctx_size`` is returned untouched and llama-server's
     own auto-reduction applies.
+
+    The KV estimate covers the full ``n_ctx`` pool (unified KV cache,
+    ``-kvu``), so the configured window is kept whenever the measured
+    RAM holds it — the window only scales down when RAM genuinely
+    can't fit the model plus the full-window KV cache.
     """
     cap = spec.ctx_size
     model_max = _model_max_ctx(spec)
@@ -495,16 +506,20 @@ def _fit_plan(spec: ModelSpec, avail_gb: float | None = None,
               weight_gb: float | None = None) -> tuple[int, str, int]:
     """The launch config ``(ctx, kv, parallel)`` that best fits RAM.
 
-    Computes the largest context each (kv precision, slot count)
-    combination can hold under the same budget as ``_clamp_ctx``
-    (weights * 1.2 + 4 GB headroom, capped at the model's own max ctx)
-    and picks the biggest window. Ties prefer the spec's own
-    kv/parallel (no quality surprise on machines with plenty of RAM),
-    then higher-quality KV, then more slots.
+    Computes the largest context each KV precision can hold under the
+    same budget as ``_clamp_ctx`` (weights * 1.2 + 4 GB headroom,
+    capped at the model's own max ctx) and picks the biggest window.
+    Ties prefer the spec's own kv/parallel (no quality surprise on
+    machines with plenty of RAM), then higher-quality KV.
 
-    On the 16 GB class this is the difference between a ~8-16k window
-    (f16, 2 slots) and a ~64k+ window (q8_0, 1 slot) for a 9B — the
-    memory is identical, only the advertised window changes.
+    Modern llama.cpp is launched with the unified KV cache (``-kvu``),
+    where ``-c`` is the total context shared across all slots — each
+    slot can use the full window against one ``n_ctx``-cell pool. The
+    slot count no longer consumes extra KV memory, so ``parallel`` is
+    kept at the spec's value and only KV precision trades memory for
+    window. On the 16 GB class this is the difference between a
+    ~45k window (f16) and a ~90k+ window (q4_1) for a 9B — the memory
+    is identical, only the advertised window changes.
     """
     cap = spec.ctx_size
     model_max = _model_max_ctx(spec)
@@ -524,18 +539,16 @@ def _fit_plan(spec: ModelSpec, avail_gb: float | None = None,
         return (cap, getattr(spec, "kv", "f16"), getattr(spec, "parallel", 1))
     candidates = []
     for kv in _KV_QUALITY_ORDER:
-        for par in (spec.parallel, 1):
-            per = _kv_bytes_per_token(spec, kv_type=kv, parallel=par)
-            if per is None:
-                continue
-            ctx = max(_CTX_FLOOR, min(cap, int(budget * 1e9 / per)))
-            candidates.append((ctx, kv, par))
+        per = _kv_bytes_per_token(spec, kv_type=kv)
+        if per is None:
+            continue
+        ctx = max(_CTX_FLOOR, min(cap, int(budget * 1e9 / per)))
+        candidates.append((ctx, kv, getattr(spec, "parallel", 1)))
     return max(
         candidates,
         key=lambda c: (
             c[0],                       # biggest window wins
             c[1] == spec.kv,            # …then the spec's own kv
-            c[2] == spec.parallel,      # …then the spec's own slots
             -_KV_QUALITY_ORDER.index(c[1]),  # …then higher KV quality
             c[2],                       # …then more slots
         ),
@@ -1755,6 +1768,7 @@ def _llama_args(spec: ModelSpec, ctx_override: int | None = None,
         "--port", str(spec.llama_port),
         "-c", str(ctx),
         "--parallel", str(parallel),
+        "-kvu",
         "-lv", "3",
     ]
     # Offload to the GPU when one is present. Registry `extra_args` may
@@ -2054,6 +2068,7 @@ def stop_model(spec: ModelSpec, force: bool = False) -> None:
     state = spec.state_dir()
     _stop_pidfile(state / "llama.pid")
     _stop_pidfile(state / "daemon.pid")
+    (state / "effective_ctx.txt").unlink(missing_ok=True)
     if force:
         for port in (spec.llama_port, spec.daemon_port):
             pid = _pid_on_port(port)
