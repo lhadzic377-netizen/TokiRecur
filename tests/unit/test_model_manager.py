@@ -1213,6 +1213,82 @@ def test_update_spec_field_unknown_model(env):
         ctl.update_spec_field("nope", "ctx_size", "100")
 
 
+def test_update_spec_field_apply_forces_restart_of_running_stack(
+    seeded_env, monkeypatch
+):
+    """apply=True on a restart-required field must stop a RUNNING stack
+    so the new -c/-kvu actually takes effect — start_model alone is
+    idempotent and would silently keep the old window (the
+    "reg:100000 · live:16384" confusion)."""
+    use_calls: list[dict] = []
+
+    def fake_use_model(name, **kwargs):
+        use_calls.append({"name": name, **kwargs})
+        return ctl.get_model(name)
+
+    monkeypatch.setattr(ctl, "use_model", fake_use_model)
+    ctl.update_spec_field("9b", "ctx_size", "4096", apply=True)
+    assert len(use_calls) == 1
+    call = use_calls[0]
+    assert call["name"] == "9b"
+    assert call["stop_others"] is False
+    assert call["force_restart"] is True
+
+
+def test_use_model_force_restart_stops_then_starts(seeded_env, monkeypatch):
+    """force_restart=True stops the target's own running stack before
+    start_model, so a settings edit propagates to the live server."""
+    from tokirecur.ctl import use_model
+
+    stopped: list[str] = []
+    started: list[str] = []
+
+    monkeypatch.setattr(ctl, "llama_reachable", lambda spec: True)
+    monkeypatch.setattr(ctl, "daemon_reachable", lambda spec: False)
+
+    def fake_stop(spec, force=False):
+        stopped.append(spec.name)
+
+    def fake_start(spec, wait=True):
+        started.append(spec.name)
+
+    monkeypatch.setattr(ctl, "stop_model", fake_stop)
+    monkeypatch.setattr(ctl, "start_model", fake_start)
+    monkeypatch.setattr(ctl, "set_active", lambda name, registry=None: None)
+    monkeypatch.setattr(ctl, "sync_cli_configs", lambda spec: None)
+
+    use_model("9b", stop_others=False, force_restart=True)
+    assert stopped == ["9b"]
+    assert started == ["9b"]
+
+
+def test_use_model_force_restart_noop_when_down(seeded_env, monkeypatch):
+    """force_restart on a stopped model doesn't stop twice — it just
+    starts (the normal idempotent start_model path)."""
+    from tokirecur.ctl import use_model
+
+    stopped: list[str] = []
+    started: list[str] = []
+
+    monkeypatch.setattr(ctl, "llama_reachable", lambda spec: False)
+    monkeypatch.setattr(ctl, "daemon_reachable", lambda spec: False)
+
+    def fake_stop(spec, force=False):
+        stopped.append(spec.name)
+
+    def fake_start(spec, wait=True):
+        started.append(spec.name)
+
+    monkeypatch.setattr(ctl, "stop_model", fake_stop)
+    monkeypatch.setattr(ctl, "start_model", fake_start)
+    monkeypatch.setattr(ctl, "set_active", lambda name, registry=None: None)
+    monkeypatch.setattr(ctl, "sync_cli_configs", lambda spec: None)
+
+    use_model("9b", stop_others=False, force_restart=True)
+    assert stopped == []
+    assert started == ["9b"]
+
+
 def test_update_spec_field_preserves_other_fields(seeded_env):
     """Editing one field doesn't blow away the spec's other keys
     (raw dict merge — only the edited field changes)."""

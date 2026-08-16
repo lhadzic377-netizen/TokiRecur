@@ -295,12 +295,13 @@ class LauncherApp(App[dict | None]):
             if spec is not None
             else _SETTINGS_CHOICES.get(field)
         )
-        # For the text-editor path, use the registry value, not the
-        # "reg:X · live:Y" display string — the user types a value,
-        # not a sentence.
+        # For the text-editor path, always use the registry value —
+        # never the "reg:X · live:Y" display string. The user types a
+        # value, not a sentence; feeding the display string back makes
+        # update_spec_field's int() parser reject it as invalid.
         edit_value = (
             str(getattr(spec, field, ""))
-            if spec is not None and not value.startswith("reg:")
+            if spec is not None
             else value
         )
         if choices is not None:
@@ -324,7 +325,7 @@ class LauncherApp(App[dict | None]):
             spec = next((s for s in self.specs if s.name == name), None)
             edit_value = (
                 str(getattr(spec, field, ""))
-                if spec is not None and not value.startswith("reg:")
+                if spec is not None
                 else value
             )
             self.push_screen(

@@ -927,13 +927,15 @@ def update_spec_field(
     # on the legacy "registry only" path).
     if apply:
         if field in _RESTART_REQUIRED_FIELDS:
-            # use_model() stops the running daemon (if any), restarts
-            # with the new settings, and rewrites the four CLI configs.
-            # We swallow errors so the caller's UX still shows the
-            # registry write succeeded even if the restart hiccups —
-            # the user can retry from the same screen.
+            # use_model() restarts the model's stack (stops the running
+            # daemon if any, restarts with the new settings, and
+            # rewrites the four CLI configs). We swallow errors so the
+            # caller's UX still shows the registry write succeeded even
+            # if the restart hiccups — the user can retry from the
+            # same screen.
             try:
-                use_model(name, stop_others=False, registry=reg)
+                use_model(name, stop_others=False, registry=reg,
+                          force_restart=True)
             except (RuntimeError, OSError) as exc:
                 logger.warning(
                     "could not restart '%s' after %s change: %s",
@@ -2242,7 +2244,7 @@ def backfill_binary_env(specs: list[ModelSpec] | None = None) -> list[str]:
 
 def use_model(
     name: str, *, stop_others: bool = True, registry: Path | None = None,
-    sync_only: bool = False,
+    sync_only: bool = False, force_restart: bool = False,
 ) -> ModelSpec:
     """Ensure the chosen model is up, selected, and visible to every CLI.
 
@@ -2252,6 +2254,12 @@ def use_model(
     so they have a provider entry for every registry spec — callers
     (``toki model use``, ``toki model pull --use``, the launcher)
     don't have to do this themselves.
+
+    ``force_restart=True`` (used by settings edits) stops the target's
+    own running stack first when it's already up, so launch-affecting
+    changes (``-c``, ``--parallel``, ``-kvu``, model file) actually
+    take effect instead of being silently skipped because the server
+    was reachable.
 
     With ``sync_only=True`` nothing is started or stopped: the registry
     is healed (legacy model ids normalized, missing binary/env backfilled),
@@ -2301,6 +2309,18 @@ def use_model(
                         logger.info("stopped '%s' (switching to '%s')", other.name, target.name)
                 except RuntimeError as e:
                     logger.warning("could not stop '%s': %s", other.name, e)
+
+    # Settings edits: the target's own stack is already running with the
+    # OLD settings. start_model() is idempotent (skips when the server is
+    # reachable), so without this stop the new -c/-kvu/--parallel never
+    # takes effect until a manual restart.
+    if force_restart:
+        if llama_reachable(target) or daemon_reachable(target):
+            try:
+                stop_model(target)
+                logger.info("restarted '%s' after settings change", target.name)
+            except RuntimeError as e:
+                logger.warning("could not stop '%s' for restart: %s", target.name, e)
 
     start_model(target)
 
