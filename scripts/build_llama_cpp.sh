@@ -27,9 +27,12 @@ fi
 
 cd "$LLAMA_CPP_SRC"
 
-# 1. Apply the patch if not already applied.
-if grep -q "sv_kv_save" examples/server/server.cpp 2>/dev/null; then
-    echo "patch already applied"
+# 1. Apply the KV endpoints patch if the checkout is old enough to need it.
+#    Upstream shipped the `--slot-save-path` endpoints natively (the server
+#    code now lives under tools/server/), so modern checkouts skip the patch.
+if grep -q 'action == "save"' tools/server/server-context.cpp 2>/dev/null \
+    || grep -q "sv_kv_save" examples/server/server.cpp 2>/dev/null; then
+    echo "KV save/load endpoints already present (patch not needed)"
 else
     echo "applying patch: $PATCH"
     git apply --check "$PATCH" || {

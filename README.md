@@ -90,11 +90,18 @@ Toki Recur is pure Python over the llama-server HTTP API — it runs on **any x8
 
 | Platform | Architecture | llama-server builds | install-llama asset | Support |
 |---|---|---|---|---|
-| Linux | x86_64 | ROCm (auto if HIP present), Vulkan, CPU | `ubuntu-rocm-7.2-x64`, `ubuntu-vulkan-x64`, `ubuntu-x64` | stable |
+| Linux | x86_64 | ROCm (auto if HIP present), Vulkan, CPU | `ubuntu-rocm-7.14-x64`, `ubuntu-vulkan-x64`, `ubuntu-x64` | stable |
 | Linux | aarch64 | Vulkan, CPU | `ubuntu-vulkan-arm64`, `ubuntu-arm64` | stable |
 | macOS | x86_64, arm64 | Metal (also runs CPU-only) | `macos-x64`, `macos-arm64` | stable |
-| Windows | x86_64 | CUDA (auto if NVIDIA), ROCm/HIP, Vulkan, CPU | `win-cuda-13.3-x64`, `win-hip-radeon-x64`, `win-vulkan-x64`, `win-cpu-x64` | beta |
+| Windows | x86_64 | CUDA (auto if NVIDIA), ROCm/HIP, Vulkan, CPU | `win-cuda-13.3-x64`, `win-rocm-7.14-x64`, `win-vulkan-x64`, `win-cpu-x64` | beta |
 | Windows | aarch64 | CPU, Adreno OpenCL | `win-cpu-arm64` | beta |
+
+> **Linux ROCm note (mid-2026):** llama.cpp stopped publishing Linux ROCm
+> release assets after **b10375**. `install-llama --backend rocm` still finds
+> that last build, but brand-new model support lands on master first — on a
+> Linux ROCm box, build the latest source instead:
+> `scripts/build_llama_cpp.sh` (ROCm for the host GPU, gfx1151 on Strix
+> Halo APUs). Windows ROCm keeps shipping as `win-rocm-7.14-x64`.
 
 CI runs the test suite on all three OSes (x86_64 + aarch64) and executes the
 Linux and macOS system installers end-to-end. The GPU backends are provided by

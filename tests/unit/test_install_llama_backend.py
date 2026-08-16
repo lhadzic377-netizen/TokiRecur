@@ -14,8 +14,9 @@ import yaml
 
 from tokirecur.cli import _asset_patterns, _pick_asset, _rocm_env
 
-# Asset names taken from a real llama.cpp release (b10289) so the map
-# is tested against reality, not invented names.
+# Asset names taken from real llama.cpp releases (b10289 and b10375) so
+# the map is tested against reality, not invented names. b10289 used
+# win-hip-radeon-x64; b10375 renamed it win-rocm-7.14-x64.
 B10289_ASSETS = [
     "llama-b10289-bin-android-arm64.tar.gz",
     "llama-b10289-bin-macos-arm64.tar.gz",
@@ -37,6 +38,15 @@ B10289_ASSETS = [
     "llama-b10289-bin-win-opencl-adreno-arm64.zip",
     "llama-b10289-bin-win-sycl-x64.zip",
     "llama-b10289-bin-win-vulkan-x64.zip",
+]
+
+# Asset names from b10375 — the last release that shipped both Linux and
+# Windows ROCm, using the current win-rocm-* naming.
+B10375_ASSETS = [
+    "llama-b10375-bin-ubuntu-rocm-7.14-x64.tar.gz",
+    "llama-b10375-bin-ubuntu-vulkan-x64.tar.gz",
+    "llama-b10375-bin-win-rocm-7.14-x64.zip",
+    "llama-b10375-bin-win-vulkan-x64.zip",
 ]
 
 
@@ -68,6 +78,16 @@ def test_pick_asset_matrix(os_name, arch, backend, expected):
     assert asset is not None
     assert asset["name"] == expected
     assert matched == backend
+
+
+def test_pick_asset_windows_rocm_current_naming():
+    """Post-b10375 releases name the Windows ROCm asset win-rocm-*; the
+    pattern map must resolve it to the ROCm build (not fall through to
+    Vulkan)."""
+    assets = [{"name": n, "size": 1000} for n in B10375_ASSETS]
+    asset, backend = _pick_asset(assets, _asset_patterns("windows", "x64"))
+    assert backend == "rocm"
+    assert asset["name"] == "llama-b10375-bin-win-rocm-7.14-x64.zip"
 
 
 def test_pick_asset_prefers_rocm_over_cpu_when_both_present():

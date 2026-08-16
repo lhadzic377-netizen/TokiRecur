@@ -13,6 +13,11 @@
 - The long-running daemon on this box is installed at `/opt/toki-recur/venv`
   and may point at a dead llama port (`--backend-url http://127.0.0.1:8088`).
   The live llama-server is on **8094** (`/home/lukehadzic/llama.cpp/build/bin/llama-server`).
+- The registry's `binary:` entries point at the toki state bin
+  (`~/.local/state/tokirecur/bin/llama-server`), which was rebuilt from
+  llama.cpp master (commit b94041a98) because llama.cpp stopped shipping
+  Linux ROCm release assets after b10375. Rebuild with
+  `./scripts/build_llama_cpp.sh` (LLAMA_CPP_SRC + LLAMA_CPP_BLD overridable).
 - To smoke-test chat end-to-end without touching the running daemon, start a
   throwaway one from the repo:
   `nohup .venv/bin/toki serve --host 127.0.0.1 --port 8799 --backend-url http://127.0.0.1:8094 >/tmp/opencode/toki-serve-smoke.log 2>&1 &`

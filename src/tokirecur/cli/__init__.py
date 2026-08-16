@@ -1192,6 +1192,10 @@ def _asset_patterns(os_name: str, arch: str) -> list[tuple[str, str]]:
             return [
                 ("cuda", "win-cuda-13.3-x64"),
                 ("cuda", "win-cuda-12.4-x64"),
+                # llama.cpp renamed the ROCm asset from win-hip-radeon-x64
+                # to win-rocm-<ver>-x64 in mid-2026; match both so old and
+                # new releases resolve to the ROCm build.
+                ("rocm", "win-rocm-"),
                 ("rocm", "win-hip-radeon-x64"),
                 ("vulkan", "win-vulkan-x64"),
                 ("cpu", "win-cpu-x64"),
@@ -1760,7 +1764,7 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
             # minutes; walk newest -> oldest and use the first release
             # that carries an asset for our OS/arch/backend.
             releases = api.get(
-                "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=10",
+                "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=100",
                 headers=headers,
             ).json()
             import builtins
@@ -1799,6 +1803,19 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
             f"installing {matched_backend} instead"
         )
         backend = matched_backend
+    # llama.cpp stopped shipping Linux ROCm assets after b10375 (mid-2026);
+    # the walk lands on that last build, which predates newer model support.
+    # Warn so users on a Linux ROCm box know to build from source instead.
+    newest_tag = releases[0]["tag_name"] if not tag else None
+    if (backend == "rocm" and os_name == "ubuntu"
+            and newest_tag and tag_name != newest_tag):
+        click.echo(
+            f"note: {tag_name} is the last llama.cpp release with a Linux "
+            f"ROCm asset (llama.cpp now ships ROCm only for Windows). "
+            f"Newer model support lands on master first — to get it on this "
+            f"box, build from source: ./scripts/build_llama_cpp.sh",
+            err=True,
+        )
     click.echo(f"downloading {asset['name']} ({asset['size'] / 1048576:.0f} MB)...")
 
     with tempfile.TemporaryDirectory(prefix="toki-llama-") as tmp:
