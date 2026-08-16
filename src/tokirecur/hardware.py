@@ -41,7 +41,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-PROFILE_VERSION = 1
+PROFILE_VERSION = 2
 # Cache the profile for 30 days; after that, re-profile.
 PROFILE_TTL_SECONDS = 30 * 24 * 3600
 # Fallback when /proc/cpuinfo isn't readable: assume 4 logical cores.
@@ -70,7 +70,6 @@ class CPUProfile:
     e_core_ids: list[int]
     max_boost_mhz: float
     simd: list[str]       # ["sse4_2", "avx", "avx2", "avx_vnni", ...]
-    affinity_hint: str | None  # "taskset -c 0,2" or None
 
 
 def _read_proc_cpuinfo() -> dict[str, str]:
@@ -190,7 +189,7 @@ def cpu_topology() -> CPUProfile:
         physical_cores=max(1, os.cpu_count() or 1),
         logical_cores=max(1, os.cpu_count() or 1),
         p_core_ids=[], e_core_ids=[],
-        max_boost_mhz=0.0, simd=[], affinity_hint=None,
+        max_boost_mhz=0.0, simd=[],
     )
 
 
@@ -244,14 +243,13 @@ def _cpu_topology_linux() -> CPUProfile:
         p_ids = list(range(physical_cores))
 
     simd = _detect_simd_linux()
-    affinity = _taskset_affinity(p_ids)
 
     return CPUProfile(
         vendor=vendor, name=name, family=family, model=model,
         physical_cores=physical_cores, logical_cores=cpu_count or physical_cores,
         p_core_ids=p_ids, e_core_ids=e_ids,
         max_boost_mhz=max(max_freqs) if max_freqs else 0.0,
-        simd=simd, affinity_hint=affinity,
+        simd=simd,
     )
 
 
@@ -297,13 +295,12 @@ def _cpu_topology_macos() -> CPUProfile:
             pass
 
     simd = _detect_simd_macos()
-    affinity = None   # macOS thread placement is opaque to userspace
 
     return CPUProfile(
         vendor="Apple", name=info["name"], family=0, model=0,
         physical_cores=physical_cores, logical_cores=logical_cores,
         p_core_ids=p_ids, e_core_ids=e_ids,
-        max_boost_mhz=0.0, simd=simd, affinity_hint=affinity,
+        max_boost_mhz=0.0, simd=simd,
     )
 
 
@@ -326,20 +323,8 @@ def _cpu_topology_windows() -> CPUProfile:
         family=0, model=0,
         physical_cores=physical_cores, logical_cores=logical_cores,
         p_core_ids=list(range(physical_cores)), e_core_ids=[],
-        max_boost_mhz=0.0, simd=simd, affinity_hint=None,
+        max_boost_mhz=0.0, simd=simd,
     )
-
-
-def _taskset_affinity(p_ids: list[int]) -> str | None:
-    """Return a `taskset -c ...` argument string when P-cores are
-    contiguous and small enough that pinning matmul threads to them
-    helps. Returns None when pinning would hurt (e.g. fewer P-cores
-    than 2) or when taskset isn't on PATH."""
-    if not p_ids or len(p_ids) < 2:
-        return None
-    if not shutil.which("taskset"):
-        return None
-    return "taskset -c " + ",".join(str(i) for i in p_ids)
 
 
 # ── GPU ────────────────────────────────────────────────────────────
@@ -623,7 +608,8 @@ def profile_box(force: bool = False) -> HardwareProfile:
     re-profile and persist.
     """
     cached = load_profile() if not force else None
-    if cached is not None and cached.is_fresh():
+    if cached is not None and cached.is_fresh() \
+            and cached.schema_version == PROFILE_VERSION:
         return cached
 
     cpu = cpu_topology()
@@ -637,7 +623,7 @@ def profile_box(force: bool = False) -> HardwareProfile:
         gpus=gpus,
         ram_gb=ram_gb,
         benchmarks={},
-        recommended=_recommend_defaults(cpu, gpus, ram_gb),
+        recommended=_recommend_defaults(cpu, gpus),
     )
     save_profile(profile)
     return profile
@@ -653,14 +639,13 @@ def _os_name() -> str:
     return "unknown"
 
 
-def _recommend_defaults(cpu: CPUProfile, gpus: list[GPUProfile],
-                         ram_gb: float) -> dict:
+def _recommend_defaults(cpu: CPUProfile, gpus: list[GPUProfile]) -> dict:
     """Heuristic recommendation when no bench data exists yet.
 
-    The rule set is intentionally conservative — preferring CPU with
-    P-core affinity over a marginal GPU — because the bench data, when
-    present, overrides it. Wrong-in-the-wrong-direction means the user
-    pays a few percent of CPU throughput, not their whole session.
+    The rule set is intentionally conservative — preferring CPU over a
+    marginal GPU — because the bench data, when present, overrides it.
+    Wrong-in-the-wrong-direction means the user pays a few percent of
+    CPU throughput, not their whole session.
     """
     # Pick a GPU only when it's worth using. Apple Silicon's unified
     # memory is shared RAM by design but Metal handles it correctly;
@@ -685,11 +670,14 @@ def _recommend_defaults(cpu: CPUProfile, gpus: list[GPUProfile],
         return {"backend": "vulkan", "ngl": 99,
                 "threads": cpu.physical_cores}
 
-    # No usable discrete GPU. CPU it is. P-cores on hybrid Intel chips.
-    p_count = max(2, len(cpu.p_core_ids)) if cpu.p_core_ids else cpu.physical_cores
-    # Cap threads at RAM-proportional scale so we don't oversubscribe
-    # a small box and lose to context-switch thrashing.
-    threads = min(p_count, max(2, int(ram_gb // 4)))
+    # No usable discrete GPU. CPU it is. Use every physical core —
+    # that's also what llama.cpp picks by default, and it's the same
+    # on hybrid (P+E) chips and plain multicore boxes alike. We used
+    # to cap threads at the P-core cluster size and pin matmul to it
+    # with taskset; on a Core Ultra 155U (2P+8E) that left the 8
+    # E-cores idle and dropped a 9B to ~1 TPS. No per-CPU tuning:
+    # all physical cores, no pinning.
+    threads = cpu.physical_cores or 4
     return {
         "backend": "cpu",
         "ngl": 0,
@@ -747,7 +735,6 @@ def _from_dict(data: dict) -> HardwareProfile:
         e_core_ids=cpu.get("e_core_ids", []),
         max_boost_mhz=cpu.get("max_boost_mhz", 0.0),
         simd=cpu.get("simd", []),
-        affinity_hint=cpu.get("affinity_hint"),
     )
     gpus = [
         GPUProfile(**g) for g in data.get("gpus", [])

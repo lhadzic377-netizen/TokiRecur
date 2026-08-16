@@ -197,7 +197,7 @@ def _stub_profile(monkeypatch, *, backend="cpu", ngl=0, threads=4):
             vendor="GenuineIntel", name="stub", family=0, model=0,
             physical_cores=4, logical_cores=4,
             p_core_ids=[0, 1], e_core_ids=[],
-            max_boost_mhz=0.0, simd=["avx2"], affinity_hint=None,
+            max_boost_mhz=0.0, simd=["avx2"],
         ),
         gpus=[],
         ram_gb=16.0,

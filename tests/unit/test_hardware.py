@@ -74,9 +74,6 @@ def test_cpu_profile_picks_p_cores_by_max_frequency(monkeypatch, tmp_path):
     assert cpu.p_core_ids == [0, 1, 2, 3]
     assert cpu.e_core_ids == [4, 5, 6, 7, 8, 9, 10, 11]
     assert "avx_vnni" in cpu.simd
-    # Taskset hint should target the P-core cluster.
-    assert cpu.affinity_hint is not None
-    assert "taskset -c 0,1,2,3" in cpu.affinity_hint
 
 
 def test_cpu_profile_no_cpufreq_falls_back_to_all_physical(monkeypatch):
@@ -167,7 +164,6 @@ def test_recommend_defaults_picks_cpu_for_intel_igpu_only_box():
         physical_cores=6, logical_cores=12,
         p_core_ids=[0, 1, 2, 3], e_core_ids=list(range(4, 12)),
         max_boost_mhz=4800.0, simd=["avx2", "avx_vnni"],
-        affinity_hint="taskset -c 0,1,2,3",
     )
     gpus = [GPUProfile(
         vendor="Intel", name="Arc iGPU",
@@ -175,11 +171,11 @@ def test_recommend_defaults_picks_cpu_for_intel_igpu_only_box():
         shared_ram=True, use_for_llm=False,
         reason="shared system RAM",
     )]
-    rec = hardware._recommend_defaults(cpu, gpus, ram_gb=16.0)
+    rec = hardware._recommend_defaults(cpu, gpus)
     assert rec["backend"] == "cpu"
     assert rec["ngl"] == 0
-    # P-cores only — 4 of them.
-    assert rec["threads"] == 4
+    # All physical cores — 6 of them, P+E together.
+    assert rec["threads"] == 6
     assert "P-core" in rec.get("build_hint", "") or "CPU" in rec.get("build_hint", "")
 
 
@@ -189,14 +185,14 @@ def test_recommend_defaults_picks_cuda_for_discrete_nvidia():
         family=6, model=183,
         physical_cores=16, logical_cores=24,
         p_core_ids=list(range(16)), e_core_ids=[],
-        max_boost_mhz=5400.0, simd=["avx2"], affinity_hint=None,
+        max_boost_mhz=5400.0, simd=["avx2"],
     )
     gpus = [GPUProfile(
         vendor="NVIDIA", name="RTX 4070",
         vram_gb=12.0, driver=None, vulkan_score=1.0,
         shared_ram=False, use_for_llm=True, reason="discrete GPU",
     )]
-    rec = hardware._recommend_defaults(cpu, gpus, ram_gb=32.0)
+    rec = hardware._recommend_defaults(cpu, gpus)
     assert rec["backend"] == "cuda"
     assert rec["ngl"] == 99
 
@@ -206,7 +202,7 @@ def test_recommend_defaults_picks_metal_for_apple_silicon():
         vendor="Apple", name="Apple M2",
         family=0, model=0, physical_cores=4, logical_cores=8,
         p_core_ids=[0, 1, 2, 3], e_core_ids=[4, 5, 6, 7],
-        max_boost_mhz=0.0, simd=["neon_hpfp"], affinity_hint=None,
+        max_boost_mhz=0.0, simd=["neon_hpfp"],
     )
     gpus = [GPUProfile(
         vendor="Apple", name="Apple M2",
@@ -214,24 +210,23 @@ def test_recommend_defaults_picks_metal_for_apple_silicon():
         shared_ram=True, use_for_llm=True,
         reason="Apple Silicon unified memory; Metal backend",
     )]
-    rec = hardware._recommend_defaults(cpu, gpus, ram_gb=8.0)
+    rec = hardware._recommend_defaults(cpu, gpus)
     assert rec["backend"] == "metal"
     assert rec["ngl"] == 99
 
 
-def test_recommend_defaults_threads_capped_by_ram():
-    """When RAM is tight, the thread count drops so we don't oversubscribe
-    and lose to context-switch thrashing."""
+def test_recommend_defaults_threads_use_all_physical_cores():
+    """Threads aren't capped by RAM or P-core count — every physical
+    core is used, on hybrid and plain chips alike."""
     cpu = CPUProfile(
         vendor="GenuineIntel", name="many cores",
         family=6, model=183, physical_cores=32, logical_cores=64,
         p_core_ids=list(range(32)), e_core_ids=[],
-        max_boost_mhz=4000.0, simd=["avx2"], affinity_hint=None,
+        max_boost_mhz=4000.0, simd=["avx2"],
     )
-    # 4 GB free RAM should cap threads at ~1 (4/4 = 1, but floor is 2).
-    rec = hardware._recommend_defaults(cpu, [], ram_gb=4.0)
-    assert rec["threads"] >= 2
-    assert rec["threads"] <= 4
+    # Even with only 4 GB free RAM we keep all physical cores.
+    rec = hardware._recommend_defaults(cpu, [])
+    assert rec["threads"] == 32
 
 
 # ── Profile persistence ───────────────────────────────────────────
@@ -249,7 +244,6 @@ def test_profile_save_and_load_roundtrip(tmp_path, monkeypatch):
             family=6, model=189, physical_cores=6, logical_cores=12,
             p_core_ids=[0, 1, 2, 3], e_core_ids=list(range(4, 12)),
             max_boost_mhz=4800.0, simd=["avx2", "avx_vnni"],
-            affinity_hint="taskset -c 0,1,2,3",
         ),
         gpus=[GPUProfile(
             vendor="Intel", name="Arc iGPU", vram_gb=0.5,
@@ -276,7 +270,7 @@ def test_profile_box_returns_loaded_when_fresh(tmp_path, monkeypatch):
         vendor="GenuineIntel", name="stub",
         family=6, model=189, physical_cores=4, logical_cores=4,
         p_core_ids=[0, 1], e_core_ids=[],
-        max_boost_mhz=4000.0, simd=["avx2"], affinity_hint=None,
+        max_boost_mhz=4000.0, simd=["avx2"],
     ))
     monkeypatch.setattr(hardware, "enumerate_gpus", lambda: [])
     monkeypatch.setattr(hardware, "_available_gb", lambda: 16.0)
@@ -303,7 +297,7 @@ def test_profile_box_skips_cache_when_stale(tmp_path, monkeypatch):
             vendor="unknown", name="unknown", family=0, model=0,
             physical_cores=1, logical_cores=1,
             p_core_ids=[0], e_core_ids=[],
-            max_boost_mhz=0.0, simd=[], affinity_hint=None,
+            max_boost_mhz=0.0, simd=[],
         ),
         gpus=[], ram_gb=1.0, benchmarks={}, recommended={},
     )
@@ -314,7 +308,7 @@ def test_profile_box_skips_cache_when_stale(tmp_path, monkeypatch):
         vendor="GenuineIntel", name="fresh",
         family=6, model=189, physical_cores=4, logical_cores=4,
         p_core_ids=[0, 1], e_core_ids=[],
-        max_boost_mhz=4000.0, simd=["avx2"], affinity_hint=None,
+        max_boost_mhz=4000.0, simd=["avx2"],
     ))
     monkeypatch.setattr(hardware, "enumerate_gpus", lambda: [])
     monkeypatch.setattr(hardware, "_available_gb", lambda: 8.0)
