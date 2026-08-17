@@ -407,6 +407,23 @@ def _get_auth_token() -> str | None:
     return None
 
 
+def _backend_model_id(backend) -> str | None:
+    """Best-effort model id from the backend for the health report.
+
+    llama-server's ``/v1/models`` uses ``{"models": [...]}`` (not the
+    OpenAI ``{"data": [...]}`` shape), so use whichever is present.
+    """
+    try:
+        m = backend._client.get(f"{backend.base_url}/v1/models", timeout=3.0)
+        data = m.json()
+        items = data.get("models") or data.get("data") or []
+        if items:
+            return items[0].get("id") or items[0].get("model") or items[0].get("name")
+    except Exception:
+        pass
+    return None
+
+
 def _check_auth(request: Request) -> None:
     """Validate bearer token. Raises 401 if missing/invalid."""
     expected = _get_auth_token()
@@ -589,14 +606,27 @@ def create_app(
 
     @app.get("/v1/health/llama")
     async def health_llama() -> dict:
-        """Probe the upstream llama-server. Returns ok/unreachable."""
+        """Probe the upstream llama-server. Returns ok/unreachable.
+
+        Probes the backend's own ``/health`` endpoint (llama-server
+        answers 200 once it can serve) — ``cache_info`` is not a
+        reliable liveness signal because llama-server's ``/v1/models``
+        shape differs and idle slots omit the model field. The backend
+        URL is included so clients can confirm this daemon is wired to
+        the RIGHT llama-server (not a stale daemon left pointing at an
+        old port) before trusting it.
+        """
         try:
-            info = backend.cache_info(0)  # cheap call that hits the server
-            if info.get("model_id"):
-                return {"status": "ok"}
+            r = backend._client.get(f"{backend.base_url}/health", timeout=3.0)
+            if r.status_code == 200:
+                return {
+                    "status": "ok",
+                    "backend": backend.base_url,
+                    "model_id": _backend_model_id(backend),
+                }
         except Exception:
             pass
-        return {"status": "unreachable"}
+        return {"status": "unreachable", "backend": backend.base_url}
 
     # ---- OpenAI model metadata (context discovery) ----
 

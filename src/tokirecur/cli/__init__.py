@@ -97,7 +97,19 @@ def serve(
 
     # Fail loudly-but-kindly: a daemon with no llama-server behind it
     # looks exactly like "the server doesn't start". Ping the backend
-    # before binding so the user gets a hint instead of silence.
+    # before binding so the user gets a hint instead of silence. If the
+    # configured backend is dead but the active model has a live llama,
+    # point at it instead — a daemon that proxies a corpse helps nobody.
+    from .. import ctl
+    live = None
+    try:
+        active = ctl.read_active()
+        if active:
+            spec = ctl.get_model(active)
+            if ctl.llama_reachable(spec):
+                live = spec.llama_url
+    except Exception:
+        pass
     try:
         r = httpx.get(f"{backend_url}/health", timeout=2.0)
         if r.status_code >= 500:
@@ -106,16 +118,28 @@ def serve(
             )
         click.echo(f"backend: {backend_url} reachable ({r.status_code})")
     except Exception as e:
-        click.echo(
-            f"WARNING: llama-server not reachable at {backend_url} "
-            f"({type(e).__name__}: {e})",
-            err=True,
-        )
-        click.echo(
-            "  Start it with `toki up` or `toki model use <name>` "
-            "before sending requests, or pass --backend-url.",
-            err=True,
-        )
+        if live and live != backend_url:
+            click.echo(
+                f"WARNING: configured backend {backend_url} unreachable "
+                f"({type(e).__name__}: {e})",
+                err=True,
+            )
+            click.echo(
+                f"  falling back to the active model's live llama: {live}",
+                err=True,
+            )
+            backend_url = live
+        else:
+            click.echo(
+                f"WARNING: llama-server not reachable at {backend_url} "
+                f"({type(e).__name__}: {e})",
+                err=True,
+            )
+            click.echo(
+                "  Start it with `toki up` or `toki model use <name>` "
+                "before sending requests, or pass --backend-url.",
+                err=True,
+            )
 
     backend = LlamaServerBackend(backend_url)
     index = BruteForceIndex(ctx.obj["db"])

@@ -879,6 +879,75 @@ def test_linux_vulkan_icd_with_loadable_driver_returns_true(tmp_path, monkeypatc
     assert ctl._linux_vulkan_works() is True
 
 
+def test_linux_vulkan_lavapipe_software_icd_returns_false(tmp_path, monkeypatch):
+    """A Mesa lavapipe (llvmpipe) software-Vulkan ICD — the only Vulkan on
+    many headless CPU-only Ubuntu boxes — must NOT count as a working GPU.
+    Offloading to software Vulkan is slower than native CPU kernels."""
+    from tokirecur import ctl
+
+    driver = tmp_path / "libvulkan_lvp.so"
+    driver.write_bytes(b"")
+    icd_dir = tmp_path / "icd.d"
+    icd_dir.mkdir()
+    (icd_dir / "lvp_icd.json").write_text(
+        f'{{"ICD": {{"library_path": "{driver}"}}}}'
+    )
+    monkeypatch.setattr(
+        "tokirecur.ctl.Path",
+        _make_path_stub(
+            tmp_path, loader_exists=True, icd_dir=icd_dir, icd_has_loadable=True,
+        ),
+    )
+    assert ctl._linux_vulkan_works() is False
+
+
+def test_linux_vulkan_swiftshader_software_icd_returns_false(tmp_path, monkeypatch):
+    """Google SwiftShader (``vk_swiftshader.so``) is software Vulkan too —
+    excluded even though its ICD JSON names a loadable library."""
+    from tokirecur import ctl
+
+    driver = tmp_path / "vk_swiftshader.so"
+    driver.write_bytes(b"")
+    icd_dir = tmp_path / "icd.d"
+    icd_dir.mkdir()
+    (icd_dir / "vk_swiftshader_icd.json").write_text(
+        f'{{"ICD": {{"library_path": "{driver}"}}}}'
+    )
+    monkeypatch.setattr(
+        "tokirecur.ctl.Path",
+        _make_path_stub(
+            tmp_path, loader_exists=True, icd_dir=icd_dir, icd_has_loadable=True,
+        ),
+    )
+    assert ctl._linux_vulkan_works() is False
+
+
+def test_linux_vulkan_lavapipe_and_real_icd_returns_true(tmp_path, monkeypatch):
+    """Lavapipe alongside a real discrete-GPU ICD (radeon/amdvlk/nouveau)
+    must still count: the real ICD is what matters."""
+    from tokirecur import ctl
+
+    lvp = tmp_path / "libvulkan_lvp.so"
+    lvp.write_bytes(b"")
+    radeon = tmp_path / "libvulkan_radeon.so"
+    radeon.write_bytes(b"")
+    icd_dir = tmp_path / "icd.d"
+    icd_dir.mkdir()
+    (icd_dir / "lvp_icd.json").write_text(
+        f'{{"ICD": {{"library_path": "{lvp}"}}}}'
+    )
+    (icd_dir / "radeon_icd.json").write_text(
+        f'{{"ICD": {{"library_path": "{radeon}"}}}}'
+    )
+    monkeypatch.setattr(
+        "tokirecur.ctl.Path",
+        _make_path_stub(
+            tmp_path, loader_exists=True, icd_dir=icd_dir, icd_has_loadable=True,
+        ),
+    )
+    assert ctl._linux_vulkan_works() is True
+
+
 def test_intel_igpu_only_linux_true_for_intel_only(tmp_path, monkeypatch):
     from tokirecur import ctl
 

@@ -179,6 +179,151 @@ def test_llama_args_honors_ctx_override(env):
     assert args[args.index("-c") + 1] == "4096"
 
 
+# ── strict daemon reachability (self-heal) ───────────────────────────
+
+
+class _FakeResp:
+    def __init__(self, status=200, payload=None):
+        self.status_code = status
+        self._payload = payload or {}
+
+    def json(self):
+        return self._payload
+
+
+def test_daemon_reachable_requires_matching_live_backend(env, monkeypatch):
+    """A daemon is only reachable when its upstream is live AND wired to
+    THIS model's llama_url — a stale daemon proxying a dead or different
+    backend must count as down so start_model takes over."""
+    spec = _spec(env)
+    monkeypatch.delenv("TOKI_AUTH_TOKEN", raising=False)
+    calls = []
+
+    def fake_get(url, timeout=2.0, headers=None):
+        calls.append((url, headers))
+        if url.endswith("/healthz"):
+            return _FakeResp(200)
+        if url.endswith("/v1/health/llama"):
+            return _FakeResp(200, {"status": "ok", "backend": spec.llama_url})
+        return _FakeResp(404)
+
+    monkeypatch.setattr(ctl.httpx, "get", fake_get)
+    assert ctl.daemon_reachable(spec) is True
+
+    # Wrong backend (stale daemon pointing at an old llama) → not reachable.
+    monkeypatch.setattr(
+        ctl.httpx, "get",
+        lambda url, timeout=2.0, headers=None: _FakeResp(
+            200, {"status": "ok", "backend": "http://127.0.0.1:9999"}
+        ),
+    )
+    assert ctl.daemon_reachable(spec) is False
+
+    # Dead backend (status unreachable) → not reachable.
+    monkeypatch.setattr(
+        ctl.httpx, "get",
+        lambda url, timeout=2.0, headers=None: _FakeResp(
+            200, {"status": "unreachable", "backend": spec.llama_url}
+        ),
+    )
+    assert ctl.daemon_reachable(spec) is False
+
+    # Old-code daemon that cannot state its backend → not reachable.
+    monkeypatch.setattr(
+        ctl.httpx, "get",
+        lambda url, timeout=2.0, headers=None: _FakeResp(200, {"status": "ok"}),
+    )
+    assert ctl.daemon_reachable(spec) is False
+
+    # healthz down → not reachable.
+    monkeypatch.setattr(
+        ctl.httpx, "get",
+        lambda url, timeout=2.0, headers=None: _FakeResp(500),
+    )
+    assert ctl.daemon_reachable(spec) is False
+
+
+def test_daemon_reachable_sends_auth_token_when_configured(env, monkeypatch):
+    spec = _spec(env)
+    monkeypatch.setenv("TOKI_AUTH_TOKEN", "sekrit")
+    seen = {}
+
+    def fake_get(url, timeout=2.0, headers=None):
+        seen["headers"] = headers
+        return _FakeResp(200, {"status": "ok", "backend": spec.llama_url})
+
+    monkeypatch.setattr(ctl.httpx, "get", fake_get)
+    ctl.daemon_reachable(spec)
+    assert seen["headers"] == {"Authorization": "Bearer sekrit"}
+
+
+def test_takeover_stale_daemon_replaces_own_stale_code_daemon(env, monkeypatch):
+    """Our own managed daemon running old code (no backend report) must be
+    stopped so the fresh spawn can bind — a daemon that fails the strict
+    check is dead weight."""
+    spec = _spec(env)
+    state = spec.state_dir()
+    state.mkdir(parents=True, exist_ok=True)
+    (state / "daemon.pid").write_text("4242")
+
+    monkeypatch.setattr(ctl, "_pid_on_port", lambda port: 4242)
+    monkeypatch.setattr(ctl, "_is_alive", lambda pid: True)
+    stopped = []
+
+    def fake_stop(path, grace=8.0):
+        stopped.append(path)
+        return True
+
+    monkeypatch.setattr(ctl, "_stop_pidfile", fake_stop)
+    ctl._takeover_stale_daemon(spec)
+    assert stopped == [state / "daemon.pid"]
+
+
+def test_takeover_stale_daemon_ignores_non_daemon_listener(env, monkeypatch):
+    """An unrelated process on the daemon port must never be killed."""
+    spec = _spec(env)
+
+    monkeypatch.setattr(ctl, "_pid_on_port", lambda port: 7777)
+    monkeypatch.setattr(ctl, "_is_alive", lambda pid: True)
+    monkeypatch.setattr(ctl, "daemon_pid", lambda spec: None)
+    monkeypatch.setattr(
+        ctl.httpx, "get",
+        lambda url, timeout=2.0: _FakeResp(404),  # not a daemon healthz
+    )
+    killed = []
+
+    def fake_signal(pid, sig):
+        killed.append(pid)
+
+    monkeypatch.setattr(ctl, "_signal_proc", fake_signal)
+    monkeypatch.setattr(ctl, "_hard_kill", lambda pid: killed.append(pid))
+    ctl._takeover_stale_daemon(spec)
+    assert killed == []
+
+
+def test_takeover_stale_daemon_stops_foreign_stale_daemon(env, monkeypatch):
+    """A stale daemon bound to the model's port with a dead backend must be
+    stopped so the correct daemon can bind."""
+    spec = _spec(env)
+
+    monkeypatch.setattr(ctl, "_pid_on_port", lambda port: 9999)
+    monkeypatch.setattr(ctl, "_is_alive", lambda pid: True)
+    monkeypatch.setattr(ctl, "daemon_pid", lambda spec: None)
+    monkeypatch.setattr(
+        ctl.httpx, "get",
+        lambda url, timeout=2.0: _FakeResp(200, {"status": "ok"}),  # daemon
+    )
+    signalled = []
+
+    def fake_signal(pid, sig):
+        signalled.append(pid)
+        monkeypatch.setattr(ctl, "_is_alive", lambda pid: False)
+
+    monkeypatch.setattr(ctl, "_signal_proc", fake_signal)
+    ctl._takeover_stale_daemon(spec)
+    assert signalled == [9999]
+
+
 # ── fail-fast startup ───────────────────────────────────────────────
 
 

@@ -1358,8 +1358,36 @@ def llama_reachable(spec: ModelSpec) -> bool:
 
 
 def daemon_reachable(spec: ModelSpec) -> bool:
+    """The model's daemon is up AND wired to THIS model's llama-server.
+
+    A daemon that answers /healthz but proxies a dead backend — or was
+    started for a different backend (e.g. a leftover ``toki serve`` from
+    an old install still bound to the model's daemon port) — is NOT the
+    model's daemon: clients get connection-refused through it. Only
+    count it as reachable when its own upstream probe reports the
+    backend live AND that backend is the model's llama_url.
+    """
+    headers = None
+    if os.environ.get("TOKI_AUTH_TOKEN"):
+        headers = {"Authorization": f"Bearer {os.environ['TOKI_AUTH_TOKEN']}"}
     try:
-        return httpx.get(f"{spec.daemon_url}/healthz", timeout=2.0).status_code == 200
+        if httpx.get(
+            f"{spec.daemon_url}/healthz", timeout=2.0, headers=headers
+        ).status_code != 200:
+            return False
+        r = httpx.get(
+            f"{spec.daemon_url}/v1/health/llama", timeout=2.0, headers=headers
+        )
+        if r.status_code != 200:
+            return False
+        data = r.json()
+        if data.get("status") != "ok":
+            return False
+        backend = data.get("backend")
+        # A daemon answering ok but for a DIFFERENT llama — or one that
+        # cannot state its backend at all (stale install, old venv) — is
+        # not the model's daemon. Exact match required.
+        return backend == spec.llama_url
     except Exception:
         return False
 
@@ -1651,8 +1679,11 @@ def _intel_igpu_only() -> bool:
     return intel_igpu and len(names) == 1
 
 
+_SOFTWARE_VULKAN_MARKERS = ("lvp", "lavapipe", "llvmpipe", "swiftshader")
+
+
 def _linux_vulkan_works() -> bool:
-    """True when this Linux box has at least one loadable Vulkan ICD.
+    """True when this Linux box has at least one loadable *real* Vulkan ICD.
 
     ``libvulkan.so.1`` is the loader; without an ICD JSON in
     ``/usr/share/vulkan/icd.d/`` pointing at an installed driver
@@ -1661,6 +1692,12 @@ def _linux_vulkan_works() -> bool:
     producing tokens. Many Ubuntu installs have the loader (Steam,
     OBS, browsers) without any usable ICD, so checking for the loader
     alone produces a vulkan-on-CPU build that hangs at runtime.
+
+    Software Vulkan ICDs — Mesa lavapipe/llvmpipe (``libvulkan_lvp.so``,
+    the only Vulkan on many headless CPU-only Ubuntu boxes) and
+    SwiftShader — are excluded: they execute on the CPU and are far
+    slower than llama.cpp's native CPU kernels, so offloading to them
+    (``-ngl 99``) makes a CPU box *slower*, not faster.
     """
     import json
 
@@ -1681,6 +1718,9 @@ def _linux_vulkan_works() -> bool:
             continue
         lib_path = (data.get("ICD") or {}).get("library_path") or ""
         if not lib_path:
+            continue
+        low = Path(lib_path).name.lower()
+        if any(marker in low for marker in _SOFTWARE_VULKAN_MARKERS):
             continue
         # ICD library_path can be absolute or relative. The loader
         # checks a few standard locations in order.
@@ -1744,6 +1784,31 @@ def _model_aliases(spec: ModelSpec) -> list[str]:
     return sorted(a for a in aliases if a)
 
 
+def _llama_spawn_env(spec: ModelSpec) -> dict[str, str] | None:
+    """Spawn env for the model's llama-server.
+
+    Self-heals builds whose RUNPATH no longer resolves (e.g. a binary
+    rebuilt on another box whose rpath points at a build tree that does
+    not exist here): the loader finds the sidecar libs (libllama-server
+    -impl.so, libggml*.so) by LD_LIBRARY_PATH instead, so the model
+    starts without any manual fix. Prepend the binary's own directory
+    and the ROCm lib dir when present; keep everything else the registry
+    env set.
+    """
+    base = {**os.environ, **spec.env} if spec.env else dict(os.environ)
+    binary = _resolve_binary(spec)
+    if binary and binary != "llama-server":
+        parts = [os.path.dirname(os.path.abspath(binary))]
+        rocm_lib = "/opt/rocm/lib"
+        if os.path.isdir(rocm_lib):
+            parts.append(rocm_lib)
+        existing = base.get("LD_LIBRARY_PATH")
+        if existing:
+            parts.append(existing)
+        base["LD_LIBRARY_PATH"] = ":".join(parts)
+    return base
+
+
 def _llama_args(spec: ModelSpec, ctx_override: int | None = None,
                 kv_override: str | None = None,
                 parallel_override: int | None = None) -> list[str]:
@@ -1780,24 +1845,32 @@ def _llama_args(spec: ModelSpec, ctx_override: int | None = None,
     if ngl is not None:
         args += ["-ngl", str(ngl)]
 
-    # CPU-mode tuning: when no GPU is in play (ngl == 0), the profile
-    # gives us thread count, batch sizes, and mlock. None of these are
+    # CPU-mode tuning: when no GPU is in play (ngl == 0), use every
+    # physical core, plus mlock and batch sizes. None of these are
     # useful on GPU paths — the GPU does the matmul, not the CPU.
+    # Thread count is recomputed fresh (never read from a cached or
+    # hand-edited profile) so a stale hardware.json cannot silently
+    # cap CPU throughput.
     if (ngl == 0) and not any(a in ("-t", "--threads") for a in spec.extra_args):
+        threads = None
         try:
-            from ..hardware import profile_box
-            prof = profile_box()
+            from ..hardware import cpu_topology
+            threads = cpu_topology().physical_cores
         except Exception:
-            prof = None
-        if prof is not None:
-            threads = max(2, int(prof.recommended.get("threads", 4)))
-            args += ["-t", str(threads)]
-            args += ["--mlock"]
-            # Batch sizes — only set if the registry didn't already.
-            if not any(a in ("-b", "--batch-size") for a in spec.extra_args):
-                args += ["-b", "2048"]
-            if not any(a in ("-ub", "--ubatch-size") for a in spec.extra_args):
-                args += ["-ub", "512"]
+            threads = None
+        if threads is None:
+            try:
+                from ..hardware import profile_box
+                threads = int(profile_box().recommended.get("threads", 4))
+            except Exception:
+                threads = 4
+        args += ["-t", str(max(2, threads))]
+        args += ["--mlock"]
+        # Batch sizes — only set if the registry didn't already.
+        if not any(a in ("-b", "--batch-size") for a in spec.extra_args):
+            args += ["-b", "2048"]
+        if not any(a in ("-ub", "--ubatch-size") for a in spec.extra_args):
+            args += ["-ub", "512"]
     if kv != "f16":
         args += ["--cache-type-k", kv, "--cache-type-v", kv]
     if spec.reasoning == "off":
@@ -1913,6 +1986,62 @@ def _real_slot_count(url: str) -> int | None:
         return None
 
 
+def _takeover_stale_daemon(spec: ModelSpec) -> None:
+    """Free the model's daemon port from a stale daemon before spawning.
+
+    A daemon that answers /healthz but proxies a dead backend (e.g. a
+    leftover ``toki serve`` from an old install still bound to the model's
+    daemon port) blocks the correct per-model daemon from binding. Stop
+    it best-effort when it fails the strict reachability check — only
+    processes that answer the daemon healthz are touched, never an
+    unrelated listener on the port.
+    """
+    pid = _pid_on_port(spec.daemon_port)
+    if pid is None or not _is_alive(pid):
+        return
+    our = daemon_pid(spec)
+    if our and our == pid:
+        # Our own managed daemon, but failing the strict reachability
+        # check (old code without a backend report, or pointed at the
+        # wrong llama). Replace it so the fresh spawn can bind.
+        logger.warning(
+            "%s: our daemon on :%d (pid %d) fails the strict reachability "
+            "check — restarting it with current code",
+            spec.name, spec.daemon_port, pid,
+        )
+        _stop_pidfile(spec.state_dir() / "daemon.pid")
+        return
+    try:
+        r = httpx.get(f"{spec.daemon_url}/healthz", timeout=2.0)
+        is_daemon = r.status_code == 200
+    except Exception:
+        is_daemon = False
+    if not is_daemon:
+        logger.warning(
+            "%s: pid %d on :%d does not answer the daemon healthz — "
+            "leaving it alone",
+            spec.name, pid, spec.daemon_port,
+        )
+        return
+    logger.warning(
+        "%s: stale daemon on :%d (pid %d) with a dead backend — stopping it "
+        "so the correct daemon can bind",
+        spec.name, spec.daemon_port, pid,
+    )
+    _signal_proc(pid, signal.SIGTERM)
+    deadline = time.time() + 8.0
+    while time.time() < deadline and _is_alive(pid):
+        time.sleep(0.2)
+    if _is_alive(pid):
+        _hard_kill(pid)
+    if _is_alive(pid):
+        raise RuntimeError(
+            f"port :{spec.daemon_port} is held by pid {pid}, which does not "
+            f"answer the daemon healthz and could not be stopped; it is not "
+            f"this model's daemon (backend mismatch or stale install)"
+        )
+
+
 def start_model(spec: ModelSpec, wait: bool = True) -> None:
     """Bring up the model's llama-server + daemon (idempotent)."""
     state = spec.state_dir()
@@ -1953,7 +2082,7 @@ def start_model(spec: ModelSpec, wait: bool = True) -> None:
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
             **_detach_kwargs(),
-            env={**os.environ, **spec.env} if spec.env else None,
+            env=_llama_spawn_env(spec),
         )
         (state / "llama.pid").write_text(str(proc.pid))
         logger.info("%s: llama-server started (pid=%d)", spec.name, proc.pid)
@@ -1969,6 +2098,7 @@ def start_model(spec: ModelSpec, wait: bool = True) -> None:
         (state / "effective_ctx.txt").write_text(str(max(_CTX_FLOOR, effective)))
 
     if not daemon_reachable(spec):
+        _takeover_stale_daemon(spec)
         effective = _effective_ctx(spec)
         real_slots = _real_slot_count(spec.llama_url)
         slots = real_slots if real_slots else spec.parallel
