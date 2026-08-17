@@ -1639,8 +1639,32 @@ def _default_ngl() -> int:
         return 0
     if shutil.which("hipconfig") or os.path.exists("/opt/rocm"):
         return 99
-    # Same Vulkan detection as the installer: loader alone isn't enough,
-    # Intel-iGPU-only boxes should get CPU too.
+    # The hardware profile is the authority for GPU eligibility: it is
+    # what install-llama already trusts to pick the build, and its rule
+    # (use_for_llm + vram >= 4 + not shared RAM) knows that software
+    # Vulkan (lavapipe) and shared-RAM iGPUs are slower than the CPU.
+    # The runtime ngl check used to disagree with it (ICD probe alone),
+    # which is how CPU-only Ubuntu boxes ended up with -ngl 99 on a
+    # lavapipe or APU iGPU — a CPU build that offloads is far slower
+    # than one that doesn't.
+    profile_ngl: int | None = None
+    try:
+        from ..hardware import profile_box
+        rec = profile_box().recommended
+        if rec and rec.get("ngl") is not None:
+            profile_ngl = int(rec["ngl"])
+    except Exception:
+        pass
+    if profile_ngl is not None:
+        if profile_ngl == 0:
+            return 0
+        # Profile says a GPU is worth using; still verify a real
+        # (non-software) ICD is actually loadable before offloading.
+        if _linux_vulkan_works() and not _intel_igpu_only_linux():
+            return 99
+        return 0
+    # No profile (first run / hardware probe failed): fall back to the
+    # same ICD probe the installer uses.
     if _linux_vulkan_works() and not _intel_igpu_only_linux():
         return 99
     return 0

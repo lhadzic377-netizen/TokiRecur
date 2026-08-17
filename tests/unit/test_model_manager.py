@@ -2370,6 +2370,79 @@ def test_default_ngl_zero_for_intel_igpu_only(monkeypatch):
     assert ctl._default_ngl() == 7
 
 
+class _FakeProfile:
+    def __init__(self, recommended):
+        self.recommended = recommended
+
+
+def _linux_default_ngl_env(monkeypatch):
+    """Patch the Linux `_default_ngl` environment: no ROCm, no GPU
+    subprocesses — only the pieces the test drives."""
+    monkeypatch.setattr(ctl.os, "name", "posix")
+    monkeypatch.setattr(ctl.sys, "platform", "linux")
+    monkeypatch.setattr(ctl.shutil, "which", lambda name: None)
+    monkeypatch.setattr(ctl.os.path, "exists", lambda p: False)
+
+
+def test_default_ngl_linux_defers_to_cpu_profile(monkeypatch):
+    """CPU-only box: profile says ngl 0 — must not offload even when a
+    Vulkan ICD is loadable. The profile is the authority (it already
+    drives install-llama's build choice); the ICD probe alone wrongly
+    picked lavapipe/APU iGPUs and made a CPU box *slower*."""
+    _linux_default_ngl_env(monkeypatch)
+    monkeypatch.setattr(ctl, "_linux_vulkan_works", lambda: True)
+    monkeypatch.setattr(ctl, "_intel_igpu_only_linux", lambda: False)
+    monkeypatch.setattr(
+        "tokirecur.hardware.profile_box",
+        lambda *a, **k: _FakeProfile({"backend": "cpu", "ngl": 0, "threads": 8}),
+    )
+    assert ctl._default_ngl() == 0
+
+
+def test_default_ngl_linux_offloads_when_profile_says_gpu(monkeypatch):
+    """Discrete-GPU box: profile says ngl 99 and a real ICD is
+    loadable — offload stays on."""
+    _linux_default_ngl_env(monkeypatch)
+    monkeypatch.setattr(ctl, "_linux_vulkan_works", lambda: True)
+    monkeypatch.setattr(ctl, "_intel_igpu_only_linux", lambda: False)
+    monkeypatch.setattr(
+        "tokirecur.hardware.profile_box",
+        lambda *a, **k: _FakeProfile({"backend": "vulkan", "ngl": 99, "threads": 8}),
+    )
+    assert ctl._default_ngl() == 99
+
+
+def test_default_ngl_linux_profile_says_gpu_but_no_icd(monkeypatch):
+    """Profile says GPU but no loadable ICD (e.g. driver stripped) —
+    offloading would hang, so CPU wins."""
+    _linux_default_ngl_env(monkeypatch)
+    monkeypatch.setattr(ctl, "_linux_vulkan_works", lambda: False)
+    monkeypatch.setattr(ctl, "_intel_igpu_only_linux", lambda: False)
+    monkeypatch.setattr(
+        "tokirecur.hardware.profile_box",
+        lambda *a, **k: _FakeProfile({"backend": "vulkan", "ngl": 99, "threads": 8}),
+    )
+    assert ctl._default_ngl() == 0
+
+
+def test_default_ngl_linux_no_profile_uses_icd_probe(monkeypatch):
+    """First run / probe failure: no profile, fall back to the ICD
+    probe (lavapipe excluded) — CPU-only stays on CPU."""
+    _linux_default_ngl_env(monkeypatch)
+
+    def boom(*a, **k):
+        raise RuntimeError("no profile")
+
+    monkeypatch.setattr("tokirecur.hardware.profile_box", boom)
+    monkeypatch.setattr(ctl, "_intel_igpu_only_linux", lambda: False)
+
+    monkeypatch.setattr(ctl, "_linux_vulkan_works", lambda: True)
+    assert ctl._default_ngl() == 99
+
+    monkeypatch.setattr(ctl, "_linux_vulkan_works", lambda: False)
+    assert ctl._default_ngl() == 0
+
+
 # ── Settings: update_spec_field(apply=...) downstream orchestration ──
 
 
