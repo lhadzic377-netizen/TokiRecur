@@ -70,6 +70,11 @@ class CPUProfile:
     e_core_ids: list[int]
     max_boost_mhz: float
     simd: list[str]       # ["sse4_2", "avx", "avx2", "avx_vnni", ...]
+    # Per-core max frequency in MHz, indexed by CPU ID. Empty when the
+    # platform can't report it (macOS, Windows, containers without
+    # cpufreq); ``effective_cpu_threads`` then falls back to
+    # ``physical_cores`` rather than guessing tiers it can't measure.
+    core_max_freqs_mhz: list[float] = field(default_factory=list)
 
 
 def _read_proc_cpuinfo() -> dict[str, str]:
@@ -189,7 +194,8 @@ def cpu_topology() -> CPUProfile:
         physical_cores=max(1, os.cpu_count() or 1),
         logical_cores=max(1, os.cpu_count() or 1),
         p_core_ids=[], e_core_ids=[],
-        max_boost_mhz=0.0, simd=[],
+        max_boost_mhz=0.0, core_max_freqs_mhz=[],
+        simd=[],
     )
 
 
@@ -244,11 +250,19 @@ def _cpu_topology_linux() -> CPUProfile:
 
     simd = _detect_simd_linux()
 
+    # core_max_freqs_mhz mirrors max_freqs by CPU ID. Cores whose
+    # cpufreq file is unreadable default to 0 so the freq-tier filter
+    # ignores them — partial data must never inflate the thread count.
+    core_max_freqs_mhz: list[float] = list(max_freqs)
+    if len(core_max_freqs_mhz) < cpu_count:
+        core_max_freqs_mhz.extend([0.0] * (cpu_count - len(core_max_freqs_mhz)))
+
     return CPUProfile(
         vendor=vendor, name=name, family=family, model=model,
         physical_cores=physical_cores, logical_cores=cpu_count or physical_cores,
         p_core_ids=p_ids, e_core_ids=e_ids,
         max_boost_mhz=max(max_freqs) if max_freqs else 0.0,
+        core_max_freqs_mhz=core_max_freqs_mhz,
         simd=simd,
     )
 
@@ -300,7 +314,8 @@ def _cpu_topology_macos() -> CPUProfile:
         vendor="Apple", name=info["name"], family=0, model=0,
         physical_cores=physical_cores, logical_cores=logical_cores,
         p_core_ids=p_ids, e_core_ids=e_ids,
-        max_boost_mhz=0.0, simd=simd,
+        max_boost_mhz=0.0, core_max_freqs_mhz=[],
+        simd=simd,
     )
 
 
@@ -323,8 +338,54 @@ def _cpu_topology_windows() -> CPUProfile:
         family=0, model=0,
         physical_cores=physical_cores, logical_cores=logical_cores,
         p_core_ids=list(range(physical_cores)), e_core_ids=[],
-        max_boost_mhz=0.0, simd=simd,
+        max_boost_mhz=0.0, core_max_freqs_mhz=[],
+        simd=simd,
     )
+
+
+# ── Thread-count policy ─────────────────────────────────────────────
+
+
+# Fraction of the fastest core's max frequency that a core must meet
+# to count as "fast tier" for llama.cpp's thread pool. On hybrid Intel
+# (P+E+LPE) this drops the 2 LPE cores — they're 40–50 % of the P-core
+# boost and gate every ggml matmul on the slowest thread. On a plain
+# (non-hybrid) box every core is within ~10 % of the fastest, so the
+# filter is a no-op and the count equals physical_cores.
+_FREQ_TIER_RATIO = 0.70
+
+
+def effective_cpu_threads(cpu: CPUProfile) -> int:
+    """Thread count to hand to llama-server's ``-t`` on CPU backends.
+
+    Counts cores whose ``cpuinfo_max_freq`` is at least 70 % of the
+    fastest core on the box, then subtracts HT siblings so the result
+    reflects physical fast cores — not per-logical-CPU fast cores.
+    On a Core Ultra 155U (2P+8E+2LPE, 14 logical / 12 physical) the
+    filter drops the 2 LPE cores and the 2 P-core HT siblings, so
+    llama.cpp's pool sees 10 threads on distinct fast cores instead
+    of 14 (which would gate every matmul on the 1.5 GHz LPE cores).
+
+    On a non-hybrid box every core passes the threshold and HT
+    siblings cancel out, so the result equals ``physical_cores``.
+    When per-core frequencies aren't readable (macOS, Windows,
+    containers without cpufreq) the function falls back to
+    ``physical_cores``.
+    """
+    freqs = [f for f in cpu.core_max_freqs_mhz if f > 0]
+    if not freqs:
+        return max(1, cpu.physical_cores)
+    peak = max(freqs)
+    threshold = peak * _FREQ_TIER_RATIO
+    fast_logical = sum(1 for f in freqs if f >= threshold)
+    # HT siblings live on the fastest tier by Intel convention;
+    # subtract the (logical - physical) surplus so the count matches
+    # physical fast cores rather than logical fast cores. On a box
+    # without HT (logical == physical) the surplus is 0 and the
+    # count is unchanged.
+    ht_surplus = max(0, cpu.logical_cores - cpu.physical_cores)
+    physical_fast = max(1, fast_logical - ht_surplus)
+    return physical_fast
 
 
 # ── GPU ────────────────────────────────────────────────────────────
@@ -670,14 +731,15 @@ def _recommend_defaults(cpu: CPUProfile, gpus: list[GPUProfile]) -> dict:
         return {"backend": "vulkan", "ngl": 99,
                 "threads": cpu.physical_cores}
 
-    # No usable discrete GPU. CPU it is. Use every physical core —
-    # that's also what llama.cpp picks by default, and it's the same
-    # on hybrid (P+E) chips and plain multicore boxes alike. We used
-    # to cap threads at the P-core cluster size and pin matmul to it
-    # with taskset; on a Core Ultra 155U (2P+8E) that left the 8
-    # E-cores idle and dropped a 9B to ~1 TPS. No per-CPU tuning:
-    # all physical cores, no pinning.
-    threads = cpu.physical_cores or 4
+    # No usable discrete GPU. CPU it is. Drop the slowest tier on
+    # hybrid chips so the LPE cores don't gate ggml's matmul sync —
+    # every other core passes the freq filter, so a non-hybrid box
+    # keeps all its cores. We used to cap threads at the P-core
+    # cluster size and pin matmul to it with taskset; on a Core
+    # Ultra 155U (2P+8E) that left the 8 E-cores idle and dropped a
+    # 9B to ~1 TPS. The freq-tier filter keeps E-cores, drops LPE,
+    # and leaves non-hybrid boxes untouched.
+    threads = effective_cpu_threads(cpu)
     return {
         "backend": "cpu",
         "ngl": 0,

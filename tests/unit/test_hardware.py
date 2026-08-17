@@ -229,6 +229,92 @@ def test_recommend_defaults_threads_use_all_physical_cores():
     assert rec["threads"] == 32
 
 
+# ── Thread-count policy (effective_cpu_threads) ────────────────────
+
+
+def _cpu(vendor, name, physical, logical, p_ids, e_ids, freqs):
+    """Compact CPUProfile builder for the freq-tier tests."""
+    return CPUProfile(
+        vendor=vendor, name=name, family=6, model=183,
+        physical_cores=physical, logical_cores=logical,
+        p_core_ids=p_ids, e_core_ids=e_ids,
+        max_boost_mhz=max(freqs) if freqs else 0.0,
+        core_max_freqs_mhz=list(freqs),
+        simd=["avx2"],
+    )
+
+
+def test_effective_cpu_threads_drops_lpe_on_155u():
+    """Core Ultra 155U: 2P + 8E + 2LPE. The 2 LPE cores run at
+    ~2.1 GHz vs P at 4.8 — they must NOT enter the thread pool.
+    The 2 P-core HT siblings are also subtracted so the count
+    reflects distinct physical fast cores (2P + 8E = 10), not
+    logical fast cores (12)."""
+    freqs = [4800, 4800, 4800, 4800,    # 2P with HT
+             3800, 3800, 3800, 3800,    # 4 E-cores
+             3800, 3800, 3800, 3800,    # 4 more E-cores
+             2100, 2100]                # 2 LPE cores
+    cpu = _cpu("GenuineIntel", "Core Ultra 7 155U", 12, 14,
+               p_ids=list(range(4)), e_ids=list(range(4, 14)), freqs=freqs)
+    assert hardware.effective_cpu_threads(cpu) == 10
+
+
+def test_effective_cpu_threads_keeps_all_on_non_hybrid():
+    """A box where every core boosts within ~10 % of the fastest
+    must keep every physical core — no filter, no shrink."""
+    freqs = [5700.0] * 16  # Halo-style AMD, all P-tier
+    cpu = _cpu("AuthenticAMD", "Ryzen AI MAX", 16, 16,
+               p_ids=list(range(16)), e_ids=[], freqs=freqs)
+    assert hardware.effective_cpu_threads(cpu) == 16
+
+
+def test_effective_cpu_threads_handles_ht_siblings():
+    """A non-hybrid HT box (8P, 16 threads): all cores are P-tier,
+    so the fast count is 16 logical; subtract the 8 HT siblings and
+    the result is 8 physical — the right pool size."""
+    freqs = [5200.0] * 16  # 8P with HT
+    cpu = _cpu("GenuineIntel", "i7-13700K (non-hybrid box)", 8, 16,
+               p_ids=list(range(8)), e_ids=list(range(8, 16)), freqs=freqs)
+    assert hardware.effective_cpu_threads(cpu) == 8
+
+
+def test_effective_cpu_threads_falls_back_when_no_freq_data():
+    """Containers / macOS / Windows leave core_max_freqs_mhz empty.
+    The filter must NOT shrink the pool below physical_cores."""
+    cpu = _cpu("Apple", "M2", 4, 8,
+               p_ids=list(range(4)), e_ids=list(range(4, 8)), freqs=[])
+    cpu = CPUProfile(
+        vendor=cpu.vendor, name=cpu.name, family=cpu.family, model=cpu.model,
+        physical_cores=cpu.physical_cores, logical_cores=cpu.logical_cores,
+        p_core_ids=cpu.p_core_ids, e_core_ids=cpu.e_core_ids,
+        max_boost_mhz=cpu.max_boost_mhz, simd=cpu.simd,
+    )  # core_max_freqs_mhz defaults to []
+    assert hardware.effective_cpu_threads(cpu) == cpu.physical_cores
+
+
+def test_recommend_defaults_cpu_uses_filtered_threads_on_hybrid():
+    """The CPU branch of _recommend_defaults must apply the freq-tier
+    filter — a 155U with per-core freqs reported gets LPE cores and
+    HT siblings excluded from the recommended thread count."""
+    freqs = [4800, 4800, 4800, 4800] + [3800] * 8 + [2100, 2100]
+    cpu = _cpu("GenuineIntel", "Core Ultra 7 155U", 12, 14,
+               p_ids=list(range(4)), e_ids=list(range(4, 14)), freqs=freqs)
+    rec = hardware._recommend_defaults(cpu, [])
+    assert rec["backend"] == "cpu"
+    assert rec["ngl"] == 0
+    assert rec["threads"] == 10  # 2P + 8E physical fast
+
+
+def test_recommend_defaults_cpu_threads_unchanged_on_non_hybrid():
+    """A box with all cores in the same tier must keep physical_cores
+    threads — no shrink, no surprise."""
+    freqs = [5700.0] * 16
+    cpu = _cpu("AuthenticAMD", "Ryzen AI MAX", 16, 16,
+               p_ids=list(range(16)), e_ids=[], freqs=freqs)
+    rec = hardware._recommend_defaults(cpu, [])
+    assert rec["threads"] == 16
+
+
 # ── Profile persistence ───────────────────────────────────────────
 
 

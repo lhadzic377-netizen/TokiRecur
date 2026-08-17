@@ -1874,12 +1874,14 @@ def _llama_args(spec: ModelSpec, ctx_override: int | None = None,
     # useful on GPU paths — the GPU does the matmul, not the CPU.
     # Thread count is recomputed fresh (never read from a cached or
     # hand-edited profile) so a stale hardware.json cannot silently
-    # cap CPU throughput.
+    # cap CPU throughput. ``effective_cpu_threads`` drops the slowest
+    # tier on hybrid chips (e.g. LPE on Core Ultra 155U) so the
+    # llama.cpp thread pool isn't gated by 1.5 GHz cores.
     if (ngl == 0) and not any(a in ("-t", "--threads") for a in spec.extra_args):
         threads = None
         try:
-            from ..hardware import cpu_topology
-            threads = cpu_topology().physical_cores
+            from ..hardware import cpu_topology, effective_cpu_threads
+            threads = effective_cpu_threads(cpu_topology())
         except Exception:
             threads = None
         if threads is None:

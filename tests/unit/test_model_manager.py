@@ -1099,6 +1099,36 @@ def test_llama_args_ngl_skipped_when_pinned_in_extra_args(seeded_env):
     assert args[args.index("-ngl") + 1] == "12"
 
 
+def test_llama_args_threads_drop_lpe_on_hybrid_cpu(seeded_env, monkeypatch):
+    """On a hybrid CPU the live -t probe must use the freq-tier
+    filter — LPE cores (40-50% of P-core boost) and HT siblings
+    must not be in the llama.cpp thread pool. Stub cpu_topology to
+    return a 155U-shaped profile; the resulting -t count should be
+    physical fast cores (2P + 8E = 10), not raw physical_cores (12)
+    and not logical fast cores (12)."""
+    from tokirecur import hardware
+    freqs = ([4800, 4800, 4800, 4800]   # 2P with HT
+             + [3800] * 8                # 8E
+             + [2100, 2100])             # 2LPE
+    profile = hardware.CPUProfile(
+        vendor="GenuineIntel", name="Core Ultra 7 155U",
+        family=6, model=189,
+        physical_cores=12, logical_cores=14,
+        p_core_ids=list(range(4)), e_core_ids=list(range(4, 14)),
+        max_boost_mhz=4800.0,
+        core_max_freqs_mhz=list(freqs),
+        simd=["avx2", "avx_vnni"],
+    )
+    monkeypatch.setattr(hardware, "cpu_topology", lambda: profile)
+    monkeypatch.setenv("TOKI_NGL", "0")
+
+    spec = _ngl_spec(seeded_env)
+    args = ctl._llama_args(spec)
+
+    # 10 physical fast cores: 2P + 8E (HT siblings and LPE dropped).
+    assert args[args.index("-t") + 1] == "10"
+
+
 # ── Registry repair (legacy pulled entries) ────────────────────────
 
 
