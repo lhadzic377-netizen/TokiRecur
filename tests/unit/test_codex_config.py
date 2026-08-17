@@ -123,7 +123,8 @@ def test_codex_config_keeps_user_config_scalar(env):
     assert cfg["system_prompt"] == "My custom prompt"
 
 
-def test_codex_config_writes_all_specs(env):
+def test_codex_config_writes_all_specs(env, monkeypatch):
+    monkeypatch.setattr(ctl, "daemon_reachable", lambda spec: True)
     spec = _spec(env)
     pulled = _spec(env, name="pulled", model_id="pulled-model", daemon_port=8788)
     cfg_path = env / "codex" / "config.toml"

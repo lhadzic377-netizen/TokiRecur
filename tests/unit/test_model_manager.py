@@ -86,7 +86,8 @@ def with_pulled_model(seeded_env, hf):
     return {**_specs(env), pulled.name: pulled}
 
 
-def test_opencode_config_writer(env, with_pulled_model):
+def test_opencode_config_writer(env, with_pulled_model, monkeypatch):
+    monkeypatch.setattr(ctl, "daemon_reachable", lambda spec: True)
     spec = with_pulled_model["35b"]
     cfg_path = env / "opencode.json"
     cfg_path.write_text(json.dumps({"small_model": "tokirecur/qwen3.5-9b",
@@ -112,6 +113,43 @@ def test_opencode_config_writer(env, with_pulled_model):
     # toki-owned markdown file next to the config.
     assert cfg["instructions"] == [str(env / "tokirecur-anti-loop.md")]
     assert ctl.ANTI_LOOP_SYSTEM_PROMPT in (env / "tokirecur-anti-loop.md").read_text()
+
+
+def test_opencode_config_writer_only_advertises_reachable_daemons(
+        env, with_pulled_model, monkeypatch):
+    """The harness fallback class: a dead daemon advertised in the
+    config makes opencode route titles/small-model calls into
+    connection-refused and use the first response as the session
+    title. Only the active spec + reachable daemons are written."""
+    monkeypatch.setattr(ctl, "llama_reachable", lambda spec: True)
+
+    def dead_anyone_but_active(spec):
+        return spec.name == "35b"
+
+    monkeypatch.setattr(ctl, "daemon_reachable", dead_anyone_but_active)
+    spec = with_pulled_model["35b"]
+    cfg_path = env / "opencode.json"
+    cfg_path.write_text(json.dumps({"provider": {}}))
+    cfg = json.loads(ctl.write_opencode_config(spec, path=cfg_path).read_text())
+    # Only the active spec's provider survives; dead daemons are gone.
+    assert set(cfg["provider"]) == {"tokirecur-35b"}
+    # small_model falls back to the active spec — never a dead one.
+    assert cfg["small_model"] == "tokirecur/35b"
+    assert cfg["model"] == "tokirecur-35b/qwen3.6-35b-a3b"
+
+
+def test_opencode_config_writer_small_model_prefers_reachable_always_on(
+        env, with_pulled_model, monkeypatch):
+    """An always-on spec with a LIVE daemon wins small_model; the
+    active spec is the fallback when the always-on daemon is down."""
+    monkeypatch.setattr(ctl, "daemon_reachable", lambda spec: True)
+    monkeypatch.setattr(ctl, "llama_reachable", lambda spec: True)
+    ctl.update_spec_field("9b", "always_on", "true")
+    spec = with_pulled_model["35b"]
+    cfg_path = env / "opencode.json"
+    cfg_path.write_text(json.dumps({"provider": {}}))
+    cfg = json.loads(ctl.write_opencode_config(spec, path=cfg_path).read_text())
+    assert cfg["small_model"] == "tokirecur/9b"
 
 
 def test_opencode_config_writer_skips_user_instructions(env, with_pulled_model):
@@ -158,6 +196,8 @@ def test_openclaw_upgrades_v1_block(env, with_pulled_model, monkeypatch):
 
 
 def test_openclaw_config_writer(env, with_pulled_model, monkeypatch):
+    monkeypatch.setattr(ctl, "daemon_reachable", lambda spec: True)
+    monkeypatch.setattr(ctl, "llama_reachable", lambda spec: True)
     spec = with_pulled_model["laguna"]
     cfg_path = env / "openclaw.json"
     cfg_path.write_text(json.dumps({"agents": {"defaults": {"model": {"primary": "old"}}}}))
@@ -276,6 +316,8 @@ def test_opencode_md_upgrades_v2_block(env, with_pulled_model):
 
 
 def test_sync_cli_configs_writes_all(env, with_pulled_model, monkeypatch):
+    monkeypatch.setattr(ctl, "daemon_reachable", lambda spec: True)
+    monkeypatch.setattr(ctl, "llama_reachable", lambda spec: True)
     spec = with_pulled_model["laguna"]
     monkeypatch.setenv("CODEX_HOME", str(env / "codex-home"))
     paths = ctl.sync_cli_configs(spec)
@@ -380,6 +422,7 @@ def test_mode_persisted_and_threaded(env, with_pulled_model, monkeypatch):
 
 def test_write_codex_config_stays_managed(env, with_pulled_model, monkeypatch):
     """codex always routes through the daemon (Responses API shim)."""
+    monkeypatch.setattr(ctl, "daemon_reachable", lambda spec: True)
     spec = with_pulled_model["9b"]
     monkeypatch.setenv("CODEX_HOME", str(env / "codex-home"))
     ctl.write_client_mode("codex", "raw")
@@ -410,7 +453,7 @@ def test_codex_purges_stale_tokirecur_providers(env, with_pulled_model,
     ctl.write_codex_config(spec)
     with (home / "config.toml").open("rb") as fh:
         codex = toml_load(fh)
-    # Stale entry gone; only the live registry providers remain.
+    # Stale entry gone; the active spec is always advertised.
     assert "tokirecur-old" not in codex["model_providers"]
     assert "tokirecur-9b" in codex["model_providers"]
     assert codex["model_providers"]["tokirecur-9b"]["base_url"] == \

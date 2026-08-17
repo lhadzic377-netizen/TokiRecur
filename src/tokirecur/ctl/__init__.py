@@ -2686,14 +2686,48 @@ def _provider_entry(spec: ModelSpec, mode: str = "managed") -> dict[str, Any]:
     }
 
 
-def _small_model_ref(specs: list[ModelSpec]) -> str:
+def _advertised_specs(
+    specs: list[ModelSpec], active: ModelSpec, mode: str,
+) -> list[ModelSpec]:
+    """Registry specs a client config may point at: the active one plus
+    any spec whose serving endpoint is genuinely up.
+
+    Only the active model's daemon runs, so a config that advertises
+    every registry spec is full of dead ports — the harness then routes
+    title-gen / small-model / model-switch requests into connection
+    refused, and opencode falls back to using the first assistant
+    response as the session title. Writing only reachable endpoints
+    fixes that for every model generically: whichever spec the user
+    activates, its daemon comes up and the next sync advertises it.
+    """
+    probe = llama_reachable if mode == "raw" else daemon_reachable
+    out = [s for s in specs if s.name == active.name]
+    for s in specs:
+        if s.name != active.name and probe(s):
+            out.append(s)
+    return out
+
+
+def _small_model_ref(
+    specs: list[ModelSpec], active: ModelSpec | None = None,
+) -> str:
     """Legacy opencode `small_model` field — `tokirecur/<short_name>` form.
 
-    Prefers an always-on spec (always available for cheap tasks like
-    titles); falls back to the first spec.
+    Picks the cheapest spec with a live endpoint for cheap tasks like
+    titles: an always-on spec first, otherwise the first advertised
+    spec that isn't the active one; falls back to the active spec
+    (whose daemon the caller just brought up). `specs` must already be
+    reachability-filtered, so a dead daemon is never chosen.
     """
     if specs:
-        primary = next((s for s in specs if s.always_on), specs[0])
+        primary = next((s for s in specs if s.always_on), None)
+        if primary is None:
+            primary = next(
+                (s for s in specs if active is None or s.name != active.name),
+                None,
+            )
+        if primary is None:
+            primary = specs[0]
         return f"tokirecur/{primary.name}"
     return "tokirecur/qwen3.5-9b"
 
@@ -2728,10 +2762,11 @@ def write_opencode_config(
         providers.pop(stale, None)
     all_specs = specs if specs is not None else load_registry()
     mode = _resolve_mode("opencode", mode)
-    for s in all_specs:
+    advertised = _advertised_specs(all_specs, spec, mode)
+    for s in advertised:
         providers[f"tokirecur-{s.name}"] = _provider_entry(s, mode=mode)
 
-    small = _small_model_ref(all_specs)
+    small = _small_model_ref(advertised, active=spec)
     cfg["small_model"] = small
     cfg["model"] = f"tokirecur-{spec.name}/{spec.model_id}"
 
@@ -2780,7 +2815,8 @@ def write_openclaw_config(
         providers.pop(stale, None)
     all_specs = specs if specs is not None else load_registry()
     mode = _resolve_mode("openclaw", mode)
-    for s in all_specs:
+    advertised = _advertised_specs(all_specs, spec, mode)
+    for s in advertised:
         base = s.llama_url if mode == "raw" else s.daemon_url
         providers[f"tokirecur-{s.name}"] = {
             "api": "openai-completions",
@@ -3011,7 +3047,10 @@ def write_codex_config(
     # "request sent, never answered" class for codex too).
     if _purge_stale_tokirecur_providers(providers, all_specs):
         logger.info("purged stale tokirecur-* providers from codex config")
-    for s in all_specs:
+    # Codex always routes through the daemon (wire_api = "responses" is
+    # daemon-only), so reachability is the managed probe.
+    advertised = _advertised_specs(all_specs, spec, "managed")
+    for s in advertised:
         providers[f"tokirecur-{s.name}"] = {
             "name": f"Toki Recur ({s.label})",
             "base_url": f"{s.daemon_url}/v1",
