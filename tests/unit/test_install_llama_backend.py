@@ -1083,3 +1083,116 @@ def _fake_drm(tmp_path, vendors):
         device.mkdir(parents=True, exist_ok=True)
         (device / "vendor").write_text(v)
 
+
+# ── Vulkan-on-iGPU warning ────────────────────────────────────────
+
+
+def _stub_profile_with_gpus(monkeypatch, gpus):
+    """Build a 155U-shaped profile with the given GPU list and stub
+    hardware.profile_box to return it."""
+    from tokirecur.hardware import CPUProfile, HardwareProfile
+    prof = HardwareProfile(
+        schema_version=1,
+        profiled_at="2026-01-01T00:00:00Z",
+        os="linux",
+        cpu=CPUProfile(
+            vendor="GenuineIntel", name="Core Ultra 7 155U",
+            family=6, model=189, physical_cores=12, logical_cores=14,
+            p_core_ids=list(range(4)), e_core_ids=list(range(4, 14)),
+            max_boost_mhz=4800.0, simd=["avx2", "avx_vnni"],
+        ),
+        gpus=gpus,
+        ram_gb=16.0,
+        benchmarks={},
+        recommended={"backend": "vulkan", "ngl": 99, "threads": 12},
+    )
+    monkeypatch.setattr(
+        "tokirecur.hardware.profile_box",
+        lambda force=False: prof,
+    )
+
+
+def test_warn_vulkan_igpu_only_box(monkeypatch, capsys):
+    """Linux x64 with only an Intel iGPU (shared RAM, not usable for
+    LLM) — the warning fires, names the iGPU, and points at --backend cpu."""
+    from tokirecur.hardware import GPUProfile
+    _stub_profile_with_gpus(monkeypatch, [
+        GPUProfile(
+            vendor="Intel", name="Arc iGPU",
+            vram_gb=0.5, driver=None, vulkan_score=0.3,
+            shared_ram=True, use_for_llm=False,
+            reason="shared system RAM",
+        ),
+    ])
+    from tokirecur.cli import _warn_vulkan_iGPU_will_be_slow
+    _warn_vulkan_iGPU_will_be_slow("ubuntu", "x64", "vulkan")
+    stderr = capsys.readouterr().err
+    assert "Intel iGPU" in stderr
+    assert "--backend cpu" in stderr
+    assert "sync" in stderr.lower() or "token" in stderr.lower()
+
+
+def test_warn_vulkan_no_gpu_at_all(monkeypatch, capsys):
+    """Linux x64 with no GPUs at all — the warning still fires (label
+    = 'no usable GPU')."""
+    _stub_profile_with_gpus(monkeypatch, [])
+    from tokirecur.cli import _warn_vulkan_iGPU_will_be_slow
+    _warn_vulkan_iGPU_will_be_slow("ubuntu", "x64", "vulkan")
+    stderr = capsys.readouterr().err
+    assert "no usable GPU" in stderr
+    assert "--backend cpu" in stderr
+
+
+def test_warn_vulkan_silent_when_real_gpu_present(monkeypatch, capsys):
+    """Linux x64 with a real discrete NVIDIA GPU — the Vulkan build
+    is the right choice, no warning."""
+    from tokirecur.hardware import GPUProfile
+    _stub_profile_with_gpus(monkeypatch, [
+        GPUProfile(
+            vendor="NVIDIA", name="RTX 4070",
+            vram_gb=12.0, driver=None, vulkan_score=1.0,
+            shared_ram=False, use_for_llm=True,
+            reason="discrete GPU",
+        ),
+    ])
+    from tokirecur.cli import _warn_vulkan_iGPU_will_be_slow
+    _warn_vulkan_iGPU_will_be_slow("ubuntu", "x64", "vulkan")
+    stderr = capsys.readouterr().err
+    assert stderr == ""
+
+
+def test_warn_vulkan_silent_for_cpu_backend(monkeypatch, capsys):
+    """The warning must only fire for the vulkan backend; CPU installs
+    on the same hardware produce no warning."""
+    from tokirecur.hardware import GPUProfile
+    _stub_profile_with_gpus(monkeypatch, [
+        GPUProfile(
+            vendor="Intel", name="Arc iGPU",
+            vram_gb=0.5, driver=None, vulkan_score=0.3,
+            shared_ram=True, use_for_llm=False,
+            reason="shared system RAM",
+        ),
+    ])
+    from tokirecur.cli import _warn_vulkan_iGPU_will_be_slow
+    _warn_vulkan_iGPU_will_be_slow("ubuntu", "x64", "cpu")
+    stderr = capsys.readouterr().err
+    assert stderr == ""
+
+
+def test_warn_vulkan_silent_on_non_ubuntu(monkeypatch, capsys):
+    """The warning is Linux-only — macOS/Windows installs never fire."""
+    from tokirecur.hardware import GPUProfile
+    _stub_profile_with_gpus(monkeypatch, [
+        GPUProfile(
+            vendor="Intel", name="Arc iGPU",
+            vram_gb=0.5, driver=None, vulkan_score=0.3,
+            shared_ram=True, use_for_llm=False,
+            reason="shared system RAM",
+        ),
+    ])
+    from tokirecur.cli import _warn_vulkan_iGPU_will_be_slow
+    _warn_vulkan_iGPU_will_be_slow("macos", "arm64", "vulkan")
+    _warn_vulkan_iGPU_will_be_slow("windows", "x64", "vulkan")
+    stderr = capsys.readouterr().err
+    assert stderr == ""
+
