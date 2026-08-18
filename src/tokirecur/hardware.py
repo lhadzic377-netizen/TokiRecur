@@ -632,8 +632,14 @@ def _enumerate_gpus_macos() -> list[GPUProfile]:
 
 
 def _enumerate_gpus_windows() -> list[GPUProfile]:
-    """Windows: would need WMI / DXGI; deferred for now. The existing
-    nvidia-smi + CUDA driver check in diagnose.py covers NVIDIA."""
+    """Windows GPU enumeration — partial.
+
+    NVIDIA: nvidia-smi (present on any CUDA install) reports name +
+    VRAM. AMD/Intel on Windows would need WMI or DXGI enumeration
+    (no /sys/class/drm, no rocm-smi); TODO: implement via
+    wmic path win32_VideoController or dxgi. Until then AMD/Intel
+    boxes on Windows fall back to CPU — safe, never wrong.
+    """
     out = []
     if shutil.which("nvidia-smi"):
         try:

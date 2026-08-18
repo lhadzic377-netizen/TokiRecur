@@ -828,3 +828,32 @@ def test_scan_pci_gpus_dedup_against_vendor_tools(monkeypatch, tmp_path):
     )]
     gpus = hardware._scan_pci_gpus(hardware.Path("/sys/class/drm"), already)
     assert gpus == []   # already covered → no duplicate
+
+
+# ── Windows ───────────────────────────────────────────────────────
+
+
+def test_windows_returns_empty_with_warning(monkeypatch):
+    """Windows without nvidia-smi returns [] — AMD/Intel fall back to
+    CPU (safe, never wrong) until the WMI/DXGI stub lands."""
+    monkeypatch.setattr(hardware.sys, "platform", "win32")
+    monkeypatch.setattr(hardware.shutil, "which", lambda name: None)
+    assert hardware.enumerate_gpus() == []
+
+
+def test_windows_nvidia_via_nvidia_smi(monkeypatch):
+    """Windows with nvidia-smi reports the NVIDIA GPU with VRAM."""
+    monkeypatch.setattr(hardware.sys, "platform", "win32")
+    monkeypatch.setattr(hardware.shutil, "which",
+                        lambda name: "C:\\nvidia\\nvidia-smi.exe" if name == "nvidia-smi" else None)
+
+    class R:
+        returncode = 0
+        stdout = "NVIDIA GeForce RTX 3080, 10240\n"
+    monkeypatch.setattr(hardware.subprocess, "run", lambda *a, **kw: R())
+
+    gpus = hardware.enumerate_gpus()
+    nvidia = [g for g in gpus if g.vendor == "NVIDIA"]
+    assert len(nvidia) == 1
+    assert nvidia[0].vram_gb >= 10
+    assert nvidia[0].use_for_llm is True
