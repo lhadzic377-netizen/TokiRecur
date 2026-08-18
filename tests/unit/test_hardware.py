@@ -771,3 +771,60 @@ def test_total_ram_gb_macos_handles_sysctl_failure(monkeypatch):
     monkeypatch.setattr(hardware.subprocess, "run",
                         lambda *a, **kw: R())
     assert hardware._total_ram_gb() == 0.0
+
+
+# ── Centralised PCI scan ──────────────────────────────────────────
+
+
+def test_scan_pci_gpus_multi_gpu_prefers_discrete(monkeypatch, tmp_path):
+    """A box with an NVIDIA discrete + Intel iGPU finds both; the
+    discrete is usable, the iGPU is not. Discrete-first ordering."""
+    monkeypatch.setattr(hardware.sys, "platform", "linux")
+    monkeypatch.setattr(hardware.shutil, "which", lambda name: None)
+
+    fake_drm = tmp_path / "drm"
+    fake_drm.mkdir()
+    nv = fake_drm / "card0" / "device"
+    nv.mkdir(parents=True)
+    (nv / "vendor").write_text("0x10de")
+    (nv / "device").write_text("0x2684")
+    (nv / "mem_info_vram_total").write_text(str(24 * 1024**3))
+    igpu = fake_drm / "card1" / "device"
+    igpu.mkdir(parents=True)
+    (igpu / "vendor").write_text("0x8086")
+    (igpu / "device").write_text("0x9a49")
+
+    def fake_name(vendor, device):
+        return {"0x10de": "NVIDIA RTX 4090", "0x8086": "Intel Arc iGPU"}.get(vendor)
+    monkeypatch.setattr(hardware, "_pci_device_name", fake_name)
+    monkeypatch.setattr(hardware, "Path", _DrmPathShim(fake_drm))
+
+    gpus = hardware._scan_pci_gpus(hardware.Path("/sys/class/drm"), [])
+    assert [g.vendor for g in gpus] == ["NVIDIA", "Intel"]
+    assert gpus[0].use_for_llm is True
+    assert gpus[1].use_for_llm is False
+
+
+def test_scan_pci_gpus_dedup_against_vendor_tools(monkeypatch, tmp_path):
+    """GPUs already found by nvidia-smi/rocm-smi (passed as `already`)
+    are not duplicated by the PCI scan."""
+    monkeypatch.setattr(hardware.sys, "platform", "linux")
+    monkeypatch.setattr(hardware.shutil, "which", lambda name: None)
+
+    fake_drm = tmp_path / "drm"
+    fake_drm.mkdir()
+    nv = fake_drm / "card0" / "device"
+    nv.mkdir(parents=True)
+    (nv / "vendor").write_text("0x10de")
+    (nv / "device").write_text("0x2684")
+    (nv / "mem_info_vram_total").write_text(str(24 * 1024**3))
+    monkeypatch.setattr(hardware, "_pci_device_name", lambda *_: "NVIDIA RTX 4090")
+    monkeypatch.setattr(hardware, "Path", _DrmPathShim(fake_drm))
+
+    already = [GPUProfile(
+        vendor="NVIDIA", name="NVIDIA RTX 4090", vram_gb=24.0,
+        driver="555.42", vulkan_score=1.0, shared_ram=False,
+        use_for_llm=True, reason="discrete GPU",
+    )]
+    gpus = hardware._scan_pci_gpus(hardware.Path("/sys/class/drm"), already)
+    assert gpus == []   # already covered → no duplicate

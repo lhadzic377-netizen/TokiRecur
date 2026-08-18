@@ -516,75 +516,90 @@ def _enumerate_gpus_linux() -> list[GPUProfile]:
             pass
 
     # Intel/AMD iGPU + anything else: read PCI vendor from /sys/class/drm.
-    drm_root = Path("/sys/class/drm")
-    if drm_root.is_dir():
-        for card in drm_root.glob("card*"):
-            dev = card / "device"
-            if not dev.is_dir():
-                continue
-            try:
-                vendor_id = (dev / "vendor").read_text().strip()
-            except OSError:
-                continue
-            try:
-                device_id = (dev / "device").read_text().strip()
-            except OSError:
-                device_id = ""
-            name = _pci_device_name(vendor_id, device_id) or f"{vendor_id}/{device_id}"
-            vendor = {
-                "0x10de": "NVIDIA", "0x1002": "AMD",
-                "0x8086": "Intel", "0x106b": "Apple",
-            }.get(vendor_id, "unknown")
-            if vendor == "NVIDIA" and any(g.vendor == "NVIDIA" for g in out):
-                continue   # already covered by nvidia-smi
-            if vendor == "AMD" and any(g.vendor == "AMD" and not g.shared_ram for g in out):
-                continue   # discrete already covered by rocm-smi
-            shared = vendor == "Intel" and device_id.startswith(_INTEL_IGPU_PREFIXES)
-            # Discrete GPU vendors (NVIDIA, AMD, Intel Arc) report
-            # VRAM from sysfs. UMA/integrated parts report 0.
-            if vendor in ("NVIDIA", "AMD"):
-                vram = _pci_vram_gb(dev)
-            elif vendor == "Intel":
-                # Intel iGPU: shared RAM, conservative placeholder.
-                # Intel Arc discrete: dedicated VRAM from sysfs.
-                if shared:
-                    vram = _estimate_intel_vram_gb(device_id)
-                else:
-                    vram = _pci_vram_gb(dev)
-            else:
-                vram = 0.0
-            # AMD GPUs on UMA systems (Strix Halo, AMD APUs) report no
-            # dedicated VRAM from sysfs/KFD — the GPU shares system RAM
-            # and can use the full pool (CPU + GPU draw from the same
-            # unified memory). Estimate usable memory from system RAM so
-            # the vram_gb >= 4 gate in _recommend_defaults recognises
-            # them as usable. The value is a signal, not a runtime cap;
-            # llama.cpp manages actual allocation at launch.
-            if vendor == "AMD" and vram == 0.0:
-                total_ram = _total_ram_gb()
-                if total_ram >= 4:
-                    vram = total_ram
-            score = 0.3 if shared else 0.8 if vram >= 4 else 0.5
-            use = (
-                not shared
-                and (vram >= 4 or vendor != "Intel")
-            )
-            reason_bits = []
-            if shared:
-                reason_bits.append("shared system RAM")
-            if vram and vram < 4:
-                reason_bits.append(f"only {vram:.1f} GB VRAM")
-            if vendor == "Intel" and shared:
-                reason_bits.append("Intel iGPU — CPU is faster for LLM matmul")
-            elif vendor == "Intel" and vram and vram < 4:
-                reason_bits.append(f"Intel discrete with only {vram:.1f} GB VRAM")
-            reason = "; ".join(reason_bits) or "discrete GPU"
-            out.append(GPUProfile(
-                vendor=vendor, name=name, vram_gb=vram,
-                driver=None, vulkan_score=score, shared_ram=shared,
-                use_for_llm=use, reason=reason,
-            ))
+    out.extend(_scan_pci_gpus(Path("/sys/class/drm"), out))
     return out
+
+
+def _scan_pci_gpus(drm_root: Path, already: list[GPUProfile]) -> list[GPUProfile]:
+    """Enumerate GPUs from the DRM PCI bus (/sys/class/drm/card*/device).
+
+    This is the fallback and completeness pass: it catches every GPU
+    the vendor tools (nvidia-smi / rocm-smi) miss — Intel iGPUs, AMD
+    APUs, discrete Arc — and doubles as the source of truth when the
+    vendor tool isn't installed. ``already`` holds GPUs found by the
+    vendor tools; NVIDIA and discrete AMD cards found there are not
+    duplicated here.
+    """
+    found: list[GPUProfile] = []
+    if not drm_root.is_dir():
+        return found
+    for card in sorted(drm_root.glob("card*"), key=lambda p: p.name):
+        dev = card / "device"
+        if not dev.is_dir():
+            continue
+        try:
+            vendor_id = (dev / "vendor").read_text().strip()
+        except OSError:
+            continue
+        try:
+            device_id = (dev / "device").read_text().strip()
+        except OSError:
+            device_id = ""
+        name = _pci_device_name(vendor_id, device_id) or f"{vendor_id}/{device_id}"
+        vendor = {
+            "0x10de": "NVIDIA", "0x1002": "AMD",
+            "0x8086": "Intel", "0x106b": "Apple",
+        }.get(vendor_id, "unknown")
+        if vendor == "NVIDIA" and any(g.vendor == "NVIDIA" for g in already):
+            continue   # already covered by nvidia-smi
+        if vendor == "AMD" and any(g.vendor == "AMD" and not g.shared_ram for g in already):
+            continue   # discrete already covered by rocm-smi
+        shared = vendor == "Intel" and device_id.startswith(_INTEL_IGPU_PREFIXES)
+        # Discrete GPU vendors (NVIDIA, AMD, Intel Arc) report
+        # VRAM from sysfs. UMA/integrated parts report 0.
+        if vendor in ("NVIDIA", "AMD"):
+            vram = _pci_vram_gb(dev)
+        elif vendor == "Intel":
+            # Intel iGPU: shared RAM, conservative placeholder.
+            # Intel Arc discrete: dedicated VRAM from sysfs.
+            if shared:
+                vram = _estimate_intel_vram_gb(device_id)
+            else:
+                vram = _pci_vram_gb(dev)
+        else:
+            vram = 0.0
+        # AMD GPUs on UMA systems (Strix Halo, AMD APUs) report no
+        # dedicated VRAM from sysfs/KFD — the GPU shares system RAM
+        # and can use the full pool (CPU + GPU draw from the same
+        # unified memory). Estimate usable memory from system RAM so
+        # the vram_gb >= 4 gate in _recommend_defaults recognises
+        # them as usable. The value is a signal, not a runtime cap;
+        # llama.cpp manages actual allocation at launch.
+        if vendor == "AMD" and vram == 0.0:
+            total_ram = _total_ram_gb()
+            if total_ram >= 4:
+                vram = total_ram
+        score = 0.3 if shared else 0.8 if vram >= 4 else 0.5
+        use = (
+            not shared
+            and (vram >= 4 or vendor != "Intel")
+        )
+        reason_bits = []
+        if shared:
+            reason_bits.append("shared system RAM")
+        if vram and vram < 4:
+            reason_bits.append(f"only {vram:.1f} GB VRAM")
+        if vendor == "Intel" and shared:
+            reason_bits.append("Intel iGPU — CPU is faster for LLM matmul")
+        elif vendor == "Intel" and vram and vram < 4:
+            reason_bits.append(f"Intel discrete with only {vram:.1f} GB VRAM")
+        reason = "; ".join(reason_bits) or "discrete GPU"
+        found.append(GPUProfile(
+            vendor=vendor, name=name, vram_gb=vram,
+            driver=None, vulkan_score=score, shared_ram=shared,
+            use_for_llm=use, reason=reason,
+        ))
+    return found
 
 
 def _enumerate_gpus_macos() -> list[GPUProfile]:
