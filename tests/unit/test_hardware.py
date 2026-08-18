@@ -378,6 +378,57 @@ def test_nvidia_pci_fallback_skipped_when_nvidia_smi_already_present(monkeypatch
     assert len(nvidia) == 1   # no duplicate
 
 
+def test_intel_arc_discrete_is_usable(monkeypatch, tmp_path):
+    """Intel Arc discrete (Alchemist 0x56, Battlemage 0xe2, etc.) is
+    NOT in the iGPU prefix list — it has dedicated VRAM and is
+    usable for LLM. Previously all Intel GPUs were hardcoded as
+    use_for_llm=False, which wrongly skipped discrete Arc."""
+    monkeypatch.setattr(hardware.sys, "platform", "linux")
+    monkeypatch.setattr(hardware.shutil, "which", lambda name: None)
+    fake_drm = tmp_path / "drm"
+    fake_drm.mkdir()
+    card = fake_drm / "card0" / "device"
+    card.mkdir(parents=True)
+    (card / "vendor").write_text("0x8086")
+    (card / "device").write_text("0x5690")     # Arc A770
+    # 16 GB VRAM
+    (card / "mem_info_vram_total").write_text(str(16 * 1024**3))
+    monkeypatch.setattr(hardware, "_pci_device_name", lambda *_: "Intel Arc A770")
+    monkeypatch.setattr(hardware, "Path", _DrmPathShim(fake_drm))
+
+    gpus = hardware.enumerate_gpus()
+    arc = [g for g in gpus if g.vendor == "Intel"]
+    assert len(arc) == 1
+    assert arc[0].vram_gb >= 16
+    assert arc[0].shared_ram is False
+    assert arc[0].use_for_llm is True
+
+
+def test_intel_igpu_still_dropped_with_shared_ram(monkeypatch, tmp_path):
+    """Regression guard: Intel iGPU (e.g. 155U 0x9a49) still gets
+    use_for_llm=False and shared_ram=True. The new discrete-Arc
+    path must not regress the iGPU rejection."""
+    monkeypatch.setattr(hardware.sys, "platform", "linux")
+    monkeypatch.setattr(hardware.shutil, "which", lambda name: None)
+    fake_drm = tmp_path / "drm"
+    fake_drm.mkdir()
+    card = fake_drm / "card0" / "device"
+    card.mkdir(parents=True)
+    (card / "vendor").write_text("0x8086")
+    (card / "device").write_text("0x9a49")     # Meteor Lake Arc iGPU
+    # iGPU has no dedicated VRAM (mem_info_vram_total=0)
+    (card / "mem_info_vram_total").write_text("0")
+    monkeypatch.setattr(hardware, "_pci_device_name", lambda *_: "Intel Arc iGPU")
+    monkeypatch.setattr(hardware, "Path", _DrmPathShim(fake_drm))
+
+    gpus = hardware.enumerate_gpus()
+    igpu = [g for g in gpus if g.vendor == "Intel"]
+    assert len(igpu) == 1
+    assert igpu[0].shared_ram is True
+    assert igpu[0].use_for_llm is False
+    assert "iGPU" in igpu[0].reason or "shared" in igpu[0].reason
+
+
 # ── Recommendation ────────────────────────────────────────────────
 
 

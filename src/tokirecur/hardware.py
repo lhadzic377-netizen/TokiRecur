@@ -54,6 +54,18 @@ _FALLBACK_LOGICAL = 4
 _INTEL_P_CORE_FAMILIES = {6}  # Core/Core-Xeon
 _INTEL_E_CORE_FAMILIES = {6}  # same family; disambiguated by max freq
 
+# Intel iGPU device-ID prefixes. Anything NOT in this list is treated
+# as a discrete GPU (Arc Alchemist, Battlemage, etc.) — discrete Arc
+# has dedicated VRAM and is usable for LLM, unlike iGPUs.
+#
+# Coverage:
+#   0x9a..   Intel Xe / Iris Xe / Arc iGPU on Tiger Lake / Alder Lake /
+#             Raptor Lake / Meteor Lake / Arrow Lake (family 6).
+#   0x46..   Older Skylake GT2 / GT4 / Iris Pro (family 6).
+#   0x4c..   Atom-class integrated graphics (Cherry Trail, Goldmont).
+#   0x3e..   Kaby Lake / Coffee Lake UHD 620/630.
+_INTEL_IGPU_PREFIXES = ("0x9a", "0x46", "0x4c", "0x3e")
+
 
 # ── CPU ────────────────────────────────────────────────────────────
 
@@ -514,13 +526,18 @@ def _enumerate_gpus_linux() -> list[GPUProfile]:
                 continue   # already covered by nvidia-smi
             if vendor == "AMD" and any(g.vendor == "AMD" and not g.shared_ram for g in out):
                 continue   # discrete already covered by rocm-smi
-            shared = vendor == "Intel" and device_id.startswith(("0x9a", "0x46", "0x4c", "0x3e"))
+            shared = vendor == "Intel" and device_id.startswith(_INTEL_IGPU_PREFIXES)
             # Discrete GPU vendors (NVIDIA, AMD, Intel Arc) report
             # VRAM from sysfs. UMA/integrated parts report 0.
             if vendor in ("NVIDIA", "AMD"):
                 vram = _pci_vram_gb(dev)
             elif vendor == "Intel":
-                vram = _estimate_intel_vram_gb(device_id)
+                # Intel iGPU: shared RAM, conservative placeholder.
+                # Intel Arc discrete: dedicated VRAM from sysfs.
+                if shared:
+                    vram = _estimate_intel_vram_gb(device_id)
+                else:
+                    vram = _pci_vram_gb(dev)
             else:
                 vram = 0.0
             # AMD GPUs on UMA systems (Strix Halo, AMD APUs) report no
@@ -538,15 +555,16 @@ def _enumerate_gpus_linux() -> list[GPUProfile]:
             use = (
                 not shared
                 and (vram >= 4 or vendor != "Intel")
-                and vendor_id != "0x8086"   # every Intel iGPU is unsuitable
             )
             reason_bits = []
             if shared:
                 reason_bits.append("shared system RAM")
             if vram and vram < 4:
                 reason_bits.append(f"only {vram:.1f} GB VRAM")
-            if vendor == "Intel" and not use:
+            if vendor == "Intel" and shared:
                 reason_bits.append("Intel iGPU — CPU is faster for LLM matmul")
+            elif vendor == "Intel" and vram and vram < 4:
+                reason_bits.append(f"Intel discrete with only {vram:.1f} GB VRAM")
             reason = "; ".join(reason_bits) or "discrete GPU"
             out.append(GPUProfile(
                 vendor=vendor, name=name, vram_gb=vram,
