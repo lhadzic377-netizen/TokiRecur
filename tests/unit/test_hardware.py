@@ -204,6 +204,96 @@ def test_enumerate_gpus_uma_amd_works_on_small_boxes_too(monkeypatch, tmp_path):
     assert amd[0].use_for_llm is True
 
 
+def test_amd_rocm_vram_gb_parses_csv(monkeypatch):
+    """_amd_rocm_vram_gb parses the 'VRAM Total Memory (B)' cell from
+    rocm-smi --showmeminfo vram --csv, regardless of which column
+    carries the number."""
+    monkeypatch.setattr(hardware.sys, "platform", "linux")
+
+    class R:
+        returncode = 0
+        stdout = "GPU[0], VRAM Total Memory (B), 17179869184\n"
+    monkeypatch.setattr(hardware.subprocess, "run",
+                        lambda *a, **kw: R())
+    vram = hardware._amd_rocm_vram_gb()
+    assert abs(vram - 16.0) < 0.01
+
+
+def test_amd_rocm_vram_gb_handles_colon_separator(monkeypatch):
+    """_amd_rocm_vram_gb also handles the 'key: value' output format
+    some ROCm versions emit."""
+    monkeypatch.setattr(hardware.sys, "platform", "linux")
+
+    class R:
+        returncode = 0
+        stdout = "GPU[0], VRAM Total Memory (B): 8589934592\n"
+    monkeypatch.setattr(hardware.subprocess, "run",
+                        lambda *a, **kw: R())
+    vram = hardware._amd_rocm_vram_gb()
+    assert abs(vram - 8.0) < 0.01
+
+
+def test_amd_rocm_vram_gb_returns_zero_on_missing_gpu(monkeypatch):
+    """rocm-smi exit code != 0 → returns 0.0 (caller keeps
+    use_for_llm=True for the discrete GPU; the value is a signal, not
+    a gate)."""
+    monkeypatch.setattr(hardware.sys, "platform", "linux")
+
+    class R:
+        returncode = 1
+        stdout = ""
+    monkeypatch.setattr(hardware.subprocess, "run",
+                        lambda *a, **kw: R())
+    assert hardware._amd_rocm_vram_gb() == 0.0
+
+
+def test_amd_rocm_vram_gb_returns_zero_on_unparseable(monkeypatch):
+    """rocm-smi returns garbage → returns 0.0 instead of crashing."""
+    monkeypatch.setattr(hardware.sys, "platform", "linux")
+
+    class R:
+        returncode = 0
+        stdout = "GPU[0], VRAM Total Memory (B), not-a-number\n"
+    monkeypatch.setattr(hardware.subprocess, "run",
+                        lambda *a, **kw: R())
+    assert hardware._amd_rocm_vram_gb() == 0.0
+
+
+def test_amd_discrete_gpu_with_vram_is_usable(monkeypatch, tmp_path):
+    """AMD discrete GPU with rocm-smi reporting 16 GB VRAM gets
+    vram_gb=16 and use_for_llm=True. The old hardcoded vram_gb=0
+    bug would have failed the vram_gb >= 4 gate and skipped the GPU."""
+    monkeypatch.setattr(hardware.sys, "platform", "linux")
+    monkeypatch.setattr(hardware.shutil, "which",
+                        lambda name: "/usr/bin/rocm-smi" if name == "rocm-smi" else None)
+
+    def fake_run(cmd, **kwargs):
+        class R:
+            returncode = 0
+            stdout = ""
+        if "--showproductname" in cmd:
+            r = R()
+            # Real rocm-smi --showproductname --csv has a header line.
+            r.stdout = "GPU, Product Name\nGPU[0], AMD Radeon RX 7900 XTX\n"
+            return r
+        if "--showmeminfo" in cmd:
+            r = R()
+            r.stdout = "GPU[0], VRAM Total Memory (B), 17179869184\n"
+            return r
+        return R()
+
+    monkeypatch.setattr(hardware.subprocess, "run", fake_run)
+    # No PCI scan needed — rocm-smi covers it.
+    monkeypatch.setattr(hardware, "Path", _DrmPathShim(tmp_path / "empty"))
+
+    gpus = hardware.enumerate_gpus()
+    amd = [g for g in gpus if g.vendor == "AMD"]
+    assert len(amd) == 1
+    assert "RX 7900" in amd[0].name
+    assert amd[0].vram_gb >= 16
+    assert amd[0].use_for_llm is True
+
+
 # ── Recommendation ────────────────────────────────────────────────
 
 

@@ -456,7 +456,9 @@ def _enumerate_gpus_linux() -> list[GPUProfile]:
         except Exception:
             pass
 
-    # AMD discrete: rocm-smi.
+    # AMD discrete: rocm-smi. Two rocm-smi calls — one for product
+    # name, one for VRAM. Without VRAM, the vram_gb >= 4 gate in
+    # _recommend_defaults wrongly skips the GPU.
     if shutil.which("rocm-smi"):
         try:
             r = subprocess.run(
@@ -464,18 +466,22 @@ def _enumerate_gpus_linux() -> list[GPUProfile]:
                 capture_output=True, text=True, timeout=5,
             )
             if r.returncode == 0 and "GPU" in r.stdout:
-                # Parse the second column for product name; VRAM is
-                # easier from rocm-smi --showmeminfo but we skip it
-                # here to keep this lightweight.
                 for line in r.stdout.splitlines()[1:]:
                     parts = [p.strip() for p in line.split(",")]
                     if len(parts) >= 2:
+                        vram_gb = _amd_rocm_vram_gb()
+                        use = vram_gb >= 4 if vram_gb > 0 else True
+                        reason = (
+                            f"{vram_gb:.1f} GB VRAM"
+                            if 0 < vram_gb < 4
+                            else "AMD discrete ROCm device"
+                        )
                         out.append(GPUProfile(
                             vendor="AMD", name=parts[1],
-                            vram_gb=0.0, driver=None,
+                            vram_gb=vram_gb, driver=None,
                             vulkan_score=0.9, shared_ram=False,
-                            use_for_llm=True,
-                            reason="AMD discrete ROCm device",
+                            use_for_llm=use,
+                            reason=reason,
                         ))
                         break
         except Exception:
@@ -627,6 +633,52 @@ def _estimate_intel_vram_gb(device_id: str) -> float:
     Reports a small number — the OS will steal system RAM; this is
     just a placeholder for the LLM matmul workload estimate."""
     return 0.5
+
+
+def _amd_rocm_vram_gb() -> float:
+    """Query VRAM in GB from ``rocm-smi --showmeminfo vram --csv``.
+
+    Returns 0.0 on any failure (no rocm-smi, parse error, GPU with
+    no VRAM reported). The caller is expected to keep ``use_for_llm=
+    True`` for true ROCm devices — a 0 return only means "we couldn't
+    measure it", not "the GPU is UMA".
+    """
+    try:
+        r = subprocess.run(
+            ["rocm-smi", "--showmeminfo", "vram", "--csv"],
+            capture_output=True, text=True, timeout=5,
+        )
+    except Exception:
+        return 0.0
+    if r.returncode != 0:
+        return 0.0
+    for line in r.stdout.splitlines():
+        if "VRAM" not in line or "Total" not in line:
+            continue
+        for tok in line.replace(":", ",").split(","):
+            tok = tok.strip()
+            if tok.isdigit():
+                try:
+                    return int(tok) / 1024**3
+                except ValueError:
+                    return 0.0
+    return 0.0
+
+
+def _pci_vram_gb(card_dev_path: Path) -> float:
+    """Read a DRM card's dedicated VRAM from sysfs in bytes, return GB.
+
+    Discrete GPUs report a non-zero ``mem_info_vram_total``; UMA GPUs
+    (AMD APUs, Intel iGPUs, Strix Halo) report 0. Returns 0.0 when
+    the file is missing or unreadable.
+    """
+    f = card_dev_path / "mem_info_vram_total"
+    if not f.exists():
+        return 0.0
+    try:
+        return int(f.read_text().strip()) / 1024**3
+    except (OSError, ValueError):
+        return 0.0
 
 
 # ── Profile lifecycle ─────────────────────────────────────────────
