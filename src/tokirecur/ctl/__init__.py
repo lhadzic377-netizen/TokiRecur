@@ -1611,13 +1611,18 @@ def _resolve_binary(spec: ModelSpec) -> str:
 
 
 def _default_ngl() -> int:
-    """Best-effort GPU offload layers for llama-server.
+    """Offload layers for llama-server. The CPU backend is the default
+    for any device; ``TOKI_NGL`` is the only override.
 
-    ``TOKI_NGL`` wins; otherwise 99 when a GPU backend looks available
-    (NVIDIA CUDA, AMD ROCm/Vulkan, or macOS Metal — llama.cpp Metal
-    builds also run fine on CPU-only Macs), else 0. A GPU build with
-    ``-ngl 0`` silently runs everything on CPU, which is how models end
-    up "running on the Intel iGPU/CPU" with a CUDA build installed.
+    The CPU backend (``libggml-cpu-alderlake.so`` on Meteor Lake, etc.)
+    is the generic, vendor-neutral compute path. GPU backends (CUDA,
+    ROCm, Vulkan, Metal) are loaded only when the binary carries the
+    matching library; even then, ``-ngl 0`` forces the CPU backend to
+    handle every layer. Setting the default to 0 makes the "real CPU
+    backend" the explicit choice on every machine — the auto-detect
+    heuristics (nvidia-smi, hipconfig, vulkaninfo, profile, ICD probe)
+    are all bypassed, so the only way to get GPU offload is to set
+    ``TOKI_NGL`` explicitly.
     """
     raw = os.environ.get("TOKI_NGL")
     if raw is not None:
@@ -1625,48 +1630,6 @@ def _default_ngl() -> int:
             return int(raw)
         except ValueError:
             pass
-    if sys.platform == "darwin":
-        return 99
-    if os.name == "nt":
-        if shutil.which("nvidia-smi") or os.environ.get("CUDA_PATH"):
-            return 99
-        if shutil.which("hipconfig") or os.path.exists(
-            "C:/Program Files/AMD/ROCm"
-        ):
-            return 99
-        if shutil.which("vulkaninfo") and not _intel_igpu_only():
-            return 99
-        return 0
-    if shutil.which("hipconfig") or os.path.exists("/opt/rocm"):
-        return 99
-    # The hardware profile is the authority for GPU eligibility: it is
-    # what install-llama already trusts to pick the build, and its rule
-    # (use_for_llm + vram >= 4 + not shared RAM) knows that software
-    # Vulkan (lavapipe) and shared-RAM iGPUs are slower than the CPU.
-    # The runtime ngl check used to disagree with it (ICD probe alone),
-    # which is how CPU-only Ubuntu boxes ended up with -ngl 99 on a
-    # lavapipe or APU iGPU — a CPU build that offloads is far slower
-    # than one that doesn't.
-    profile_ngl: int | None = None
-    try:
-        from ..hardware import profile_box
-        rec = profile_box().recommended
-        if rec and rec.get("ngl") is not None:
-            profile_ngl = int(rec["ngl"])
-    except Exception:
-        pass
-    if profile_ngl is not None:
-        if profile_ngl == 0:
-            return 0
-        # Profile says a GPU is worth using; still verify a real
-        # (non-software) ICD is actually loadable before offloading.
-        if _linux_vulkan_works() and not _intel_igpu_only_linux():
-            return 99
-        return 0
-    # No profile (first run / hardware probe failed): fall back to the
-    # same ICD probe the installer uses.
-    if _linux_vulkan_works() and not _intel_igpu_only_linux():
-        return 99
     return 0
 
 

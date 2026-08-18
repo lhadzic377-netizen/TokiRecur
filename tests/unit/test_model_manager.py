@@ -2418,27 +2418,33 @@ def _fake_run(device_names):
     return run
 
 
-def test_default_ngl_zero_for_intel_igpu_only(monkeypatch):
-    """Intel HD/UHD iGPU alone must not offload (Vulkan thrash); Arc or a
-    second device offloads; TOKI_NGL still wins."""
+def test_default_ngl_is_always_zero_unless_toki_ngl_set(monkeypatch):
+    """The CPU backend is the default on every device. GPU offload only
+    happens when the user explicitly opts in via TOKI_NGL. This kills
+    the GPU-auto-detect path that wrongly offloaded to Intel iGPUs /
+    lavapipe and made CPU-only boxes slower."""
     monkeypatch.setattr(ctl.os, "name", "nt")
     monkeypatch.setattr(ctl.sys, "platform", "win32")
     monkeypatch.setattr(
         ctl.shutil, "which", lambda name: "vulkaninfo" if name == "vulkaninfo" else None
     )
 
+    # No GPU / no env override → CPU backend.
     monkeypatch.setattr(ctl.subprocess, "run", _fake_run(["Intel(R) UHD Graphics 620"]))
     assert ctl._default_ngl() == 0
 
+    # Even an Arc A770 still falls back to CPU without explicit opt-in.
     monkeypatch.setattr(ctl.subprocess, "run", _fake_run(["Intel(R) Arc(TM) A770"]))
-    assert ctl._default_ngl() == 99
+    assert ctl._default_ngl() == 0
 
+    # Even a discrete RTX 3060 second device still falls back to CPU.
     monkeypatch.setattr(
         ctl.subprocess, "run",
         _fake_run(["Intel(R) UHD Graphics 620", "NVIDIA GeForce RTX 3060"]),
     )
-    assert ctl._default_ngl() == 99
+    assert ctl._default_ngl() == 0
 
+    # TOKI_NGL is the only way to opt in to GPU offload.
     monkeypatch.setenv("TOKI_NGL", "7")
     assert ctl._default_ngl() == 7
 
@@ -2457,39 +2463,13 @@ def _linux_default_ngl_env(monkeypatch):
     monkeypatch.setattr(ctl.os.path, "exists", lambda p: False)
 
 
-def test_default_ngl_linux_defers_to_cpu_profile(monkeypatch):
-    """CPU-only box: profile says ngl 0 — must not offload even when a
-    Vulkan ICD is loadable. The profile is the authority (it already
-    drives install-llama's build choice); the ICD probe alone wrongly
-    picked lavapipe/APU iGPUs and made a CPU box *slower*."""
+def test_default_ngl_linux_always_cpu(monkeypatch):
+    """Linux default: CPU backend, regardless of what the profile or
+    the ICD probe says. GPU offload is opt-in via TOKI_NGL only."""
     _linux_default_ngl_env(monkeypatch)
+    # Even with a "real GPU" profile and a working Vulkan ICD, the
+    # default stays on CPU.
     monkeypatch.setattr(ctl, "_linux_vulkan_works", lambda: True)
-    monkeypatch.setattr(ctl, "_intel_igpu_only_linux", lambda: False)
-    monkeypatch.setattr(
-        "tokirecur.hardware.profile_box",
-        lambda *a, **k: _FakeProfile({"backend": "cpu", "ngl": 0, "threads": 8}),
-    )
-    assert ctl._default_ngl() == 0
-
-
-def test_default_ngl_linux_offloads_when_profile_says_gpu(monkeypatch):
-    """Discrete-GPU box: profile says ngl 99 and a real ICD is
-    loadable — offload stays on."""
-    _linux_default_ngl_env(monkeypatch)
-    monkeypatch.setattr(ctl, "_linux_vulkan_works", lambda: True)
-    monkeypatch.setattr(ctl, "_intel_igpu_only_linux", lambda: False)
-    monkeypatch.setattr(
-        "tokirecur.hardware.profile_box",
-        lambda *a, **k: _FakeProfile({"backend": "vulkan", "ngl": 99, "threads": 8}),
-    )
-    assert ctl._default_ngl() == 99
-
-
-def test_default_ngl_linux_profile_says_gpu_but_no_icd(monkeypatch):
-    """Profile says GPU but no loadable ICD (e.g. driver stripped) —
-    offloading would hang, so CPU wins."""
-    _linux_default_ngl_env(monkeypatch)
-    monkeypatch.setattr(ctl, "_linux_vulkan_works", lambda: False)
     monkeypatch.setattr(ctl, "_intel_igpu_only_linux", lambda: False)
     monkeypatch.setattr(
         "tokirecur.hardware.profile_box",
@@ -2498,9 +2478,9 @@ def test_default_ngl_linux_profile_says_gpu_but_no_icd(monkeypatch):
     assert ctl._default_ngl() == 0
 
 
-def test_default_ngl_linux_no_profile_uses_icd_probe(monkeypatch):
-    """First run / probe failure: no profile, fall back to the ICD
-    probe (lavapipe excluded) — CPU-only stays on CPU."""
+def test_default_ngl_linux_no_profile_uses_cpu(monkeypatch):
+    """First run / probe failure: no profile, no ICD probe path that
+    auto-offloads. CPU backend wins."""
     _linux_default_ngl_env(monkeypatch)
 
     def boom(*a, **k):
@@ -2510,10 +2490,20 @@ def test_default_ngl_linux_no_profile_uses_icd_probe(monkeypatch):
     monkeypatch.setattr(ctl, "_intel_igpu_only_linux", lambda: False)
 
     monkeypatch.setattr(ctl, "_linux_vulkan_works", lambda: True)
-    assert ctl._default_ngl() == 99
+    assert ctl._default_ngl() == 0
 
     monkeypatch.setattr(ctl, "_linux_vulkan_works", lambda: False)
     assert ctl._default_ngl() == 0
+
+
+def test_default_ngl_toki_ngl_overrides_default(monkeypatch):
+    """TOKI_NGL opts in to GPU offload on any device, any platform."""
+    monkeypatch.setattr(ctl.os, "name", "posix")
+    monkeypatch.setattr(ctl.sys, "platform", "linux")
+    monkeypatch.setattr(ctl.shutil, "which", lambda n: None)
+    monkeypatch.setattr(ctl.os.path, "exists", lambda p: False)
+    monkeypatch.setenv("TOKI_NGL", "99")
+    assert ctl._default_ngl() == 99
 
 
 # ── Settings: update_spec_field(apply=...) downstream orchestration ──
