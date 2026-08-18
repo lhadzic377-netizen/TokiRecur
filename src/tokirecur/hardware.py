@@ -41,7 +41,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-PROFILE_VERSION = 2
+PROFILE_VERSION = 3
 # Cache the profile for 30 days; after that, re-profile.
 # How long a cached hardware profile is trusted before re-profiling.
 # TOKI_PROFILE_TTL (seconds) overrides. 30 days is long because the
@@ -964,6 +964,16 @@ def _to_dict(profile: HardwareProfile) -> dict:
 
 
 def _from_dict(data: dict) -> HardwareProfile:
+    """Tolerant deserialisation.
+
+    Missing keys take safe defaults; unknown keys are ignored. The
+    schema version is read but NOT enforced here — callers decide
+    whether a cached profile is fresh enough (``profile_box``
+    re-profiles when ``schema_version != PROFILE_VERSION``, which
+    is the v2 → v3 migration path: the next load re-profiles and
+    re-saves, so the freq-tier data ``core_max_freqs_mhz`` (new in
+    v3) is never silently lost from a cached v2 file).
+    """
     cpu = data.get("cpu", {})
     cpu_p = CPUProfile(
         vendor=cpu.get("vendor", "unknown"),
@@ -975,6 +985,7 @@ def _from_dict(data: dict) -> HardwareProfile:
         p_core_ids=cpu.get("p_core_ids", []),
         e_core_ids=cpu.get("e_core_ids", []),
         max_boost_mhz=cpu.get("max_boost_mhz", 0.0),
+        core_max_freqs_mhz=cpu.get("core_max_freqs_mhz", []),
         simd=cpu.get("simd", []),
     )
     gpus = [

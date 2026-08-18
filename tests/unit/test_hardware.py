@@ -7,6 +7,7 @@ output shape is correct.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from tokirecur import hardware
@@ -991,3 +992,90 @@ def test_windows_nvidia_via_nvidia_smi(monkeypatch):
     assert len(nvidia) == 1
     assert nvidia[0].vram_gb >= 10
     assert nvidia[0].use_for_llm is True
+
+
+# ── Schema v2 → v3 migration ──────────────────────────────────────
+
+
+def test_from_dict_v3_reads_core_max_freqs_mhz():
+    """v3 profiles round-trip core_max_freqs_mhz — the freq-tier data
+    the CPU thread-count policy needs."""
+    data = {
+        "schema_version": 3,
+        "profiled_at": "2026-08-18T00:00:00Z",
+        "os": "linux",
+        "cpu": {
+            "vendor": "GenuineIntel", "name": "Ultra 7 155U",
+            "family": 6, "model": 189,
+            "physical_cores": 12, "logical_cores": 14,
+            "p_core_ids": [0, 1], "e_core_ids": list(range(2, 12)),
+            "max_boost_mhz": 4800.0,
+            "core_max_freqs_mhz": [4800.0, 4800.0] + [3800.0] * 10 + [1500.0, 1500.0],
+            "simd": ["avx2", "avx_vnni"],
+        },
+        "gpus": [], "ram_gb": 16.0, "benchmarks": {}, "recommended": {},
+    }
+    prof = hardware._from_dict(data)
+    assert len(prof.cpu.core_max_freqs_mhz) == 14
+    assert hardware.effective_cpu_threads(prof.cpu) == 10
+
+
+def test_from_dict_v2_profile_loads_tolerantly():
+    """A cached v2 file (no core_max_freqs_mhz key) loads fine — the
+    field defaults to [] and profile_box re-profiles on the version
+    mismatch."""
+    data = {
+        "schema_version": 2,
+        "profiled_at": "2026-01-01T00:00:00Z",
+        "os": "linux",
+        "cpu": {
+            "vendor": "GenuineIntel", "name": "old",
+            "family": 6, "model": 189,
+            "physical_cores": 8, "logical_cores": 8,
+            "p_core_ids": list(range(8)), "e_core_ids": [],
+            "max_boost_mhz": 4000.0, "simd": ["avx2"],
+        },
+        "gpus": [], "ram_gb": 16.0, "benchmarks": {}, "recommended": {},
+    }
+    prof = hardware._from_dict(data)
+    assert prof.schema_version == 2
+    assert prof.cpu.core_max_freqs_mhz == []
+    assert prof.cpu.name == "old"
+
+
+def test_profile_box_migrates_v2_to_v3_on_next_load(tmp_path, monkeypatch):
+    """A cached v2 profile is re-profiled (and re-saved as v3) on the
+    next profile_box() call — the migration path."""
+    monkeypatch.setattr(hardware, "profile_path", lambda: tmp_path / "hw.json")
+    v2 = {
+        "schema_version": 2,
+        "profiled_at": "2026-08-18T00:00:00Z",
+        "os": "linux",
+        "cpu": {
+            "vendor": "GenuineIntel", "name": "old",
+            "family": 6, "model": 189,
+            "physical_cores": 8, "logical_cores": 8,
+            "p_core_ids": list(range(8)), "e_core_ids": [],
+            "max_boost_mhz": 4000.0, "simd": ["avx2"],
+        },
+        "gpus": [], "ram_gb": 16.0, "benchmarks": {}, "recommended": {},
+    }
+    (tmp_path / "hw.json").write_text(json.dumps(v2))
+    monkeypatch.setattr(hardware, "cpu_topology", lambda: CPUProfile(
+        vendor="GenuineIntel", name="fresh",
+        family=6, model=189, physical_cores=8, logical_cores=8,
+        p_core_ids=list(range(8)), e_core_ids=[],
+        max_boost_mhz=4000.0,
+        core_max_freqs_mhz=[4000.0] * 8, simd=["avx2"],
+    ))
+    monkeypatch.setattr(hardware, "enumerate_gpus", lambda: [])
+    monkeypatch.setattr(hardware, "_available_gb", lambda: 16.0)
+    monkeypatch.setattr(hardware, "_recommend_defaults",
+                        lambda *a, **k: {"backend": "cpu", "ngl": 0, "threads": 8})
+
+    prof = hardware.profile_box()
+    assert prof.cpu.name == "fresh"          # re-profiled, not the cached v2
+    assert prof.schema_version == hardware.PROFILE_VERSION  # == 3
+    re_saved = json.loads((tmp_path / "hw.json").read_text())
+    assert re_saved["schema_version"] == 3
+    assert re_saved["cpu"]["core_max_freqs_mhz"] == [4000.0] * 8
