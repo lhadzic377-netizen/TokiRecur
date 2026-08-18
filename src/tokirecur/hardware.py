@@ -433,7 +433,10 @@ def enumerate_gpus() -> list[GPUProfile]:
 def _enumerate_gpus_linux() -> list[GPUProfile]:
     out: list[GPUProfile] = []
 
-    # NVIDIA: nvidia-smi is the source of truth when present.
+    # NVIDIA: nvidia-smi is the source of truth when present. When
+    # missing (headless server, minimal driver install), the PCI scan
+    # below picks up the card via /sys/class/drm and reads VRAM from
+    # mem_info_vram_total.
     if shutil.which("nvidia-smi"):
         try:
             r = subprocess.run(
@@ -512,7 +515,14 @@ def _enumerate_gpus_linux() -> list[GPUProfile]:
             if vendor == "AMD" and any(g.vendor == "AMD" and not g.shared_ram for g in out):
                 continue   # discrete already covered by rocm-smi
             shared = vendor == "Intel" and device_id.startswith(("0x9a", "0x46", "0x4c", "0x3e"))
-            vram = _estimate_intel_vram_gb(device_id) if vendor == "Intel" else 0.0
+            # Discrete GPU vendors (NVIDIA, AMD, Intel Arc) report
+            # VRAM from sysfs. UMA/integrated parts report 0.
+            if vendor in ("NVIDIA", "AMD"):
+                vram = _pci_vram_gb(dev)
+            elif vendor == "Intel":
+                vram = _estimate_intel_vram_gb(device_id)
+            else:
+                vram = 0.0
             # AMD GPUs on UMA systems (Strix Halo, AMD APUs) report no
             # dedicated VRAM from sysfs/KFD — the GPU shares system RAM
             # and can use the full pool (CPU + GPU draw from the same

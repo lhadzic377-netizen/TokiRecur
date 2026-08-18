@@ -294,6 +294,90 @@ def test_amd_discrete_gpu_with_vram_is_usable(monkeypatch, tmp_path):
     assert amd[0].use_for_llm is True
 
 
+def test_nvidia_pci_fallback_when_nvidia_smi_missing(monkeypatch, tmp_path):
+    """When nvidia-smi is not on PATH (headless server, minimal driver
+    install), the PCI scan still detects NVIDIA with VRAM from sysfs."""
+    monkeypatch.setattr(hardware.sys, "platform", "linux")
+    monkeypatch.setattr(hardware.shutil, "which", lambda name: None)
+    fake_drm = tmp_path / "drm"
+    fake_drm.mkdir()
+    card = fake_drm / "card0" / "device"
+    card.mkdir(parents=True)
+    (card / "vendor").write_text("0x10de")
+    (card / "device").write_text("0x2684")
+    # 24 GB VRAM in bytes: 24 * 1024^3
+    (card / "mem_info_vram_total").write_text(str(24 * 1024**3))
+    monkeypatch.setattr(hardware, "_pci_device_name", lambda *_: "NVIDIA RTX 4090")
+    monkeypatch.setattr(hardware, "Path", _DrmPathShim(fake_drm))
+
+    gpus = hardware.enumerate_gpus()
+    nvidia = [g for g in gpus if g.vendor == "NVIDIA"]
+    assert len(nvidia) == 1
+    assert nvidia[0].vram_gb >= 24
+    assert nvidia[0].use_for_llm is True
+
+
+def test_nvidia_pci_fallback_zero_vram_is_skipped_at_backend_pick(monkeypatch, tmp_path):
+    """NVIDIA 0x10de with mem_info_vram_total=0 (unusual; e.g. a
+    Tesla K40 in some configurations) is reported with vram_gb=0.
+    The vram_gb >= 4 gate in _recommend_defaults skips it at
+    runtime — the GPU is hardware-capable (use_for_llm=True) but
+    not recommended for LLM."""
+    monkeypatch.setattr(hardware.sys, "platform", "linux")
+    monkeypatch.setattr(hardware.shutil, "which", lambda name: None)
+    fake_drm = tmp_path / "drm"
+    fake_drm.mkdir()
+    card = fake_drm / "card0" / "device"
+    card.mkdir(parents=True)
+    (card / "vendor").write_text("0x10de")
+    (card / "device").write_text("0x1b06")
+    (card / "mem_info_vram_total").write_text("0")
+    monkeypatch.setattr(hardware, "_pci_device_name", lambda *_: "Tesla K40")
+    monkeypatch.setattr(hardware, "Path", _DrmPathShim(fake_drm))
+
+    gpus = hardware.enumerate_gpus()
+    nvidia = [g for g in gpus if g.vendor == "NVIDIA"]
+    assert len(nvidia) == 1
+    assert nvidia[0].vram_gb == 0.0
+    assert nvidia[0].use_for_llm is True   # hardware-capable
+    # The _recommend_defaults gate is what actually picks the backend.
+    cpu = hardware.CPUProfile(
+        vendor="GenuineIntel", name="stub",
+        family=6, model=183, physical_cores=4, logical_cores=4,
+        p_core_ids=[0, 1, 2, 3], e_core_ids=[],
+        max_boost_mhz=4000.0, simd=["avx2"],
+    )
+    rec = hardware._recommend_defaults(cpu, gpus)
+    assert rec["backend"] == "cpu"   # gate skipped the zero-VRAM GPU
+
+
+def test_nvidia_pci_fallback_skipped_when_nvidia_smi_already_present(monkeypatch, tmp_path):
+    """When nvidia-smi already added the GPU, the PCI scan skips
+    NVIDIA — no duplicate entry."""
+    monkeypatch.setattr(hardware.sys, "platform", "linux")
+    monkeypatch.setattr(hardware.shutil, "which",
+                        lambda name: "/usr/bin/nvidia-smi" if name == "nvidia-smi" else None)
+
+    class R:
+        returncode = 0
+        stdout = "NVIDIA RTX 4090, 24576, 555.42\n"
+    monkeypatch.setattr(hardware.subprocess, "run", lambda *a, **kw: R())
+
+    fake_drm = tmp_path / "drm"
+    fake_drm.mkdir()
+    card = fake_drm / "card0" / "device"
+    card.mkdir(parents=True)
+    (card / "vendor").write_text("0x10de")
+    (card / "device").write_text("0x2684")
+    (card / "mem_info_vram_total").write_text(str(24 * 1024**3))
+    monkeypatch.setattr(hardware, "_pci_device_name", lambda *_: "NVIDIA RTX 4090")
+    monkeypatch.setattr(hardware, "Path", _DrmPathShim(fake_drm))
+
+    gpus = hardware.enumerate_gpus()
+    nvidia = [g for g in gpus if g.vendor == "NVIDIA"]
+    assert len(nvidia) == 1   # no duplicate
+
+
 # ── Recommendation ────────────────────────────────────────────────
 
 
