@@ -558,6 +558,62 @@ def test_pick_backend_table_driven_vendor_os(monkeypatch):
     assert hardware._pick_backend(cpu, gpus, "darwin")["backend"] == "vulkan"
 
 
+def test_freq_tier_drop_apple_efficiency_cores():
+    """Apple Silicon P/E split (synthetic 1000/650 MHz) drops the
+    efficiency cores through the same freq-tier filter as Intel LPE."""
+    cpu = CPUProfile(
+        vendor="Apple", name="Apple M3 Pro",
+        family=0, model=0, physical_cores=12, logical_cores=12,
+        p_core_ids=list(range(6)), e_core_ids=list(range(6, 12)),
+        max_boost_mhz=0.0,
+        core_max_freqs_mhz=[1000.0] * 6 + [650.0] * 6,
+        simd=["neon_hpfp"],
+    )
+    assert hardware.effective_cpu_threads(cpu) == 6
+
+
+def test_freq_tier_keeps_apple_all_perf_when_no_eff_reported():
+    """A Mac where perflevel1 doesn't exist (or old macOS) has no
+    freqs → falls back to physical_cores."""
+    cpu = CPUProfile(
+        vendor="Apple", name="Apple M2",
+        family=0, model=0, physical_cores=8, logical_cores=8,
+        p_core_ids=list(range(8)), e_core_ids=[],
+        max_boost_mhz=0.0, core_max_freqs_mhz=[], simd=["neon_hpfp"],
+    )
+    assert hardware.effective_cpu_threads(cpu) == 8
+
+
+def test_cpu_topology_macos_sets_freq_tiers_from_perflevel(monkeypatch):
+    """_cpu_topology_macos encodes hw.perflevel0/1 into
+    core_max_freqs_mhz so the freq-tier filter can drop E-cores."""
+    monkeypatch.setattr(hardware.sys, "platform", "darwin")
+    monkeypatch.setattr(hardware.os, "cpu_count", lambda: 10)
+
+    def fake_run(cmd, **kwargs):
+        class R:
+            returncode = 0
+            stdout = ""
+        if cmd == ["sysctl", "-n", "machdep.cpu.brand_string"]:
+            R.stdout = "Apple M2 Pro"
+        elif cmd == ["sysctl", "-n", "hw.physicalcpu"]:
+            R.stdout = "10"
+        elif cmd == ["sysctl", "-n", "hw.perflevel0.logicalcpu"]:
+            R.stdout = "8"
+        elif cmd == ["sysctl", "-n", "hw.perflevel1.logicalcpu"]:
+            R.stdout = "2"
+        return R()
+    monkeypatch.setattr(hardware.subprocess, "run", fake_run)
+    monkeypatch.setattr(hardware, "_detect_simd_macos", lambda: [])
+
+    cpu = hardware._cpu_topology_macos()
+    assert cpu.vendor == "Apple"
+    assert cpu.physical_cores == 10
+    assert cpu.e_core_ids == [8, 9]
+    assert cpu.core_max_freqs_mhz == [1000.0] * 8 + [650.0] * 2
+    assert hardware.effective_cpu_threads(cpu) == 8
+
+
 def test_pick_backend_no_gpu_returns_cpu():
     cpu = CPUProfile(
         vendor="GenuineIntel", name="stub",

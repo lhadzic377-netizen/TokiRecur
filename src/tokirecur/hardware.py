@@ -336,19 +336,39 @@ def _cpu_topology_macos() -> CPUProfile:
     # Apple Silicon: detect via sysctl. perflevel0 = perf, perflevel1 = eff.
     p_ids = list(range(physical_cores))
     e_ids: list[int] = []
+    freqs_mhz: list[float] = []
     if "Apple" in info["name"]:
+        perf_count: int | None = None
+        eff_count: int | None = None
+        try:
+            r = subprocess.run(
+                ["sysctl", "-n", "hw.perflevel0.logicalcpu"],
+                capture_output=True, text=True, timeout=2,
+            )
+            if r.returncode == 0 and r.stdout.strip().isdigit():
+                perf_count = int(r.stdout.strip())
+        except Exception:
+            pass
         try:
             r = subprocess.run(
                 ["sysctl", "-n", "hw.perflevel1.logicalcpu"],
                 capture_output=True, text=True, timeout=2,
             )
             if r.returncode == 0 and r.stdout.strip().isdigit():
-                e_count = int(r.stdout.strip())
-                # E-cores are CPU IDs starting after physical_cores on
-                # Apple SoCs (per Apple's published topology).
-                e_ids = list(range(physical_cores, physical_cores + e_count))
+                eff_count = int(r.stdout.strip())
         except Exception:
             pass
+        if perf_count is not None:
+            eff_count = eff_count or 0
+            # Efficiency cores start after the performance cores on
+            # Apple SoCs (per Apple's published topology).
+            e_ids = list(range(perf_count, perf_count + eff_count))
+            # No per-core frequency reads on macOS; encode the P/E
+            # split as synthetic max-freq values (arbitrary units).
+            # The freq-tier filter in effective_cpu_threads compares
+            # ratios: 0.65 < _FREQ_TIER_RATIO (0.70) drops the
+            # efficiency cores, exactly like Intel LPE cores.
+            freqs_mhz = [1000.0] * perf_count + [650.0] * eff_count
 
     simd = _detect_simd_macos()
 
@@ -356,7 +376,7 @@ def _cpu_topology_macos() -> CPUProfile:
         vendor="Apple", name=info["name"], family=0, model=0,
         physical_cores=physical_cores, logical_cores=logical_cores,
         p_core_ids=p_ids, e_core_ids=e_ids,
-        max_boost_mhz=0.0, core_max_freqs_mhz=[],
+        max_boost_mhz=0.0, core_max_freqs_mhz=freqs_mhz,
         simd=simd,
     )
 
@@ -410,9 +430,11 @@ def effective_cpu_threads(cpu: CPUProfile) -> int:
 
     On a non-hybrid box every core passes the threshold and HT
     siblings cancel out, so the result equals ``physical_cores``.
-    When per-core frequencies aren't readable (macOS, Windows,
-    containers without cpufreq) the function falls back to
-    ``physical_cores``.
+    When per-core frequencies aren't readable (containers without
+    cpufreq) the function falls back to ``physical_cores``. On
+    Apple Silicon the macOS profiler encodes the P/E split as
+    synthetic max-freq values (1000/650), so the same filter drops
+    the efficiency cores there too.
     """
     freqs = [f for f in cpu.core_max_freqs_mhz if f > 0]
     if not freqs:
