@@ -2418,40 +2418,47 @@ def _fake_run(device_names):
     return run
 
 
-def test_default_ngl_is_always_zero_unless_toki_ngl_set(monkeypatch):
-    """The CPU backend is the default on every device. GPU offload only
-    happens when the user explicitly opts in via TOKI_NGL. This kills
-    the GPU-auto-detect path that wrongly offloaded to Intel iGPUs /
-    lavapipe and made CPU-only boxes slower."""
+def test_default_ngl_uses_profile_when_present(monkeypatch):
+    """The CPU backend is the default when no GPU is usable. The
+    hardware profile is the authority: when it marks a GPU as usable
+    for LLM, the default offloads to that GPU. No runtime probes
+    (nvidia-smi, hipconfig, vulkaninfo) are used — those heuristics
+    wrongly offloaded to Intel iGPUs / lavapipe."""
     monkeypatch.setattr(ctl.os, "name", "nt")
     monkeypatch.setattr(ctl.sys, "platform", "win32")
     monkeypatch.setattr(
         ctl.shutil, "which", lambda name: "vulkaninfo" if name == "vulkaninfo" else None
     )
 
-    # No GPU / no env override → CPU backend.
-    monkeypatch.setattr(ctl.subprocess, "run", _fake_run(["Intel(R) UHD Graphics 620"]))
-    assert ctl._default_ngl() == 0
-
-    # Even an Arc A770 still falls back to CPU without explicit opt-in.
-    monkeypatch.setattr(ctl.subprocess, "run", _fake_run(["Intel(R) Arc(TM) A770"]))
-    assert ctl._default_ngl() == 0
-
-    # Even a discrete RTX 3060 second device still falls back to CPU.
+    # iGPU only — profile would mark use_for_llm=False → CPU wins.
     monkeypatch.setattr(
-        ctl.subprocess, "run",
-        _fake_run(["Intel(R) UHD Graphics 620", "NVIDIA GeForce RTX 3060"]),
+        "tokirecur.hardware.profile_box",
+        lambda *a, **k: _FakeProfile(
+            {"backend": "cpu", "ngl": 0, "threads": 10},
+            gpus=[type("G", (), {"vendor": "Intel", "use_for_llm": False, "vram_gb": 0.5})()],
+        ),
     )
     assert ctl._default_ngl() == 0
 
-    # TOKI_NGL is the only way to opt in to GPU offload.
+    # Profile marks a discrete GPU as usable → offload.
+    monkeypatch.setattr(
+        "tokirecur.hardware.profile_box",
+        lambda *a, **k: _FakeProfile(
+            {"backend": "cuda", "ngl": 99, "threads": 16},
+            gpus=[type("G", (), {"vendor": "NVIDIA", "use_for_llm": True, "vram_gb": 12})()],
+        ),
+    )
+    assert ctl._default_ngl() == 99
+
+    # TOKI_NGL overrides the profile.
     monkeypatch.setenv("TOKI_NGL", "7")
     assert ctl._default_ngl() == 7
 
 
 class _FakeProfile:
-    def __init__(self, recommended):
+    def __init__(self, recommended, gpus=None):
         self.recommended = recommended
+        self.gpus = gpus or []
 
 
 def _linux_default_ngl_env(monkeypatch):
@@ -2463,36 +2470,44 @@ def _linux_default_ngl_env(monkeypatch):
     monkeypatch.setattr(ctl.os.path, "exists", lambda p: False)
 
 
-def test_default_ngl_linux_always_cpu(monkeypatch):
-    """Linux default: CPU backend, regardless of what the profile or
-    the ICD probe says. GPU offload is opt-in via TOKI_NGL only."""
+def test_default_ngl_linux_offloads_when_profile_marks_gpu_usable(monkeypatch):
+    """Profile says a discrete GPU is usable → offload (99). The
+    profile is the authority; runtime probes are bypassed."""
     _linux_default_ngl_env(monkeypatch)
-    # Even with a "real GPU" profile and a working Vulkan ICD, the
-    # default stays on CPU.
-    monkeypatch.setattr(ctl, "_linux_vulkan_works", lambda: True)
-    monkeypatch.setattr(ctl, "_intel_igpu_only_linux", lambda: False)
     monkeypatch.setattr(
         "tokirecur.hardware.profile_box",
-        lambda *a, **k: _FakeProfile({"backend": "vulkan", "ngl": 99, "threads": 8}),
+        lambda *a, **k: _FakeProfile(
+            {"backend": "cuda", "ngl": 99, "threads": 16},
+            gpus=[type("G", (), {"vendor": "NVIDIA", "use_for_llm": True, "vram_gb": 12})()],
+        ),
+    )
+    assert ctl._default_ngl() == 99
+
+
+def test_default_ngl_linux_stays_cpu_when_profile_marks_only_igpu(monkeypatch):
+    """Profile only has an Intel iGPU (not usable for LLM) → CPU. The
+    profile's use_for_llm=False is the right signal — no runtime
+    probe needed."""
+    _linux_default_ngl_env(monkeypatch)
+    monkeypatch.setattr(
+        "tokirecur.hardware.profile_box",
+        lambda *a, **k: _FakeProfile(
+            {"backend": "cpu", "ngl": 0, "threads": 10},
+            gpus=[type("G", (), {"vendor": "Intel", "use_for_llm": False, "vram_gb": 0.5})()],
+        ),
     )
     assert ctl._default_ngl() == 0
 
 
 def test_default_ngl_linux_no_profile_uses_cpu(monkeypatch):
-    """First run / probe failure: no profile, no ICD probe path that
-    auto-offloads. CPU backend wins."""
+    """First run / probe failure: no profile → CPU backend. The old
+    ICD-probe fallback is gone (it wrongly picked lavapipe / iGPUs)."""
     _linux_default_ngl_env(monkeypatch)
 
     def boom(*a, **k):
         raise RuntimeError("no profile")
 
     monkeypatch.setattr("tokirecur.hardware.profile_box", boom)
-    monkeypatch.setattr(ctl, "_intel_igpu_only_linux", lambda: False)
-
-    monkeypatch.setattr(ctl, "_linux_vulkan_works", lambda: True)
-    assert ctl._default_ngl() == 0
-
-    monkeypatch.setattr(ctl, "_linux_vulkan_works", lambda: False)
     assert ctl._default_ngl() == 0
 
 

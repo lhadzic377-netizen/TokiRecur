@@ -1611,18 +1611,23 @@ def _resolve_binary(spec: ModelSpec) -> str:
 
 
 def _default_ngl() -> int:
-    """Offload layers for llama-server. The CPU backend is the default
-    for any device; ``TOKI_NGL`` is the only override.
+    """Offload layers for llama-server. ``TOKI_NGL`` wins; otherwise the
+    hardware profile decides; if no profile is available, CPU wins.
 
-    The CPU backend (``libggml-cpu-alderlake.so`` on Meteor Lake, etc.)
-    is the generic, vendor-neutral compute path. GPU backends (CUDA,
-    ROCm, Vulkan, Metal) are loaded only when the binary carries the
-    matching library; even then, ``-ngl 0`` forces the CPU backend to
-    handle every layer. Setting the default to 0 makes the "real CPU
-    backend" the explicit choice on every machine — the auto-detect
-    heuristics (nvidia-smi, hipconfig, vulkaninfo, profile, ICD probe)
-    are all bypassed, so the only way to get GPU offload is to set
-    ``TOKI_NGL`` explicitly.
+    The hardware profile is the authority — it was written by
+    ``toki install-llama`` at install time, when the actual GPUs on
+    the box were enumerated. A GPU with ``use_for_llm=True`` means
+    discrete, ≥ 4 GB VRAM, not shared RAM; that's the right signal
+    for offload. A box with only an Intel iGPU / AMD APU / shared-RAM
+    part has no GPU with ``use_for_llm=True`` and the CPU backend
+    (``libggml-cpu-alderlake.so`` on Meteor Lake, etc.) handles every
+    layer.
+
+    The runtime probes (nvidia-smi, hipconfig, vulkaninfo, Linux ICD
+    probe) are gone: those heuristics wrongly picked lavapipe / iGPUs
+    and made CPU-only boxes slower than no offload at all. The profile
+    is what ``install-llama`` already trusts to pick the build, so
+    it's the right thing to trust here too.
     """
     raw = os.environ.get("TOKI_NGL")
     if raw is not None:
@@ -1630,6 +1635,13 @@ def _default_ngl() -> int:
             return int(raw)
         except ValueError:
             pass
+    try:
+        from ..hardware import profile_box
+        prof = profile_box()
+        if prof is not None and any(g.use_for_llm for g in prof.gpus):
+            return 99
+    except Exception:
+        pass
     return 0
 
 
