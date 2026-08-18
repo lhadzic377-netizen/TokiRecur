@@ -2476,6 +2476,45 @@ def test_model_use_sync_only_cli(env, monkeypatch):
     assert hermes["custom_providers"][0]["base_url"] == "http://127.0.0.1:18002/v1"
 
 
+def test_model_use_force_restart_cli(env, monkeypatch):
+    """`toki model use <name> --force-restart` forwards the flag to
+    use_model so a freshly installed llama-server actually takes
+    effect over an already-running stack (installer restart path)."""
+    from click.testing import CliRunner
+
+    from tokirecur import ctl
+    from tokirecur.cli import cli
+
+    reg = env / "models.yaml"
+    reg.write_text(yaml.safe_dump({"models": [
+        {"name": "m1", "gguf": "/tmp/m1.gguf", "llama_port": 18001,
+         "daemon_port": 18002, "ctx_size": 100, "max_tokens": 90,
+         "model_id": "m1-model"},
+    ]}))
+    monkeypatch.setattr(ctl, "DEFAULT_REGISTRY", reg)
+    monkeypatch.setattr(ctl, "ACTIVE_MARKER", env / "active-model")
+    monkeypatch.setenv("HERMES_CONFIG", str(env / "hermes.yaml"))
+    monkeypatch.setenv("OPENCODE_CONFIG", str(env / "opencode.json"))
+    monkeypatch.setenv("OPENCLAW_CONFIG", str(env / "openclaw.json"))
+    monkeypatch.setenv("CODEX_HOME", str(env / "codex"))
+
+    seen = {}
+
+    def tracking_use_model(name, **kwargs):
+        seen.update(kwargs)
+        spec = ctl.get_model(name)
+        ctl.set_active(name)
+        return spec
+
+    monkeypatch.setattr(ctl, "use_model", tracking_use_model)
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["model", "use", "m1", "--force-restart"])
+    assert result.exit_code == 0, result.output
+    assert seen.get("force_restart") is True
+    assert seen.get("sync_only") is False
+
+
 class _RunResult:
     def __init__(self, stdout):
         self.stdout = stdout

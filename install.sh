@@ -141,11 +141,23 @@ if [[ $EUID -ne 0 ]]; then
     # llama-server (or carrying legacy repo-path model ids), which
     # surfaces as hermes "model '<name>' not found". `--sync-only`
     # rewrites opencode/openclaw/hermes/codex without booting a model.
+    #
+    # When llama-server was (re)installed, also RESTART the active
+    # model: a running stack keeps its old binary in memory, so an
+    # upgraded/CPU-swapped llama-server would never take effect until
+    # the user manually bounced the model. `--force-restart` stops the
+    # target's own stack first when it is already up, then starts it
+    # on the freshly installed binary.
     ACTIVE=$("$TOKI" model status 2>/dev/null | awk '/active model:/ {print $3}')
     if [[ -n "$ACTIVE" && "$ACTIVE" != "none" ]]; then
       _yellow_bar "agent config sync" 94
-      echo "Re-syncing agent configs for active model '$ACTIVE'..."
-      "$TOKI" model use "$ACTIVE" --sync-only || true
+      if [[ "${TOKI_SKIP_LLAMA:-0}" == "1" ]]; then
+        echo "Re-syncing agent configs for active model '$ACTIVE'..."
+        "$TOKI" model use "$ACTIVE" --sync-only || true
+      else
+        echo "Restarting active model '$ACTIVE' on the installed llama-server..."
+        "$TOKI" model use "$ACTIVE" --force-restart || true
+      fi
     fi
 
     echo ""

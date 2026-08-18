@@ -856,8 +856,8 @@ def model() -> None:
     """
 
 
-@model.command()
-def list() -> None:
+@model.command("list")
+def list_models() -> None:
     """List the models in the registry."""
     from ..ctl import load_registry
     for spec in load_registry():
@@ -920,20 +920,27 @@ def status() -> None:  # noqa: F811
          "not start or stop any stack (installer-friendly heal).",
 )
 @click.option(
+    "--force-restart", is_flag=True,
+    help="Restart the model's own stack even when it is already "
+         "running (used after llama-server reinstall so the new "
+         "binary takes effect).",
+)
+@click.option(
     "--mode", type=click.Choice(["raw", "managed"]), default=None,
     help="Inference path for all four clients: managed (through the "
          "toki daemon — context truth, KV recycling) or raw (direct "
          "llama-server). Persisted; default is managed.",
 )
 def use(name: str, keep_others: bool, wait: bool, sync_only: bool,
-        mode: str | None) -> None:
+        mode: str | None, force_restart: bool) -> None:
     """Start the model stack and select it in opencode/openclaw/hermes."""
     from ..ctl import _effective_ctx, model_status, sync_cli_configs, use_model, write_client_mode
     if mode:
         for tool in ("opencode", "openclaw", "hermes", "codex"):
             write_client_mode(tool, mode)
     try:
-        spec = use_model(name, stop_others=not keep_others, sync_only=sync_only)
+        spec = use_model(name, stop_others=not keep_others,
+                         sync_only=sync_only, force_restart=force_restart)
     except (KeyError, FileNotFoundError, RuntimeError) as e:
         click.echo(f"error: {e}", err=True)
         raise SystemExit(1) from None
@@ -1376,6 +1383,38 @@ def _sweep_stale_backups(bin_dir: Path, exe_name: str) -> None:
                 stale.unlink()
             except OSError:
                 pass
+
+
+# Runtime libs that ONLY belong to GPU builds. When a CPU build is
+# installed they must be pruned from the bin dir — otherwise
+# ``binary_backend`` / ``toki doctor`` still report "Vulkan" from a
+# stale .so and the CPU binary itself may try to dlopen one (the
+# Vulkan runtime on an iGPU box is what syncs per-token and tanked
+# generation to 0.78 t/s).
+_GPU_RUNTIME_LIBS = (
+    "libggml-vulkan.so", "libggml-cuda.so", "libggml-rocm.so",
+    "libggml-metal.so", "ggml-vulkan.dll", "ggml-cuda.dll",
+    "ggml-rocm.dll", "ggml-metal.dll",
+)
+
+
+def _prune_foreign_gpu_libs(bin_dir: Path, backend: str) -> None:
+    """Remove GPU runtime libs (and their .stale.* backups) that don't
+    belong to ``backend``.
+
+    Installing the CPU build over a previous Vulkan build would
+    otherwise leave ``libggml-vulkan.so`` behind; the running
+    llama-server (CPU) doesn't load it, but every backend probe does
+    and the next Vulkan install would resurrect it. A CPU box must
+    end up with exactly zero GPU libs.
+    """
+    if backend == "cpu":
+        for pat in _GPU_RUNTIME_LIBS:
+            for lib in list(bin_dir.glob(pat)) + list(bin_dir.glob(pat + ".stale.*")):
+                try:
+                    lib.unlink()
+                except OSError:
+                    pass
 
 
 def _stream_download_with_retry(
@@ -1934,6 +1973,9 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
         for side in src.parent.iterdir():
             if side.is_file() and side != src:
                 _safe_copy_replace(side, bin_dir / side.name)
+        # A CPU install must not leave GPU runtime libs behind: stale
+        # .so files mislead backend probes and confuse the launcher.
+        _prune_foreign_gpu_libs(bin_dir, backend)
 
         # CUDA 13.x ships cudart/cublas as a separate runtime archive
         # (the main archive has no cudart64_*.dll inside ggml-cuda.dll);
@@ -1957,6 +1999,29 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
     if os_name != "windows":
         dst.chmod(dst.stat().st_mode | 0o111)
     click.echo(f"installed: {dst}")
+
+    # Post-install verification: what backend actually landed? A CPU
+    # box must have zero GPU libs; a GPU box must have its libs. This
+    # is what the launcher / doctor will report, so surface it now
+    # instead of letting a stale build pass silently.
+    from ..diagnose import binary_backend
+    landed = (binary_backend(str(dst)) or "unknown").lower()
+    if landed == "unknown":
+        click.echo(
+            "verify: could not inspect the installed binary "
+            f"(ldd unavailable); expected backend {backend}",
+            err=True,
+        )
+    elif landed != backend:
+        click.echo(
+            f"error: expected backend {backend} but this build is "
+            f"{landed} — install failed to land the right build. "
+            f"Re-run with --backend {backend} to retry.",
+            err=True,
+        )
+        raise SystemExit(1)
+    else:
+        click.echo(f"verify: landed backend {landed} (expected {backend})")
 
     # Self-check: the binary must actually execute before we call it good.
     try:

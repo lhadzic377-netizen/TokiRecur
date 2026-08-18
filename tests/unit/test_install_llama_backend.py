@@ -1266,3 +1266,37 @@ def test_profile_ttl_env_override(monkeypatch):
     importlib.reload(hardware)
     assert hardware.PROFILE_TTL_SECONDS == 30 * 24 * 3600
 
+
+def test_prune_foreign_gpu_libs_removes_gpu_libs_on_cpu_install(tmp_path):
+    """A CPU install must leave zero GPU runtime libs in the bin dir —
+    a stale libggml-vulkan.so would make every backend probe (doctor,
+    launcher, the ngl warning) report "Vulkan" on a CPU-only box."""
+    from tokirecur.cli import _prune_foreign_gpu_libs
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for name in ("llama-server", "libggml-cpu.so", "libggml-vulkan.so",
+                 "libggml-vulkan.so.stale.53508", "libggml-cuda.so",
+                 "libggml-cuda.so.stale.99999", "ggml-vulkan.dll"):
+        (bin_dir / name).write_bytes(b"x")
+    _prune_foreign_gpu_libs(bin_dir, "cpu")
+    remaining = {p.name for p in bin_dir.iterdir()}
+    assert remaining == {"llama-server", "libggml-cpu.so"}
+
+
+def test_prune_foreign_gpu_libs_keeps_gpu_libs_on_gpu_backend(tmp_path):
+    """Pruning only applies to CPU installs; a Vulkan/CUDA install's
+    own libs must be left alone."""
+    from tokirecur.cli import _prune_foreign_gpu_libs
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for name in ("llama-server", "libggml-vulkan.so"):
+        (bin_dir / name).write_bytes(b"x")
+    _prune_foreign_gpu_libs(bin_dir, "vulkan")
+    assert {p.name for p in bin_dir.iterdir()} == {
+        "llama-server", "libggml-vulkan.so"}
+
+
+def test_prune_foreign_gpu_libs_missing_bin_dir_is_noop(tmp_path):
+    from tokirecur.cli import _prune_foreign_gpu_libs
+    _prune_foreign_gpu_libs(tmp_path / "does-not-exist", "cpu")
+
