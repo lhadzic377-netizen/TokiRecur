@@ -127,8 +127,11 @@ def _cpu_max_freq_path(cpu_id: int) -> Path | None:
 
 
 def _total_ram_gb() -> float:
-    """Total system RAM in GB from ``/proc/meminfo`` on Linux. Falls
-    back to 0.0 on other platforms or when the file is unreadable."""
+    """Total system RAM in GB.
+
+    Linux: ``/proc/meminfo`` MemTotal. macOS: ``sysctl hw.memsize``
+    (bytes). Falls back to 0.0 on other platforms or when unreadable.
+    """
     if sys.platform.startswith("linux"):
         try:
             text = Path("/proc/meminfo").read_text()
@@ -140,6 +143,16 @@ def _total_ram_gb() -> float:
                     return int(line.split()[1]) / 1048576.0
                 except (ValueError, IndexError):
                     return 0.0
+    elif sys.platform == "darwin":
+        try:
+            r = subprocess.run(
+                ["sysctl", "-n", "hw.memsize"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if r.returncode == 0:
+                return int(r.stdout.strip()) / 1024**3
+        except (OSError, ValueError):
+            return 0.0
     return 0.0
 
 
@@ -586,12 +599,16 @@ def _enumerate_gpus_macos() -> list[GPUProfile]:
             # Look for "Chipset Model: Apple M2" or similar.
             for m in re.finditer(r"Chipset Model:\s*(.+)", text):
                 name = m.group(1).strip()
-                # Apple Silicon GPUs are unified memory; report a
-                # conservative shared-RAM budget (4 GB) for inference.
+                # Apple Silicon GPUs are unified memory: the GPU can
+                # use the full system-RAM pool, exactly like AMD UMA.
+                # sysctl hw.memsize is the whole-pool figure; report
+                # it so the vram_gb >= 4 gate and the KV budget
+                # recognise the GPU as usable on any Mac.
+                vram = _total_ram_gb()
                 out.append(GPUProfile(
-                    vendor="Apple", name=name, vram_gb=4.0,
+                    vendor="Apple", name=name, vram_gb=vram,
                     driver=None, vulkan_score=0.95, shared_ram=True,
-                    use_for_llm=True,
+                    use_for_llm=vram >= 4,
                     reason="Apple Silicon unified memory; Metal backend",
                 ))
     except Exception:

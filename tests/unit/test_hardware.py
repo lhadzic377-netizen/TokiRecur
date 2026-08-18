@@ -703,3 +703,71 @@ def test_llama_simd_backends_empty_on_unknown_build(tmp_path):
     (tmp_path / "libggml-cpu.so").write_bytes(b"")
     (tmp_path / "libggml-base.so").write_bytes(b"")
     assert hardware.llama_simd_backends(tmp_path) == []
+
+
+# ── Apple Silicon ─────────────────────────────────────────────────
+
+
+def test_apple_silicon_vram_is_full_unified_memory(monkeypatch):
+    """Apple Silicon GPU reports the full system-RAM pool as vram_gb
+    (sysctl hw.memsize) — not the old hardcoded 4 GB. Any Mac, any
+    RAM size."""
+    monkeypatch.setattr(hardware.sys, "platform", "darwin")
+    monkeypatch.setattr(hardware.shutil, "which", lambda name: None)
+
+    class R:
+        returncode = 0
+        stdout = "Chipset Model: Apple M3 Max\n"
+    # 48 GB in bytes
+    monkeypatch.setattr(hardware.subprocess, "run",
+                        lambda *a, **kw: R())
+    monkeypatch.setattr(hardware, "_total_ram_gb", lambda: 48.0)
+
+    gpus = hardware.enumerate_gpus()
+    apple = [g for g in gpus if g.vendor == "Apple"]
+    assert len(apple) == 1
+    assert apple[0].vram_gb == 48.0
+    assert apple[0].use_for_llm is True
+
+
+def test_apple_silicon_vram_reports_small_macs_too(monkeypatch):
+    """An 8 GB Mac Mini still reports 8 GB and stays usable."""
+    monkeypatch.setattr(hardware.sys, "platform", "darwin")
+    monkeypatch.setattr(hardware.shutil, "which", lambda name: None)
+
+    class R:
+        returncode = 0
+        stdout = "Chipset Model: Apple M1\n"
+    monkeypatch.setattr(hardware.subprocess, "run",
+                        lambda *a, **kw: R())
+    monkeypatch.setattr(hardware, "_total_ram_gb", lambda: 8.0)
+
+    gpus = hardware.enumerate_gpus()
+    apple = [g for g in gpus if g.vendor == "Apple"]
+    assert len(apple) == 1
+    assert apple[0].vram_gb == 8.0
+    assert apple[0].use_for_llm is True
+
+
+def test_total_ram_gb_macos_parses_sysctl(monkeypatch):
+    """sysctl -n hw.memsize returns bytes; _total_ram_gb converts."""
+    monkeypatch.setattr(hardware.sys, "platform", "darwin")
+
+    class R:
+        returncode = 0
+        stdout = "17179869184\n"   # 16 GiB
+    monkeypatch.setattr(hardware.subprocess, "run",
+                        lambda *a, **kw: R())
+    assert abs(hardware._total_ram_gb() - 16.0) < 0.01
+
+
+def test_total_ram_gb_macos_handles_sysctl_failure(monkeypatch):
+    """sysctl failure or garbage → 0.0, no crash."""
+    monkeypatch.setattr(hardware.sys, "platform", "darwin")
+
+    class R:
+        returncode = 1
+        stdout = ""
+    monkeypatch.setattr(hardware.subprocess, "run",
+                        lambda *a, **kw: R())
+    assert hardware._total_ram_gb() == 0.0
