@@ -114,6 +114,23 @@ def _cpu_max_freq_path(cpu_id: int) -> Path | None:
     return p if p.exists() else None
 
 
+def _total_ram_gb() -> float:
+    """Total system RAM in GB from ``/proc/meminfo`` on Linux. Falls
+    back to 0.0 on other platforms or when the file is unreadable."""
+    if sys.platform.startswith("linux"):
+        try:
+            text = Path("/proc/meminfo").read_text()
+        except OSError:
+            return 0.0
+        for line in text.splitlines():
+            if line.startswith("MemTotal:"):
+                try:
+                    return int(line.split()[1]) / 1048576.0
+                except (ValueError, IndexError):
+                    return 0.0
+    return 0.0
+
+
 def _cpu_capacity_path(cpu_id: int) -> Path | None:
     """Sysfs capacity value (1024 = baseline). Not always present."""
     p = Path(f"/sys/devices/system/cpu/cpu{cpu_id}/cpu_capacity")
@@ -490,6 +507,17 @@ def _enumerate_gpus_linux() -> list[GPUProfile]:
                 continue   # discrete already covered by rocm-smi
             shared = vendor == "Intel" and device_id.startswith(("0x9a", "0x46", "0x4c", "0x3e"))
             vram = _estimate_intel_vram_gb(device_id) if vendor == "Intel" else 0.0
+            # AMD GPUs on UMA systems (Strix Halo, AMD APUs) report no
+            # dedicated VRAM from sysfs/KFD — the GPU shares system RAM
+            # and can use the full pool (CPU + GPU draw from the same
+            # unified memory). Estimate usable memory from system RAM so
+            # the vram_gb >= 4 gate in _recommend_defaults recognises
+            # them as usable. The value is a signal, not a runtime cap;
+            # llama.cpp manages actual allocation at launch.
+            if vendor == "AMD" and vram == 0.0:
+                total_ram = _total_ram_gb()
+                if total_ram >= 4:
+                    vram = total_ram
             score = 0.3 if shared else 0.8 if vram >= 4 else 0.5
             use = (
                 not shared

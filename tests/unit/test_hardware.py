@@ -152,6 +152,58 @@ def test_enumerate_gpus_keeps_discrete_nvidia(monkeypatch, tmp_path):
     assert nvidia[0].use_for_llm is True
 
 
+def test_enumerate_gpus_uma_amd_uses_full_system_ram(monkeypatch, tmp_path):
+    """An AMD GPU on a UMA system (Strix Halo, AMD APU) reports no
+    dedicated VRAM from sysfs. The profiler must estimate the full
+    unified-memory pool — not cap it at half — so the GPU is
+    recognised as usable and llama.cpp can claim the full pool at
+    launch. Generic: any device with unified memory benefits."""
+    monkeypatch.setattr(hardware.sys, "platform", "linux")
+    monkeypatch.setattr(hardware.shutil, "which", lambda name: None)
+    # Fake /sys/class/drm with one AMD card (no rocm-smi).
+    fake_drm = tmp_path / "drm"
+    fake_drm.mkdir()
+    card = fake_drm / "card0" / "device"
+    card.mkdir(parents=True)
+    (card / "vendor").write_text("0x1002")     # AMD
+    (card / "device").write_text("0x1586")     # Strix Halo / gfx1151
+    monkeypatch.setattr(hardware, "_pci_device_name", lambda *_: "Radeon 8060S")
+    monkeypatch.setattr(hardware, "Path", _DrmPathShim(fake_drm))
+    # 128 GB system — the GPU can use all of it (UMA).
+    monkeypatch.setattr(hardware, "_total_ram_gb", lambda: 128.0)
+
+    gpus = hardware.enumerate_gpus()
+    amd = [g for g in gpus if g.vendor == "AMD"]
+    assert len(amd) == 1
+    # Full RAM, not half — capping at half would silently truncate
+    # the KV cache budget on memory-rich boxes like Strix Halo.
+    assert amd[0].vram_gb == 128.0
+    assert amd[0].use_for_llm is True
+
+
+def test_enumerate_gpus_uma_amd_works_on_small_boxes_too(monkeypatch, tmp_path):
+    """An AMD UMA box with only 16 GB system RAM still reports the
+    full pool as vram_gb — the GPU can use it all, and the value
+    passes the vram_gb >= 4 gate so the GPU is recognised as usable."""
+    monkeypatch.setattr(hardware.sys, "platform", "linux")
+    monkeypatch.setattr(hardware.shutil, "which", lambda name: None)
+    fake_drm = tmp_path / "drm"
+    fake_drm.mkdir()
+    card = fake_drm / "card0" / "device"
+    card.mkdir(parents=True)
+    (card / "vendor").write_text("0x1002")
+    (card / "device").write_text("0x1586")
+    monkeypatch.setattr(hardware, "_pci_device_name", lambda *_: "Radeon 780M")
+    monkeypatch.setattr(hardware, "Path", _DrmPathShim(fake_drm))
+    monkeypatch.setattr(hardware, "_total_ram_gb", lambda: 16.0)
+
+    gpus = hardware.enumerate_gpus()
+    amd = [g for g in gpus if g.vendor == "AMD"]
+    assert len(amd) == 1
+    assert amd[0].vram_gb == 16.0
+    assert amd[0].use_for_llm is True
+
+
 # ── Recommendation ────────────────────────────────────────────────
 
 
