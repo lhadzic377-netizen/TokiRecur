@@ -1827,6 +1827,17 @@ def _llama_args(spec: ModelSpec, ctx_override: int | None = None,
     ctx = spec.ctx_size if ctx_override is None else ctx_override
     kv = spec.kv if kv_override is None else kv_override
     parallel = spec.parallel if parallel_override is None else parallel_override
+    # TOKI_CTX_SIZE / TOKI_THREADS: hard user overrides. They are
+    # appended AFTER extra_args so llama.cpp's last-flag-wins parser
+    # honours them even over a registry pin.
+    try:
+        toki_ctx = int(os.environ.get("TOKI_CTX_SIZE", ""))
+    except ValueError:
+        toki_ctx = None
+    try:
+        toki_threads = int(os.environ.get("TOKI_THREADS", ""))
+    except ValueError:
+        toki_threads = None
     args = [
         binary,
         "-m", str(gguf),
@@ -1852,13 +1863,18 @@ def _llama_args(spec: ModelSpec, ctx_override: int | None = None,
     # cap CPU throughput. ``effective_cpu_threads`` drops the slowest
     # tier on hybrid chips (e.g. LPE on Core Ultra 155U) so the
     # llama.cpp thread pool isn't gated by 1.5 GHz cores.
+    threads_added = False
     if (ngl == 0) and not any(a in ("-t", "--threads") for a in spec.extra_args):
         threads = None
-        try:
-            from ..hardware import cpu_topology, effective_cpu_threads
-            threads = effective_cpu_threads(cpu_topology())
-        except Exception:
-            threads = None
+        # TOKI_THREADS wins when set; otherwise auto-detect.
+        if toki_threads:
+            threads = toki_threads
+        else:
+            try:
+                from ..hardware import cpu_topology, effective_cpu_threads
+                threads = effective_cpu_threads(cpu_topology())
+            except Exception:
+                threads = None
         if threads is None:
             try:
                 from ..hardware import profile_box
@@ -1866,6 +1882,7 @@ def _llama_args(spec: ModelSpec, ctx_override: int | None = None,
             except Exception:
                 threads = 4
         args += ["-t", str(max(2, threads))]
+        threads_added = True
         args += ["--mlock"]
         # Batch sizes — only set if the registry didn't already.
         if not any(a in ("-b", "--batch-size") for a in spec.extra_args):
@@ -1885,6 +1902,12 @@ def _llama_args(spec: ModelSpec, ctx_override: int | None = None,
     for alias in _model_aliases(spec):
         args += ["--alias", alias]
     args += spec.extra_args
+    # Hard user overrides, appended LAST so llama.cpp's last-flag-wins
+    # parser honours them even over registry extra_args pins.
+    if toki_ctx:
+        args += ["-c", str(toki_ctx)]
+    if toki_threads and not threads_added:
+        args += ["-t", str(toki_threads)]
     return args
 
 

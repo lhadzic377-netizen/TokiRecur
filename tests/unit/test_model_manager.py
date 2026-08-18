@@ -1084,6 +1084,47 @@ def test_llama_args_ngl_honors_env(seeded_env, monkeypatch):
     assert args[args.index("-ngl") + 1] == "17"
 
 
+def test_llama_args_toki_ctx_size_overrides_spec(seeded_env, monkeypatch):
+    """TOKI_CTX_SIZE replaces the spec's ctx_size (appended last so
+    llama.cpp's last-flag-wins parser honours it)."""
+    spec = _ngl_spec(seeded_env)
+    spec.ctx_size = 200000
+    monkeypatch.setenv("TOKI_CTX_SIZE", "4096")
+    args = ctl._llama_args(spec)
+    assert args[-2:] == ["-c", "4096"]
+
+
+def test_llama_args_toki_ctx_size_overrides_extra_args_pin(seeded_env, monkeypatch):
+    """TOKI_CTX_SIZE beats a registry extra_args -c pin because the
+    override is appended after extra_args."""
+    spec = _ngl_spec(seeded_env)
+    spec.extra_args = ["-c", "8192"]
+    monkeypatch.setenv("TOKI_CTX_SIZE", "4096")
+    args = ctl._llama_args(spec)
+    assert args[-2:] == ["-c", "4096"]
+
+
+def test_llama_args_toki_threads_override(seeded_env, monkeypatch):
+    """TOKI_THREADS is passed as -t on the CPU path."""
+    monkeypatch.setenv("TOKI_NGL", "0")
+    monkeypatch.setenv("TOKI_THREADS", "3")
+    spec = _ngl_spec(seeded_env)
+    args = ctl._llama_args(spec)
+    assert "-t" in args
+    assert args[args.index("-t") + 1] == "3"
+
+
+def test_llama_args_toki_threads_overrides_extra_args_threads(seeded_env, monkeypatch):
+    """TOKI_THREADS beats a registry extra_args -t pin (appended
+    after extra_args; llama.cpp takes the last flag)."""
+    monkeypatch.setenv("TOKI_NGL", "0")
+    monkeypatch.setenv("TOKI_THREADS", "3")
+    spec = _ngl_spec(seeded_env)
+    spec.extra_args = ["-t", "8"]
+    args = ctl._llama_args(spec)
+    assert args[-2:] == ["-t", "3"]
+
+
 def test_llama_args_ngl_zero_runs_cpu(seeded_env, monkeypatch):
     monkeypatch.setenv("TOKI_NGL", "0")
     args = ctl._llama_args(_ngl_spec(seeded_env))
