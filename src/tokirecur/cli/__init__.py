@@ -1205,6 +1205,23 @@ def _force_cpu_when_no_usable_gpu(os_name: str, arch: str, backend: str) -> str:
     return "cpu"
 
 
+_KNOWN_BACKENDS = ("cuda", "rocm", "vulkan", "metal", "mlx", "cpu")
+
+
+def _env_backend_override() -> str | None:
+    """Respect TOKI_BACKEND when set to a known backend; warn (stderr)
+    and ignore unknown values."""
+    env_backend = os.environ.get("TOKI_BACKEND", "").strip().lower()
+    if env_backend in _KNOWN_BACKENDS:
+        return env_backend
+    if env_backend:
+        click.echo(
+            f"warning: TOKI_BACKEND={env_backend} is not a known "
+            f"backend; ignoring and auto-detecting", err=True,
+        )
+    return None
+
+
 def _detect_gpu_backend(os_name: str) -> str:
     """Pick the best backend for this box.
 
@@ -1676,28 +1693,36 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
         raise SystemExit(1) from None
 
     if backend == "auto":
-        from ..hardware import profile_box
-        prof = profile_box(force=False) if profile else None
-        if prof is not None:
-            recommended = prof.recommended
-            backend = recommended.get("backend", _detect_gpu_backend(os_name))
-            p_core = ",".join(str(i) for i in prof.cpu.p_core_ids) or "—"
-            simd = ",".join(prof.cpu.simd) or "—"
-            click.echo(
-                f"backend: profile-recommended {backend} ({os_name}/{arch})"
-            )
-            click.echo(
-                f"hardware profile: cpu={prof.cpu.name} simd={simd} "
-                f"p_cores={p_core} ram={prof.ram_gb:.0f}GB"
-            )
-            for g in prof.gpus:
-                click.echo(
-                    f"  gpu: {g.vendor} {g.name} vram={g.vram_gb:.1f}GB "
-                    f"use={'yes' if g.use_for_llm else 'no'} ({g.reason})"
-                )
+        # TOKI_BACKEND: hard user override, honoured before any
+        # profile or heuristic decision. Valid values are the same
+        # ones --backend accepts.
+        env_backend = _env_backend_override()
+        if env_backend is not None:
+            backend = env_backend
+            click.echo(f"backend: TOKI_BACKEND={backend} ({os_name}/{arch})")
         else:
-            backend = _detect_gpu_backend(os_name)
-            click.echo(f"backend: auto-detected {backend} ({os_name}/{arch})")
+            from ..hardware import profile_box
+            prof = profile_box(force=False) if profile else None
+            if prof is not None:
+                recommended = prof.recommended
+                backend = recommended.get("backend", _detect_gpu_backend(os_name))
+                p_core = ",".join(str(i) for i in prof.cpu.p_core_ids) or "—"
+                simd = ",".join(prof.cpu.simd) or "—"
+                click.echo(
+                    f"backend: profile-recommended {backend} ({os_name}/{arch})"
+                )
+                click.echo(
+                    f"hardware profile: cpu={prof.cpu.name} simd={simd} "
+                    f"p_cores={p_core} ram={prof.ram_gb:.0f}GB"
+                )
+                for g in prof.gpus:
+                    click.echo(
+                        f"  gpu: {g.vendor} {g.name} vram={g.vram_gb:.1f}GB "
+                        f"use={'yes' if g.use_for_llm else 'no'} ({g.reason})"
+                    )
+            else:
+                backend = _detect_gpu_backend(os_name)
+                click.echo(f"backend: auto-detected {backend} ({os_name}/{arch})")
         if force_cpu and backend in ("cuda", "rocm", "vulkan", "metal"):
             click.echo(
                 f"note: --force-cpu requested; ignoring profile's "

@@ -43,7 +43,13 @@ logger = logging.getLogger(__name__)
 
 PROFILE_VERSION = 2
 # Cache the profile for 30 days; after that, re-profile.
-PROFILE_TTL_SECONDS = 30 * 24 * 3600
+# How long a cached hardware profile is trusted before re-profiling.
+# TOKI_PROFILE_TTL (seconds) overrides. 30 days is long because the
+# profile is also re-saved on every `toki doctor`; the TTL is only
+# about stale data surviving a reboot after a GPU swap.
+PROFILE_TTL_SECONDS = int(
+    os.environ.get("TOKI_PROFILE_TTL", "2592000")   # 30 * 24 * 3600
+)
 # Fallback when /proc/cpuinfo isn't readable: assume 4 logical cores.
 _FALLBACK_LOGICAL = 4
 

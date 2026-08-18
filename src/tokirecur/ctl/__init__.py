@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import click
 import httpx
 import yaml
 
@@ -1645,6 +1646,33 @@ def _default_ngl() -> int:
     return 0
 
 
+def _warn_gpu_offload_without_gpu_binary(binary: str, ngl: int) -> None:
+    """Warn when the user forced GPU offload (TOKI_NGL > 0) but the
+    installed llama-server build has no GPU backend loaded.
+
+    This is the classic footgun the CPU/Vulkan build mix produced on
+    Intel iGPU boxes: -ngl 99 with a CPU build silently falls back to
+    CPU per-layer, or worse, the Vulkan build initialises the iGPU and
+    syncs on every token (0.78 t/s measured). The warning is stderr
+    only; the launch proceeds with the user's explicit choice.
+    """
+    if not ngl:
+        return
+    try:
+        from ..diagnose import binary_backend
+        kind = binary_backend(binary)
+    except Exception:
+        return
+    if kind and kind.lower() not in ("cuda", "rocm", "vulkan", "metal"):
+        click.echo(
+            f"warning: TOKI_NGL={ngl} requests GPU offload but this "
+            f"llama-server build is {kind}; expected throughput is CPU "
+            f"only. Install the matching GPU build with "
+            f"`toki install-llama --backend {kind or 'auto'}`.",
+            err=True,
+        )
+
+
 def _intel_igpu_only() -> bool:
     """True when the only Vulkan device on this Windows box is an
     integrated Intel GPU (HD/UHD/Iris).
@@ -1853,6 +1881,7 @@ def _llama_args(spec: ModelSpec, ctx_override: int | None = None,
     ngl_pinned = any(a in ("-ngl", "--n-gpu-layers") for a in spec.extra_args)
     ngl = _default_ngl() if not ngl_pinned else None
     if ngl is not None:
+        _warn_gpu_offload_without_gpu_binary(binary, ngl)
         args += ["-ngl", str(ngl)]
 
     # CPU-mode tuning: when no GPU is in play (ngl == 0), use every

@@ -1218,3 +1218,51 @@ def test_force_cpu_works_on_amd_apu_only(monkeypatch, capsys):
     # No mention of "Intel" — the rule is generic.
     assert "Intel" not in stderr
 
+
+def test_env_backend_override_honours_known_backend(monkeypatch):
+    """TOKI_BACKEND=rocm is honoured."""
+    monkeypatch.setenv("TOKI_BACKEND", "rocm")
+    from tokirecur.cli import _env_backend_override
+    assert _env_backend_override() == "rocm"
+
+
+def test_env_backend_override_honours_cpu(monkeypatch):
+    """TOKI_BACKEND=cpu is honoured (forces a CPU build)."""
+    monkeypatch.setenv("TOKI_BACKEND", "cpu")
+    from tokirecur.cli import _env_backend_override
+    assert _env_backend_override() == "cpu"
+
+
+def test_env_backend_override_case_insensitive(monkeypatch):
+    monkeypatch.setenv("TOKI_BACKEND", "CUDA")
+    from tokirecur.cli import _env_backend_override
+    assert _env_backend_override() == "cuda"
+
+
+def test_env_backend_override_unknown_warns_and_returns_none(monkeypatch, capsys):
+    """An unknown TOKI_BACKEND warns on stderr and falls through to
+    auto-detection (None)."""
+    monkeypatch.setenv("TOKI_BACKEND", "quantum")
+    from tokirecur.cli import _env_backend_override
+    assert _env_backend_override() is None
+    assert "not a known backend" in capsys.readouterr().err
+
+
+def test_env_backend_override_unset_returns_none(monkeypatch):
+    monkeypatch.delenv("TOKI_BACKEND", raising=False)
+    from tokirecur.cli import _env_backend_override
+    assert _env_backend_override() is None
+
+
+def test_profile_ttl_env_override(monkeypatch):
+    """TOKI_PROFILE_TTL (seconds) replaces the 30-day default."""
+    monkeypatch.setenv("TOKI_PROFILE_TTL", "60")
+    import importlib
+
+    from tokirecur import hardware
+    importlib.reload(hardware)
+    assert hardware.PROFILE_TTL_SECONDS == 60
+    monkeypatch.delenv("TOKI_PROFILE_TTL")
+    importlib.reload(hardware)
+    assert hardware.PROFILE_TTL_SECONDS == 30 * 24 * 3600
+

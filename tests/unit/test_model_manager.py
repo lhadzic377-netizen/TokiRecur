@@ -1125,6 +1125,38 @@ def test_llama_args_toki_threads_overrides_extra_args_threads(seeded_env, monkey
     assert args[-2:] == ["-t", "3"]
 
 
+def test_warn_gpu_offload_without_gpu_binary(monkeypatch, capsys, tmp_path):
+    """TOKI_NGL > 0 with a CPU-only llama-server build warns on
+    stderr — the user's explicit choice still runs."""
+    binary = tmp_path / "llama-server"
+    binary.write_bytes(b"dummy")
+    monkeypatch.setattr(
+        "tokirecur.diagnose.binary_backend", lambda b: "CPU",
+    )
+    ctl._warn_gpu_offload_without_gpu_binary(str(binary), 99)
+    err = capsys.readouterr().err
+    assert "TOKI_NGL=99" in err
+    assert "CPU" in err
+    assert "install-llama" in err
+
+
+def test_warn_gpu_offload_silent_when_ngl_zero(monkeypatch, capsys):
+    monkeypatch.setattr(
+        "tokirecur.diagnose.binary_backend", lambda b: "CPU",
+    )
+    ctl._warn_gpu_offload_without_gpu_binary("/nope/llama-server", 0)
+    assert capsys.readouterr().err == ""
+
+
+def test_warn_gpu_offload_silent_when_build_has_gpu(monkeypatch, capsys):
+    """A CUDA build with TOKI_NGL set is fine — no warning."""
+    monkeypatch.setattr(
+        "tokirecur.diagnose.binary_backend", lambda b: "CUDA",
+    )
+    ctl._warn_gpu_offload_without_gpu_binary("/nope/llama-server", 99)
+    assert capsys.readouterr().err == ""
+
+
 def test_llama_args_ngl_zero_runs_cpu(seeded_env, monkeypatch):
     monkeypatch.setenv("TOKI_NGL", "0")
     args = ctl._llama_args(_ngl_spec(seeded_env))
