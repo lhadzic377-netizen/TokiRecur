@@ -785,26 +785,10 @@ class HardwareProfile:
         return self.age_seconds() < PROFILE_TTL_SECONDS
 
     def backend_for(self, model_size_class: str) -> str:
-        """Pick the recommended backend for this profile.
-
-        Heuristic when no bench data exists:
-        - Discrete NVIDIA/AMD GPU → use it.
-        - Apple Silicon → Metal.
-        - Intel iGPU or no GPU → CPU.
-        - Anything else with > 4 GB VRAM → Vulkan.
-        """
+        """Pick the recommended backend for this profile."""
         if self.recommended.get("backend"):
             return self.recommended["backend"]
-        for gpu in self.gpus:
-            if gpu.use_for_llm and gpu.vram_gb >= 4:
-                if gpu.vendor in ("NVIDIA",) and self.os in ("linux", "windows"):
-                    return "cuda"
-                if gpu.vendor == "AMD" and self.os == "linux":
-                    return "rocm"
-                if gpu.vendor == "Apple":
-                    return "metal"
-                return "vulkan"
-        return "cpu"
+        return _pick_backend(self.cpu, self.gpus, self.os)["backend"]
 
 
 def profile_box(force: bool = False) -> HardwareProfile:
@@ -846,38 +830,48 @@ def _os_name() -> str:
     return "unknown"
 
 
-def _recommend_defaults(cpu: CPUProfile, gpus: list[GPUProfile]) -> dict:
-    """Heuristic recommendation when no bench data exists yet.
+# Vendor → backend per OS. The picker walks eligible GPUs in
+# preference order (discrete first) and consults this table.
+_BACKEND_TABLE: dict[str, dict[str, str]] = {
+    "NVIDIA": {"linux": "cuda", "windows": "cuda", "darwin": "vulkan"},
+    "AMD": {"linux": "rocm", "windows": "vulkan", "darwin": "vulkan"},
+    "Intel": {"linux": "vulkan", "windows": "vulkan", "darwin": "vulkan"},
+    "Apple": {"darwin": "metal", "linux": "vulkan", "windows": "vulkan"},
+}
 
-    The rule set is intentionally conservative — preferring CPU over a
-    marginal GPU — because the bench data, when present, overrides it.
-    Wrong-in-the-wrong-direction means the user pays a few percent of
-    CPU throughput, not their whole session.
+
+def _gpu_eligible(gpu: GPUProfile) -> bool:
+    """Is this GPU worth using for LLM offload?
+
+    - NVIDIA/Apple: any use_for_llm GPU with >= 4 GB VRAM. Apple's
+      unified memory is shared by design but Metal handles it fine.
+    - AMD: same — UMA parts (Strix Halo, APUs) are genuinely fast
+      for LLM matmul; shared_ram is NOT a disqualifier.
+    - Intel: only discrete Arc (shared iGPU is slower than the CPU).
     """
-    # Pick a GPU only when it's worth using. Apple Silicon's unified
-    # memory is shared RAM by design but Metal handles it correctly;
-    # we explicitly allow it through (no shared_ram gate for vendor=Apple).
-    # Intel iGPUs also share system RAM but are slower than the host CPU
-    # for LLM matmul — measured on a Core Ultra 155U, the Arc iGPU is
-    # roughly 1/3 of P-core throughput for a 1B Q4_K_M.
-    for gpu in gpus:
-        eligible = gpu.use_for_llm and gpu.vram_gb >= 4
-        eligible = eligible and (gpu.vendor == "Apple" or not gpu.shared_ram)
-        if not eligible:
-            continue
-        if gpu.vendor == "NVIDIA":
-            return {"backend": "cuda", "ngl": 99,
-                    "threads": cpu.physical_cores}
-        if gpu.vendor == "AMD":
-            return {"backend": "rocm", "ngl": 99,
-                    "threads": cpu.physical_cores}
-        if gpu.vendor == "Apple":
-            return {"backend": "metal", "ngl": 99,
-                    "threads": cpu.physical_cores}
-        return {"backend": "vulkan", "ngl": 99,
+    if not gpu.use_for_llm or gpu.vram_gb < 4:
+        return False
+    if gpu.vendor == "Intel":
+        return not gpu.shared_ram
+    return True
+
+
+def _pick_backend(cpu: CPUProfile, gpus: list[GPUProfile],
+                  os_name: str) -> dict:
+    """Choose backend + ngl + threads from the profile.
+
+    Table-driven: _BACKEND_TABLE maps vendor → per-OS backend.
+    Preference order for multi-GPU boxes: discrete before UMA, then
+    most VRAM first. Falls back to CPU when no GPU is eligible.
+    """
+    eligible = [g for g in gpus if _gpu_eligible(g)]
+    eligible.sort(key=lambda g: (g.shared_ram, -g.vram_gb))
+    for gpu in eligible:
+        backend = _BACKEND_TABLE.get(gpu.vendor, {}).get(os_name, "vulkan")
+        return {"backend": backend, "ngl": 99,
                 "threads": cpu.physical_cores}
 
-    # No usable discrete GPU. CPU it is. Drop the slowest tier on
+    # No usable GPU. CPU it is. Drop the slowest tier on
     # hybrid chips so the LPE cores don't gate ggml's matmul sync —
     # every other core passes the freq filter, so a non-hybrid box
     # keeps all its cores. We used to cap threads at the P-core
@@ -892,6 +886,17 @@ def _recommend_defaults(cpu: CPUProfile, gpus: list[GPUProfile]) -> dict:
         "threads": threads,
         "build_hint": "ubuntu-x64.tar.gz (CPU)",
     }
+
+
+def _recommend_defaults(cpu: CPUProfile, gpus: list[GPUProfile]) -> dict:
+    """Heuristic recommendation when no bench data exists yet.
+
+    The rule set is intentionally conservative — preferring CPU over a
+    marginal GPU — because the bench data, when present, overrides it.
+    Wrong-in-the-wrong-direction means the user pays a few percent of
+    CPU throughput, not their whole session.
+    """
+    return _pick_backend(cpu, gpus, _os_name())
 
 
 # ── Persistence ───────────────────────────────────────────────────

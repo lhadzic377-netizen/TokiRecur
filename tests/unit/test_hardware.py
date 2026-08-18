@@ -474,7 +474,8 @@ def test_recommend_defaults_picks_cuda_for_discrete_nvidia():
     assert rec["ngl"] == 99
 
 
-def test_recommend_defaults_picks_metal_for_apple_silicon():
+def test_recommend_defaults_picks_metal_for_apple_silicon(monkeypatch):
+    monkeypatch.setattr(hardware.sys, "platform", "darwin")
     cpu = CPUProfile(
         vendor="Apple", name="Apple M2",
         family=0, model=0, physical_cores=4, logical_cores=8,
@@ -490,6 +491,83 @@ def test_recommend_defaults_picks_metal_for_apple_silicon():
     rec = hardware._recommend_defaults(cpu, gpus)
     assert rec["backend"] == "metal"
     assert rec["ngl"] == 99
+
+
+def test_recommend_defaults_amd_uma_is_eligible(monkeypatch):
+    """Strix Halo / APU: shared_ram=True is NOT a disqualifier for AMD
+    — UMA GPUs are genuinely fast for LLM matmul. ROCm is picked."""
+    monkeypatch.setattr(hardware.sys, "platform", "linux")
+    cpu = CPUProfile(
+        vendor="AuthenticAMD", name="Ryzen AI MAX+ 395",
+        family=26, model=32, physical_cores=16, logical_cores=16,
+        p_core_ids=list(range(16)), e_core_ids=[],
+        max_boost_mhz=5100.0, simd=["avx512"],
+    )
+    gpus = [GPUProfile(
+        vendor="AMD", name="Radeon 8060S",
+        vram_gb=125.0, driver=None, vulkan_score=0.9,
+        shared_ram=True, use_for_llm=True,
+        reason="AMD UMA — full unified memory pool",
+    )]
+    rec = hardware._recommend_defaults(cpu, gpus)
+    assert rec["backend"] == "rocm"
+    assert rec["ngl"] == 99
+
+
+def test_recommend_defaults_multi_gpu_prefers_discrete(monkeypatch):
+    """NVIDIA discrete + Intel iGPU: discrete is picked (cuda), even
+    though the iGPU comes first in enumeration order."""
+    monkeypatch.setattr(hardware.sys, "platform", "linux")
+    cpu = CPUProfile(
+        vendor="GenuineIntel", name="i9-14900K",
+        family=6, model=183, physical_cores=24, logical_cores=32,
+        p_core_ids=list(range(16)), e_core_ids=list(range(16, 24)),
+        max_boost_mhz=6000.0, simd=["avx2"],
+    )
+    igpu = GPUProfile(
+        vendor="Intel", name="UHD 770",
+        vram_gb=0.5, driver=None, vulkan_score=0.3,
+        shared_ram=True, use_for_llm=False,
+        reason="Intel iGPU — CPU is faster for LLM matmul",
+    )
+    discrete = GPUProfile(
+        vendor="NVIDIA", name="RTX 4090",
+        vram_gb=24.0, driver=None, vulkan_score=1.0,
+        shared_ram=False, use_for_llm=True, reason="discrete GPU",
+    )
+    rec = hardware._recommend_defaults(cpu, [igpu, discrete])
+    assert rec["backend"] == "cuda"
+
+
+def test_pick_backend_table_driven_vendor_os(monkeypatch):
+    """_pick_backend consults _BACKEND_TABLE per vendor + OS."""
+    monkeypatch.setattr(hardware.sys, "platform", "linux")
+    cpu = CPUProfile(
+        vendor="GenuineIntel", name="stub",
+        family=6, model=183, physical_cores=8, logical_cores=8,
+        p_core_ids=list(range(8)), e_core_ids=[],
+        max_boost_mhz=4000.0, simd=["avx2"],
+    )
+    gpus = [GPUProfile(
+        vendor="AMD", name="Radeon RX 7900 XTX",
+        vram_gb=24.0, driver=None, vulkan_score=0.9,
+        shared_ram=False, use_for_llm=True, reason="discrete GPU",
+    )]
+    assert hardware._pick_backend(cpu, gpus, "linux")["backend"] == "rocm"
+    assert hardware._pick_backend(cpu, gpus, "windows")["backend"] == "vulkan"
+    assert hardware._pick_backend(cpu, gpus, "darwin")["backend"] == "vulkan"
+
+
+def test_pick_backend_no_gpu_returns_cpu():
+    cpu = CPUProfile(
+        vendor="GenuineIntel", name="stub",
+        family=6, model=183, physical_cores=8, logical_cores=8,
+        p_core_ids=list(range(8)), e_core_ids=[],
+        max_boost_mhz=4000.0, simd=["avx2"],
+    )
+    rec = hardware._pick_backend(cpu, [], "linux")
+    assert rec["backend"] == "cpu"
+    assert rec["ngl"] == 0
 
 
 def test_recommend_defaults_threads_use_all_physical_cores():
