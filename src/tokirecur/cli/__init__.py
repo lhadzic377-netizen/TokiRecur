@@ -1172,37 +1172,37 @@ def fix_model_ids() -> None:
                       err=True)
 
 
-def _warn_vulkan_iGPU_will_be_slow(os_name: str, arch: str, backend: str) -> None:
-    """Warn when ``--backend vulkan`` is requested on a box with only
-    shared-RAM GPUs (Intel iGPU, AMD APU, no discrete GPU).
+def _force_cpu_when_no_usable_gpu(os_name: str, arch: str, backend: str) -> str:
+    """If a GPU backend is requested on a box with no usable GPU,
+    return ``"cpu"`` instead.
 
-    The Vulkan build on such a box still initialises the GPU and syncs
-    on every generation token. Measured on a Core Ultra 155U: tg64 = 0.78
-    t/s with the Vulkan build vs ~50-70 t/s with the CPU build, even
-    though the profile marks the iGPU as not-usable-for-LLM. The CPU
-    build skips the GPU entirely.
+    A GPU is "usable" when the hardware profile says so (``use_for_llm``
+    is True — i.e. not shared-RAM, at least 4 GB VRAM, not lava pipe).
+    On boxes where every GPU fails that check (Intel iGPU only, AMD APU
+    only, no GPU at all) the Vulkan / CUDA / ROCm build still initialises
+    the GPU and syncs on every generation token. Measured on a Core
+    Ultra 155U: tg64 = 0.78 t/s with the Vulkan build vs ~50-70 t/s
+    with the CPU build. The CPU build skips the GPU entirely.
+
+    The rule is generic: any box where no GPU is usable gets the CPU
+    build. No per-vendor special-casing.
     """
-    if backend != "vulkan" or os_name != "ubuntu" or arch != "x64":
-        return
+    if backend not in ("vulkan", "cuda", "rocm"):
+        return backend
     try:
         from ..hardware import profile_box
         prof = profile_box(force=False)
     except Exception:
-        return
+        return backend
     if prof is None or any(g.use_for_llm for g in prof.gpus):
-        return
-    label = (
-        "Intel iGPU"
-        if any(g.vendor == "Intel" for g in prof.gpus)
-        else "no usable GPU"
-    )
+        return backend
     click.echo(
-        f"warning: --backend vulkan on a box with "
-        f"{label}; the Vulkan backend will sync with "
-        f"the GPU on every token and slash generation "
-        f"throughput. Recommended: --backend cpu.",
+        f"note: no usable GPU on this box; switching --backend "
+        f"{backend} -> cpu. The {backend} build would sync with "
+        f"the GPU on every token and slash generation throughput.",
         err=True,
     )
+    return "cpu"
 
 
 def _detect_gpu_backend(os_name: str) -> str:
@@ -1704,7 +1704,7 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
                 f"recommendation ({backend}) and installing CPU instead"
             )
             backend = "cpu"
-        _warn_vulkan_iGPU_will_be_slow(os_name, arch, backend)
+        backend = _force_cpu_when_no_usable_gpu(os_name, arch, backend)
     elif backend == "metal" and os_name != "macos":
         click.echo("error: --backend metal is only available on macOS", err=True)
         raise SystemExit(1) from None

@@ -1084,7 +1084,7 @@ def _fake_drm(tmp_path, vendors):
         (device / "vendor").write_text(v)
 
 
-# ── Vulkan-on-iGPU warning ────────────────────────────────────────
+# ── Force CPU build when no usable GPU is present ────────────────
 
 
 def _stub_profile_with_gpus(monkeypatch, gpus):
@@ -1112,9 +1112,10 @@ def _stub_profile_with_gpus(monkeypatch, gpus):
     )
 
 
-def test_warn_vulkan_igpu_only_box(monkeypatch, capsys):
-    """Linux x64 with only an Intel iGPU (shared RAM, not usable for
-    LLM) — the warning fires, names the iGPU, and points at --backend cpu."""
+def test_force_cpu_when_intel_igpu_only(monkeypatch, capsys):
+    """A Linux x64 box with only an Intel iGPU (shared RAM, not usable
+    for LLM) gets the Vulkan build auto-switched to CPU. The notice
+    explains why."""
     from tokirecur.hardware import GPUProfile
     _stub_profile_with_gpus(monkeypatch, [
         GPUProfile(
@@ -1124,28 +1125,28 @@ def test_warn_vulkan_igpu_only_box(monkeypatch, capsys):
             reason="shared system RAM",
         ),
     ])
-    from tokirecur.cli import _warn_vulkan_iGPU_will_be_slow
-    _warn_vulkan_iGPU_will_be_slow("ubuntu", "x64", "vulkan")
-    stderr = capsys.readouterr().err
-    assert "Intel iGPU" in stderr
-    assert "--backend cpu" in stderr
-    assert "sync" in stderr.lower() or "token" in stderr.lower()
-
-
-def test_warn_vulkan_no_gpu_at_all(monkeypatch, capsys):
-    """Linux x64 with no GPUs at all — the warning still fires (label
-    = 'no usable GPU')."""
-    _stub_profile_with_gpus(monkeypatch, [])
-    from tokirecur.cli import _warn_vulkan_iGPU_will_be_slow
-    _warn_vulkan_iGPU_will_be_slow("ubuntu", "x64", "vulkan")
+    from tokirecur.cli import _force_cpu_when_no_usable_gpu
+    result = _force_cpu_when_no_usable_gpu("ubuntu", "x64", "vulkan")
+    assert result == "cpu"
     stderr = capsys.readouterr().err
     assert "no usable GPU" in stderr
-    assert "--backend cpu" in stderr
+    assert "vulkan" in stderr
+    assert "cpu" in stderr
 
 
-def test_warn_vulkan_silent_when_real_gpu_present(monkeypatch, capsys):
-    """Linux x64 with a real discrete NVIDIA GPU — the Vulkan build
-    is the right choice, no warning."""
+def test_force_cpu_when_no_gpu_at_all(monkeypatch, capsys):
+    """A box with no GPUs at all — Vulkan -> CPU."""
+    _stub_profile_with_gpus(monkeypatch, [])
+    from tokirecur.cli import _force_cpu_when_no_usable_gpu
+    result = _force_cpu_when_no_usable_gpu("ubuntu", "x64", "vulkan")
+    assert result == "cpu"
+    stderr = capsys.readouterr().err
+    assert "no usable GPU" in stderr
+
+
+def test_force_cpu_silent_when_real_gpu_present(monkeypatch, capsys):
+    """A Linux x64 box with a real discrete NVIDIA GPU — Vulkan is the
+    right choice, no auto-switch, no notice."""
     from tokirecur.hardware import GPUProfile
     _stub_profile_with_gpus(monkeypatch, [
         GPUProfile(
@@ -1155,15 +1156,14 @@ def test_warn_vulkan_silent_when_real_gpu_present(monkeypatch, capsys):
             reason="discrete GPU",
         ),
     ])
-    from tokirecur.cli import _warn_vulkan_iGPU_will_be_slow
-    _warn_vulkan_iGPU_will_be_slow("ubuntu", "x64", "vulkan")
-    stderr = capsys.readouterr().err
-    assert stderr == ""
+    from tokirecur.cli import _force_cpu_when_no_usable_gpu
+    result = _force_cpu_when_no_usable_gpu("ubuntu", "x64", "vulkan")
+    assert result == "vulkan"
+    assert capsys.readouterr().err == ""
 
 
-def test_warn_vulkan_silent_for_cpu_backend(monkeypatch, capsys):
-    """The warning must only fire for the vulkan backend; CPU installs
-    on the same hardware produce no warning."""
+def test_force_cpu_silent_for_cpu_backend(monkeypatch, capsys):
+    """CPU installs on the same hardware produce no notice."""
     from tokirecur.hardware import GPUProfile
     _stub_profile_with_gpus(monkeypatch, [
         GPUProfile(
@@ -1173,14 +1173,16 @@ def test_warn_vulkan_silent_for_cpu_backend(monkeypatch, capsys):
             reason="shared system RAM",
         ),
     ])
-    from tokirecur.cli import _warn_vulkan_iGPU_will_be_slow
-    _warn_vulkan_iGPU_will_be_slow("ubuntu", "x64", "cpu")
-    stderr = capsys.readouterr().err
-    assert stderr == ""
+    from tokirecur.cli import _force_cpu_when_no_usable_gpu
+    result = _force_cpu_when_no_usable_gpu("ubuntu", "x64", "cpu")
+    assert result == "cpu"
+    assert capsys.readouterr().err == ""
 
 
-def test_warn_vulkan_silent_on_non_ubuntu(monkeypatch, capsys):
-    """The warning is Linux-only — macOS/Windows installs never fire."""
+def test_force_cpu_works_for_cuda_and_rocm_too(monkeypatch, capsys):
+    """The rule is generic: any GPU backend (vulkan, cuda, rocm) on a
+    box with no usable GPU gets auto-switched. No per-vendor
+    special-casing."""
     from tokirecur.hardware import GPUProfile
     _stub_profile_with_gpus(monkeypatch, [
         GPUProfile(
@@ -1190,9 +1192,29 @@ def test_warn_vulkan_silent_on_non_ubuntu(monkeypatch, capsys):
             reason="shared system RAM",
         ),
     ])
-    from tokirecur.cli import _warn_vulkan_iGPU_will_be_slow
-    _warn_vulkan_iGPU_will_be_slow("macos", "arm64", "vulkan")
-    _warn_vulkan_iGPU_will_be_slow("windows", "x64", "vulkan")
+    from tokirecur.cli import _force_cpu_when_no_usable_gpu
+    assert _force_cpu_when_no_usable_gpu("ubuntu", "x64", "vulkan") == "cpu"
+    assert _force_cpu_when_no_usable_gpu("windows", "x64", "cuda") == "cpu"
+    assert _force_cpu_when_no_usable_gpu("ubuntu", "x64", "rocm") == "cpu"
+
+
+def test_force_cpu_works_on_amd_apu_only(monkeypatch, capsys):
+    """An AMD APU (shared RAM, not usable for LLM) also triggers the
+    auto-switch — the rule is box-level, not vendor-specific."""
+    from tokirecur.hardware import GPUProfile
+    _stub_profile_with_gpus(monkeypatch, [
+        GPUProfile(
+            vendor="AMD", name="Radeon 780M",
+            vram_gb=0.5, driver=None, vulkan_score=0.3,
+            shared_ram=True, use_for_llm=False,
+            reason="shared system RAM",
+        ),
+    ])
+    from tokirecur.cli import _force_cpu_when_no_usable_gpu
+    result = _force_cpu_when_no_usable_gpu("ubuntu", "x64", "vulkan")
+    assert result == "cpu"
     stderr = capsys.readouterr().err
-    assert stderr == ""
+    assert "no usable GPU" in stderr
+    # No mention of "Intel" — the rule is generic.
+    assert "Intel" not in stderr
 
