@@ -27,6 +27,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, Select, Static
 
 from ..ctl import load_registry, model_status, read_client_modes, write_client_mode
+from . import _cleanup as _tui_cleanup
 from . import art
 
 # Fields whose change requires a llama-server restart (the spec's
@@ -1271,5 +1272,11 @@ def run():
     if not __import__("sys").stdout.isatty():
         Console().print("error: toki requires an interactive terminal (TTY).", style="red")
         return 2
+    # See tui/_cleanup.py — Textual's own exit cleanup can be skipped
+    # on a busy box (slow _poll_statuses blocks the loop) or when an
+    # OS signal arrives. Defensive cleanup runs via atexit + signal
+    # handlers so the user's keystrokes stay visible after `toki`
+    # quits.
+    _tui_cleanup.install()
     app = LauncherApp(on_launch=on_launch)
     return app.run() or 0

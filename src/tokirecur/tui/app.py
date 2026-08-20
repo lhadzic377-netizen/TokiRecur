@@ -19,6 +19,7 @@ from textual.containers import Container, Horizontal
 from textual.reactive import reactive
 from textual.widgets import Input
 
+from . import _cleanup as _tui_cleanup
 from . import history
 from .client import DaemonClient
 from .widgets import (
@@ -677,6 +678,10 @@ def run(
     auth_token: str | None = None,
 ) -> None:
     """Entry point invoked by the CLI subcommand."""
+    # See tui/_cleanup.py — defensive cleanup so the terminal is
+    # restored after `toki tui` quits even if Textual's own cleanup
+    # is skipped by a slow callback or an OS signal.
+    _tui_cleanup.install()
     app = TokiApp(
         daemon_url=daemon_url, raw_url=raw_url, auth_token=auth_token,
     )
