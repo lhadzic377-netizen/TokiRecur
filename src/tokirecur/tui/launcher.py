@@ -15,6 +15,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 from rich.text import Text
@@ -183,6 +184,22 @@ class LauncherApp(App[dict | None]):
         self._refresh_pinned()
         self._client_modes = read_client_modes()
         self.set_interval(3.0, self._poll_statuses)
+        # install.sh writes this marker before killing any running toki.
+        # If we got here with the marker still on disk, our process
+        # somehow survived the pgrep (a wrapper script, a tmux session
+        # that restarted it). The in-memory modules are stale — warn
+        # once and clear the marker so we don't nag on every launch.
+        marker = Path.home() / ".local" / "state" / "tokirecur" / "restart-pending"
+        if marker.exists():
+            try:
+                marker.unlink()
+            except OSError:
+                pass
+            self.notify(
+                "toki was reinstalled — relaunch the launcher (q + toki) "
+                "to see new dropdown options and settings UX.",
+                timeout=10,
+            )
 
     def compose(self) -> ComposeResult:
         self.pane = Static("", id="pane", markup=False)

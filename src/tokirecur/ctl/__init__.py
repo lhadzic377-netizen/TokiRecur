@@ -1611,6 +1611,24 @@ def _resolve_binary(spec: ModelSpec) -> str:
     return "llama-server"
 
 
+def _effective_ngl(spec: ModelSpec) -> int:
+    """Resolve the -ngl value that ``_llama_args`` will actually pass.
+
+    Same precedence as ``_llama_args``: ``extra_args`` pinning wins
+    (the user explicitly chose it via registry or model config), then
+    ``TOKI_NGL`` env override, then the hardware-profile default. When
+    ``extra_args`` pins -ngl 0 the function still returns 0 so the
+    fail-fast check below doesn't misfire on a legitimate CPU run.
+    """
+    for i, a in enumerate(spec.extra_args):
+        if a in ("-ngl", "--n-gpu-layers") and i + 1 < len(spec.extra_args):
+            try:
+                return int(spec.extra_args[i + 1])
+            except ValueError:
+                return 0
+    return _default_ngl()
+
+
 def _default_ngl() -> int:
     """Offload layers for llama-server. ``TOKI_NGL`` wins; otherwise the
     hardware profile decides; if no profile is available, CPU wins.
@@ -1646,31 +1664,50 @@ def _default_ngl() -> int:
     return 0
 
 
-def _warn_gpu_offload_without_gpu_binary(binary: str, ngl: int) -> None:
-    """Warn when the user forced GPU offload (TOKI_NGL > 0) but the
-    installed llama-server build has no GPU backend loaded.
+def _check_gpu_offload_binary_match(
+    binary: str, ngl: int | None, *, strict: bool = False,
+) -> bool:
+    """Return True when ``ngl > 0`` against a CPU binary would degrade
+    throughput silently. Callers in ``strict`` mode (``start_model``)
+    must abort with a clear error; non-strict callers (the launcher
+    settings preview) just emit the warning.
 
-    This is the classic footgun the CPU/Vulkan build mix produced on
-    Intel iGPU boxes: -ngl 99 with a CPU build silently falls back to
-    CPU per-layer, or worse, the Vulkan build initialises the iGPU and
-    syncs on every token (0.78 t/s measured). The warning is stderr
-    only; the launch proceeds with the user's explicit choice.
+    The classic footgun the CPU/Vulkan build mix produced on Intel
+    iGPU boxes: -ngl 99 with a CPU build silently falls back to CPU
+    per-layer, or worse, the Vulkan build initialises the iGPU and
+    syncs on every token (0.78 t/s measured). Once install-llama can
+    land the wrong backend (e.g. a Linux ROCm box with no release
+    asset ships a CPU build), the model still launches, the user
+    gets degraded perf, and the only feedback is a stderr warning
+    that's easy to miss. Refusing to start forces the issue.
     """
-    if not ngl:
-        return
+    if not ngl or ngl <= 0:
+        return True
     try:
         from ..diagnose import binary_backend
         kind = binary_backend(binary)
     except Exception:
-        return
-    if kind and kind.lower() not in ("cuda", "rocm", "vulkan", "metal"):
-        click.echo(
-            f"warning: TOKI_NGL={ngl} requests GPU offload but this "
-            f"llama-server build is {kind}; expected throughput is CPU "
-            f"only. Install the matching GPU build with "
-            f"`toki install-llama --backend {kind or 'auto'}`.",
-            err=True,
-        )
+        return True  # can't inspect; trust the user's explicit ngl
+    if not kind or kind.lower() in ("cuda", "rocm", "vulkan", "metal"):
+        return True
+    msg = (
+        f"GPU offload requested (-ngl {ngl}) but the installed "
+        f"llama-server build is {kind}; expected throughput is CPU "
+        f"only. Install the matching GPU build with "
+        f"`toki model install-llama --backend auto` (or pass "
+        f"TOKI_NGL=0 to force CPU mode for this launch)."
+    )
+    if strict:
+        raise RuntimeError(msg)
+    click.echo(f"warning: {msg}", err=True)
+    return False
+
+
+def _warn_gpu_offload_without_gpu_binary(binary: str, ngl: int) -> None:
+    """Backward-compatible warning wrapper. New code should call
+    ``_check_gpu_offload_binary_match`` directly with the right
+    ``strict`` flag."""
+    _check_gpu_offload_binary_match(binary, ngl, strict=False)
 
 
 def _intel_igpu_only() -> bool:
@@ -2127,10 +2164,22 @@ def start_model(spec: ModelSpec, wait: bool = True) -> None:
                 "slots %d (spec %d) so the KV cache fits in RAM",
                 spec.name, ctx, spec.ctx_size, kv, spec.kv, parallel, spec.parallel,
             )
+        # Fail-fast on GPU/CPU mismatch before any process is spawned.
+        # If the registry or TOKI_NGL asks for GPU offload but the
+        # installed llama-server is a CPU build, refuse to start —
+        # silent CPU fallback wastes RAM on a broken KV cache layout
+        # and produces 0.5–1 t/s on boxes that should hit 40+.
+        args = _llama_args(spec, ctx_override=ctx, kv_override=kv,
+                           parallel_override=parallel)
+        binary = _resolve_binary(spec)
+        _check_gpu_offload_binary_match(
+            binary,
+            _effective_ngl(spec),
+            strict=True,
+        )
         log = open(state / "llama.log", "ab")
         proc = subprocess.Popen(
-            _llama_args(spec, ctx_override=ctx, kv_override=kv,
-                        parallel_override=parallel),
+            args,
             stdout=log,
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,

@@ -79,6 +79,61 @@ if [[ $EUID -ne 0 ]]; then
       exit 1
     fi
 
+    # Kill any running toki TUI process so the new code actually loads
+    # on the next launch. A running Textual process keeps its already-
+    # imported Python modules in memory; pipx-install --force only
+    # replaces the on-disk files. Without this step users who had the
+    # launcher open during an upgrade would keep seeing the old UI
+    # (and any newly-shipped dropdown options, keybindings, settings
+    # UX) until they manually quit and relaunch. The PID list also
+    # captures any open `toki tui` chat REPL.
+    _kill_stale_toki() {
+      local pid cmd started_epoch now_epoch age
+      now_epoch="$(date +%s)"
+      # pgrep -f matches on the full command line; -x would miss the
+      # pipx shebang path which differs from the bare "toki" word.
+      while IFS= read -r pid; do
+        [[ -z "$pid" ]] && continue
+        # Skip our own shell and any direct child of the installer.
+        [[ "$pid" == "$$" ]] && continue
+        cmd="$(ps -p "$pid" -o args= 2>/dev/null || true)"
+        [[ -z "$cmd" ]] && continue
+        # Only kill the toki CLI itself, not unrelated processes that
+        # happen to mention "toki" in their args.
+        case "$cmd" in
+          *"/bin/toki "|*"/bin/toki"|*pipx/venvs/tokirecur/bin/python*"toki "*|*pipx/venvs/tokirecur/bin/python*"toki"|*"toki tui "*|*"toki tui") ;;
+          *) continue ;;
+        esac
+        started_epoch="$(ps -p "$pid" -o lstart= 2>/dev/null | \
+          awk '{print $4}' | xargs -I{} date -d "{}" +%s 2>/dev/null || echo 0)"
+        [[ "$started_epoch" == "0" ]] && started_epoch="$now_epoch"
+        age=$((now_epoch - started_epoch))
+        # Anything older than 5 s is "from before this install" — the
+        # install itself takes much less than 5 s, so the threshold is
+        # safe and avoids killing a toki the user just launched.
+        if (( age > 5 )); then
+          echo "  stopping stale toki TUI (pid $pid, running ${age}s)" >&2
+          kill "$pid" 2>/dev/null || true
+        fi
+      done < <(pgrep -f 'tokirecur/bin/toki\b' 2>/dev/null || true)
+    }
+    # Drop a "restart recommended" marker so the next toki launch — if
+    # it survived the pgrep above (e.g. a different process tree, a
+    # wrapper script that escaped the match) — can warn the user that
+    # its in-memory modules are stale. Cleared by the launcher on
+    # startup once the banner fires.
+    _STATE_DIR="${HOME}/.local/state/tokirecur"
+    mkdir -p "$_STATE_DIR"
+    date +%s > "$_STATE_DIR/restart-pending" 2>/dev/null || true
+    unset _STATE_DIR
+    if pgrep -f 'tokirecur/bin/toki\b' >/dev/null 2>&1; then
+      _yellow_bar "refreshing TUI" 50
+      _kill_stale_toki
+      # Give Textual a moment to handle SIGTERM cleanly; the next
+      # `toki` invocation picks up the freshly-installed modules.
+      sleep 1
+    fi
+
     if [[ "${TOKI_SKIP_LLAMA:-0}" != "1" ]]; then
       echo ""
       _yellow_bar "fetching llama-server" 55

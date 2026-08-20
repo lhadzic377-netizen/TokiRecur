@@ -1577,6 +1577,108 @@ def _pick_asset(
     return asset, backend
 
 
+def _find_local_llama_server() -> str | None:
+    """Return the absolute path of a locally-built llama-server, or
+    None when none is on disk.
+
+    Search order:
+      1. ``LLAMA_CPP_BLD`` env var (set by ``scripts/build_llama_cpp.sh``)
+      2. ``$HOME/llama.cpp/build-tr/bin/llama-server`` (the script's default)
+      3. ``$HOME/llama.cpp/build/bin/llama-server`` (manual builds)
+      4. ``/usr/local/bin/llama-server`` and ``/opt/llama.cpp/build/bin/llama-server``
+
+    Used by ``install-llama`` when llama.cpp no longer ships a release
+    asset for the requested backend (Linux ROCm post-b10375, custom
+    CUDA builds). The state-dir copy is then made via
+    ``_safe_copy_replace`` so the rest of the launch path stays uniform
+    — the registry, ``binary_backend`` and the warn checks all see the
+    same path.
+    """
+    candidates: list[Path] = []
+    bld = os.environ.get("LLAMA_CPP_BLD")
+    if bld:
+        candidates.append(Path(bld) / "bin" / "llama-server")
+    home = Path.home()
+    candidates.extend([
+        home / "llama.cpp" / "build-tr" / "bin" / "llama-server",
+        home / "llama.cpp" / "build" / "bin" / "llama-server",
+        Path("/usr/local/bin/llama-server"),
+        Path("/opt/llama.cpp/build/bin/llama-server"),
+    ])
+    for c in candidates:
+        try:
+            if c.is_file() and os.access(c, os.X_OK):
+                return str(c.resolve())
+        except OSError:
+            continue
+    return None
+
+
+def _local_binary_backend(local_path: str) -> str | None:
+    """Backend label reported by a locally-built llama-server (CUDA /
+    ROCm / Vulkan / CPU). Used to record what backend the local build
+    actually carries, so the post-install verify step has something
+    concrete to compare against.
+    """
+    try:
+        from ..diagnose import binary_backend
+        return binary_backend(local_path)
+    except Exception:
+        return None
+
+
+def _install_from_local(
+    local_path: str, *, asset_name: str | None, bin_dir: Path,
+    exe_name: str, backend: str, os_name: str,
+) -> None:
+    """Copy a locally-built llama-server into ``bin_dir`` using the
+    same safe-copy path as a release asset, then run the post-install
+    backend verify. Used by the local-build fallback so the rest of
+    the launcher sees a uniform ``STATE_ROOT/bin/llama-server``.
+    """
+    src = Path(local_path)
+    dst = bin_dir / exe_name
+    _sweep_stale_backups(bin_dir, exe_name)
+    _safe_copy_replace(src, dst)
+    # Local builds don't ship separate libggml-*.so files alongside
+    # the binary on every host — when they do (CUDA/ROCm Linux
+    # dynamic builds), copy them too so the post-install verify
+    # matches the dynamic build.
+    src_dir = src.parent
+    for side in src_dir.iterdir():
+        if side.is_file() and side != src:
+            _safe_copy_replace(side, bin_dir / side.name)
+    # Even with a local ROCm/CUDA build, prune any stray CPU/GPU
+    # libs from a previous install that don't match this backend.
+    _prune_foreign_gpu_libs(bin_dir, backend)
+    if os_name != "windows":
+        try:
+            dst.chmod(dst.stat().st_mode | 0o111)
+        except OSError:
+            pass
+    click.echo(f"installed: {dst}")
+    from ..diagnose import binary_backend
+    landed = (binary_backend(str(dst)) or "unknown").lower()
+    if landed == "unknown":
+        click.echo(
+            "verify: could not inspect the installed binary; "
+            f"expected backend {backend}",
+            err=True,
+        )
+    elif landed != backend:
+        click.echo(
+            f"error: expected backend {backend} but this build is "
+            f"{landed} — local build does not match the requested "
+            f"backend. Rebuild with the matching target "
+            f"(./scripts/build_llama_cpp.sh) or rerun with "
+            f"--backend {landed}.",
+            err=True,
+        )
+        raise SystemExit(1)
+    else:
+        click.echo(f"verify: landed backend {landed} (expected {backend})")
+
+
 def _cuda_runtime_archive_name(main_asset_name: str) -> str | None:
     """Name of the cudart runtime archive paired with a CUDA main asset.
 
@@ -1824,6 +1926,53 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
     bin_dir.mkdir(parents=True, exist_ok=True)
     exe_name = "llama-server.exe" if os_name == "windows" else "llama-server"
 
+    # Prefer a locally-built llama-server over a release asset when
+    # the resolved backend is CPU and the user has clearly built a
+    # GPU variant on this box (the build script ships a ROCm binary
+    # by default on Linux). The profile's CPU recommendation can be
+    # wrong when ``use_for_llm`` flipped yes for an APU with 0.5 GB
+    # VRAM, or when the user upgraded hardware and didn't re-profile.
+    # Honouring the explicit local build also gives Linux ROCm /
+    # CUDA users post-b10375 (no release asset) what they built.
+    if backend == "cpu":
+        local = _find_local_llama_server()
+        if local:
+            from ..diagnose import binary_backend
+            local_kind = (binary_backend(local) or "").lower()
+            if local_kind in ("cuda", "rocm", "vulkan", "metal"):
+                click.echo(
+                    f"backend: local {local_kind} build at {local} "
+                    f"(overrides profile's CPU recommendation; "
+                    f"rebuild with ./scripts/build_llama_cpp.sh to refresh)",
+                    err=True,
+                )
+                _install_from_local(local, asset_name=None,
+                                    bin_dir=bin_dir, exe_name=exe_name,
+                                    backend=local_kind, os_name=os_name)
+                return
+
+    # Refuse to silently downgrade a working GPU binary to CPU. When
+    # the bin dir already has a llama-server built with a GPU backend,
+    # overwriting it with a CPU build makes every existing model spec
+    # that pins ``-ngl 99`` refuse to start (``_check_gpu_offload_binary_match``
+    # is now strict). Refuse the downgrade unless the user explicitly
+    # forces it via TOKI_INSTALL_LLAMA_FORCE_DOWNGRADE=1.
+    existing = bin_dir / exe_name
+    if existing.exists():
+        from ..diagnose import binary_backend
+        existing_kind = (binary_backend(str(existing)) or "").lower()
+        if (existing_kind in ("cuda", "rocm", "vulkan", "metal")
+                and backend == "cpu"
+                and os.environ.get("TOKI_INSTALL_LLAMA_FORCE_DOWNGRADE") != "1"):
+            raise click.ClickException(
+                f"refusing to overwrite the existing {existing_kind} "
+                f"llama-server at {existing} with a CPU build — every "
+                f"model pinned to GPU offload would refuse to start. "
+                f"Re-run with --backend {existing_kind} to refresh the "
+                f"GPU build, or set TOKI_INSTALL_LLAMA_FORCE_DOWNGRADE=1 "
+                f"to force the CPU replacement."
+            )
+
     # MLX has no release binary — it's a pip package. Install it, write
     # a shim into the bin dir, and point the registry at mlx_lm.server.
     if backend == "mlx":
@@ -1914,12 +2063,47 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
     assets = release["assets"]
     asset, matched_backend = _pick_asset(assets, patterns)
     if asset is None:
+        # No release asset for the requested backend on this OS/arch —
+        # the classic Linux ROCm post-b10375 case. Fall back to a
+        # locally-built llama-server when one exists, so a user who
+        # built with ./scripts/build_llama_cpp.sh doesn't end up with
+        # a CPU binary and -ngl 99 refusing to start.
+        local = _find_local_llama_server()
+        if local and backend != "cpu":
+            click.echo(
+                f"note: no {backend} asset on llama.cpp releases for "
+                f"{os_name}/{arch}; using locally-built llama-server at "
+                f"{local} instead. (Build with "
+                f"./scripts/build_llama_cpp.sh to refresh.)",
+                err=True,
+            )
+            backend = _local_binary_backend(local) or backend
+            return _install_from_local(local, asset_name=None,
+                                       bin_dir=bin_dir, exe_name=exe_name,
+                                       backend=backend, os_name=os_name)
         names = ", ".join(a.get("name", "") for a in assets[:12])
         raise RuntimeError(
             f"no asset matching {backend} for {os_name}/{arch} in {tag_name}; "
             f"available (first 12): {names}"
         )
     if matched_backend != backend:
+        # Release fell back to a different backend than requested —
+        # usually CPU when the user wanted a GPU backend that has no
+        # release asset for this OS/arch. Try the local build before
+        # silently downgrading to CPU.
+        local = _find_local_llama_server()
+        if local and matched_backend == "cpu" and backend != "cpu":
+            click.echo(
+                f"note: no {backend} asset on llama.cpp releases for "
+                f"{os_name}/{arch}; using locally-built llama-server at "
+                f"{local} instead of the CPU fallback. (Build with "
+                f"./scripts/build_llama_cpp.sh to refresh.)",
+                err=True,
+            )
+            backend = _local_binary_backend(local) or backend
+            return _install_from_local(local, asset_name=None,
+                                       bin_dir=bin_dir, exe_name=exe_name,
+                                       backend=backend, os_name=os_name)
         click.echo(
             f"note: no {backend} build for {os_name}/{arch}; "
             f"installing {matched_backend} instead"

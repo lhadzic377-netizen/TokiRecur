@@ -1300,3 +1300,133 @@ def test_prune_foreign_gpu_libs_missing_bin_dir_is_noop(tmp_path):
     from tokirecur.cli import _prune_foreign_gpu_libs
     _prune_foreign_gpu_libs(tmp_path / "does-not-exist", "cpu")
 
+
+def test_find_local_llama_server_prefers_LLAMA_CPP_BLD_env(tmp_path, monkeypatch):
+    """``LLAMA_CPP_BLD`` env var wins over the default search paths —
+    this is how ``scripts/build_llama_cpp.sh`` points at its build dir."""
+    from tokirecur.cli import _find_local_llama_server
+    bld = tmp_path / "llama-bld" / "bin" / "llama-server"
+    bld.parent.mkdir(parents=True)
+    bld.write_bytes(b"#!/bin/sh\nexit 0\n")
+    bld.chmod(0o755)
+    monkeypatch.setenv("LLAMA_CPP_BLD", str(tmp_path / "llama-bld"))
+    # A second candidate in $HOME that should NOT be chosen.
+    fallback = tmp_path / "fallback" / "bin" / "llama-server"
+    fallback.parent.mkdir(parents=True)
+    fallback.write_bytes(b"#!/bin/sh\nexit 0\n")
+    fallback.chmod(0o755)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "fallback")
+    assert _find_local_llama_server() == str(bld.resolve())
+
+
+def test_find_local_llama_server_returns_none_when_absent(tmp_path, monkeypatch):
+    """No local build anywhere — the helper returns None and the
+    installer falls back to (or fails on) the GitHub release."""
+    from tokirecur.cli import _find_local_llama_server
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.delenv("LLAMA_CPP_BLD", raising=False)
+    assert _find_local_llama_server() is None
+
+
+def test_find_local_llama_server_skips_non_executable(tmp_path, monkeypatch):
+    """A binary file without the executable bit is skipped — without
+    that check the installer would copy it and llama-server would
+    fail to spawn on POSIX with EACCES."""
+    from tokirecur.cli import _find_local_llama_server
+    bld = tmp_path / "build-tr" / "bin" / "llama-server"
+    bld.parent.mkdir(parents=True)
+    bld.write_bytes(b"data")
+    bld.chmod(0o644)  # not executable
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.delenv("LLAMA_CPP_BLD", raising=False)
+    assert _find_local_llama_server() is None
+
+
+def test_install_refuses_to_overwrite_gpu_binary_with_cpu(tmp_path, monkeypatch):
+    """The bin dir already has a working ROCm/CUDA/Vulkan/Metal
+    llama-server. ``install-llama`` (auto or ``--backend cpu``) must
+    refuse to replace it with a CPU build unless the user forces the
+    downgrade — otherwise every spec pinning ``-ngl 99`` would refuse
+    to start after the install.
+    """
+    from click.testing import CliRunner
+
+    from tokirecur.cli import cli
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    existing = bin_dir / "llama-server"
+    existing.write_bytes(b"existing-gpu-binary")
+    existing.chmod(0o755)
+    # Stub binary_backend to report the existing binary as GPU.
+    monkeypatch.setattr(
+        "tokirecur.diagnose.binary_backend",
+        lambda p: "ROCm" if str(p) == str(existing) else None,
+    )
+
+    runner = CliRunner()
+    monkeypatch.setenv("TOKI_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.delenv("TOKI_INSTALL_LLAMA_FORCE_DOWNGRADE", raising=False)
+    result = runner.invoke(
+        cli, ["model", "install-llama", "--backend", "cpu", "--to", str(bin_dir)],
+    )
+    assert result.exit_code != 0, result.output
+    # The pre-existing GPU binary must still be on disk.
+    assert existing.exists()
+    assert "refusing to overwrite" in result.output.lower() or \
+           "refusing to overwrite" in (result.output + result.stderr).lower()
+
+
+def test_install_force_downgrade_env_overrides_gpu_to_cpu_guard(tmp_path, monkeypatch):
+    """``TOKI_INSTALL_LLAMA_FORCE_DOWNGRADE=1`` lets the user explicitly
+    accept the downgrade — needed for CI / scripted rebuilds that
+    genuinely want a CPU binary."""
+    from click.testing import CliRunner
+
+    from tokirecur.cli import cli
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    existing = bin_dir / "llama-server"
+    existing.write_bytes(b"existing-gpu-binary")
+    existing.chmod(0o755)
+    monkeypatch.setattr(
+        "tokirecur.diagnose.binary_backend",
+        lambda p: "ROCm" if str(p) == str(existing) else None,
+    )
+    # Stub the network/asset path entirely so we test only the guard.
+    monkeypatch.setattr("tokirecur.cli._find_local_llama_server", lambda: None)
+
+    def fake_download(*args, **kwargs):
+        # Drop a fake CPU llama-server into bin_dir and return.
+        (bin_dir / "llama-server").write_bytes(b"new-cpu-binary")
+        (bin_dir / "llama-server").chmod(0o755)
+        return None
+
+    monkeypatch.setattr("tokirecur.cli._download_and_unpack_zip", fake_download)
+    monkeypatch.setattr(
+        "tokirecur.cli._pick_asset",
+        lambda assets, patterns: ({"name": "llama-cpu.zip"}, "cpu"),
+    )
+    monkeypatch.setattr(
+        "tokirecur.cli.httpx.Client",
+        lambda *a, **kw: type("C", (), {
+            "get": staticmethod(lambda *a, **kw: type("R", (), {
+                "json": staticmethod(lambda self: {
+                    "tag_name": "b99999",
+                    "assets": [{"name": "llama-cpu.zip"}],
+                })
+            })())
+        })(),
+    )
+
+    runner = CliRunner()
+    monkeypatch.setenv("TOKI_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("TOKI_INSTALL_LLAMA_FORCE_DOWNGRADE", "1")
+    result = runner.invoke(
+        cli, ["model", "install-llama", "--backend", "cpu", "--to", str(bin_dir)],
+    )
+    # The downgrade should now be allowed (the guard exits cleanly
+    # and the rest of the install runs against the fake download).
+    assert "refusing to overwrite" not in result.output.lower()
+

@@ -28,6 +28,31 @@ def isolated_registry(tmp_path, monkeypatch):
 def test_apps_bind_to_pinned_model():
     keys = [a.key for a in LAUNCH_APPS]
     assert keys == ["toki", "opencode", "hermes", "openclaw", "codex", "web"]
+
+
+def test_launcher_warns_when_restart_pending_marker_present(tmp_path, monkeypatch):
+    """install.sh writes ``~/.local/state/tokirecur/restart-pending``
+    before killing any running toki TUI. If a fresh launch starts
+    with that marker still on disk (the running process escaped the
+    pgrep), the in-memory modules are stale — warn the user once and
+    clear the marker so subsequent launches don't re-warn.
+    """
+    # Point HOME at tmp_path so ``Path.home()`` resolves inside the
+    # test; the launcher reads ``~/.local/state/tokirecur/restart-pending``.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    marker = tmp_path / ".local" / "state" / "tokirecur" / "restart-pending"
+    marker.parent.mkdir(parents=True)
+    marker.write_text("12345")
+
+    async def run_app():
+        async with LauncherApp().run_test(size=(100, 34)) as pilot:
+            await pilot.pause()
+            return marker.exists()
+
+    # The marker is cleared on mount; subsequent launches won't nag.
+    assert asyncio.run(run_app()) is False
+    keys = [a.key for a in LAUNCH_APPS]
+    assert keys == ["toki", "opencode", "hermes", "openclaw", "codex", "web"]
     assert all(a.interface in ("chat", "tui", "web") for a in LAUNCH_APPS)
 
 

@@ -1135,9 +1135,40 @@ def test_warn_gpu_offload_without_gpu_binary(monkeypatch, capsys, tmp_path):
     )
     ctl._warn_gpu_offload_without_gpu_binary(str(binary), 99)
     err = capsys.readouterr().err
-    assert "TOKI_NGL=99" in err
+    assert "-ngl 99" in err
     assert "CPU" in err
     assert "install-llama" in err
+
+
+def test_check_gpu_offload_strict_raises_on_cpu_binary(monkeypatch):
+    """The strict path used by ``start_model`` raises instead of
+    warning — silent CPU fallback is the footgun this catches."""
+    monkeypatch.setattr(
+        "tokirecur.diagnose.binary_backend", lambda b: "CPU",
+    )
+    with pytest.raises(RuntimeError, match="CPU"):
+        ctl._check_gpu_offload_binary_match("/nope/llama-server", 99, strict=True)
+
+
+def test_check_gpu_offload_returns_true_when_ngl_zero(monkeypatch):
+    """ngl=0 against a CPU build is the right thing; never warn."""
+    monkeypatch.setattr(
+        "tokirecur.diagnose.binary_backend", lambda b: "CPU",
+    )
+    assert ctl._check_gpu_offload_binary_match(
+        "/nope/llama-server", 0, strict=True
+    ) is True
+
+
+def test_check_gpu_offload_returns_true_when_gpu_binary(monkeypatch):
+    """A ROCm/CUDA/Vulkan/Metal build with -ngl 99 is fine."""
+    for kind in ("CUDA", "ROCm", "Vulkan", "Metal"):
+        monkeypatch.setattr(
+            "tokirecur.diagnose.binary_backend", lambda b, k=kind: k,
+        )
+        assert ctl._check_gpu_offload_binary_match(
+            "/nope/llama-server", 99, strict=True
+        ) is True
 
 
 def test_warn_gpu_offload_silent_when_ngl_zero(monkeypatch, capsys):
@@ -2528,6 +2559,31 @@ def _fake_run(device_names):
         return _RunResult("".join(lines))
 
     return run
+
+
+def test_effective_ngl_returns_zero_when_extra_args_pin_zero(seeded_env):
+    """When the registry pins ``-ngl 0`` (a CPU-only run), the
+    fail-fast check must see zero and skip the GPU-binary check even
+    if a CPU binary is correctly installed."""
+    from dataclasses import replace
+    spec = _ngl_spec(seeded_env)
+    spec = replace(spec, extra_args=["-ngl", "0", "-t", "8"])
+    assert ctl._effective_ngl(spec) == 0
+
+
+def test_effective_ngl_returns_pinned_value_from_extra_args(seeded_env):
+    """A user-pinned -ngl wins over TOKI_NGL and the profile."""
+    from dataclasses import replace
+    spec = _ngl_spec(seeded_env)
+    spec = replace(spec, extra_args=["-ngl", "42"])
+    assert ctl._effective_ngl(spec) == 42
+
+
+def test_effective_ngl_falls_back_to_default_ngl(seeded_env, monkeypatch):
+    """With no extra_args, ``TOKI_NGL`` env wins, then the profile."""
+    monkeypatch.setenv("TOKI_NGL", "7")
+    spec = _ngl_spec(seeded_env)
+    assert ctl._effective_ngl(spec) == 7
 
 
 def test_default_ngl_uses_profile_when_present(monkeypatch):
