@@ -11,6 +11,7 @@ wordmark heads the pane (no ASCII art). Footer bar hints the keys.
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import lru_cache
@@ -166,6 +167,12 @@ class LauncherApp(App[dict | None]):
         self._error: str | None = None
         self._launching: str | None = None
         self._client_modes: dict[str, str] = {}
+        # Per-(model, field) marker for restart-required settings that
+        # were just committed but whose live value hasn't caught up yet.
+        # Rendered as "⟳ restarting" on the settings row until the next
+        # poll sees the live value agree with the registry, or 8 s as a
+        # hard ceiling. See ``_commit_edit`` / ``_poll_statuses``.
+        self._restarting: dict[tuple[str, str], float] = {}
 
     # ── Compose ───────────────────────────────────────────────────────
 
@@ -205,6 +212,8 @@ class LauncherApp(App[dict | None]):
             return None
 
     def _poll_statuses(self) -> None:
+        now = time.monotonic()
+        changed = False
         for spec in self.specs:
             try:
                 st = model_status(spec)
@@ -215,10 +224,32 @@ class LauncherApp(App[dict | None]):
                 }
             except Exception:
                 self._statuses[spec.name] = {}
+        # Clear any restart markers that have landed: the live value
+        # agrees with the registry now, OR the 8 s hard ceiling expired
+        # (the restart either succeeded silently or the poll stalled —
+        # either way stop showing the marker). Keys here are
+        # (model_name, field).
+        stale: list[tuple[str, str]] = []
+        for key, started_at in self._restarting.items():
+            name, field = key
+            spec = next((s for s in self.specs if s.name == name), None)
+            if spec is None:
+                stale.append(key)
+                continue
+            if now - started_at > 8.0:
+                stale.append(key)
+                continue
+            live = _live_value(self, spec, field)
+            if live is not None and str(live) == str(getattr(spec, field, None)):
+                stale.append(key)
+        for key in stale:
+            del self._restarting[key]
+            changed = True
         # Live values change when llama-server boots/restarts; the
         # settings row cache must reflect that, otherwise we'd render
         # stale "live: 8192" forever.
-        invalidate_settings_rows()
+        if changed:
+            invalidate_settings_rows()
         self._refresh += 1
 
     def watch__refresh(self, _: int) -> None:
@@ -393,15 +424,22 @@ class LauncherApp(App[dict | None]):
         """Write the registry, optionally apply the downstream effect,
         and surface what happened to the user."""
         from .. import ctl as ctl_mod
+        # Mark restart-required fields as in-flight so the row can show
+        # "⟳ restarting" until the next poll sees the live value catch
+        # up. Sync-only and no-op fields don't need a marker.
+        if field in _RESTART_REQUIRED_FIELDS:
+            self._restarting[(name, field)] = time.monotonic()
         try:
             ctl_mod.update_spec_field(name, field, new_value, apply=apply)
         except (ValueError, KeyError) as e:
+            self._restarting.pop((name, field), None)
             self.notify(str(e), timeout=4, severity="error")
             return
         except (RuntimeError, OSError) as e:
             # Restart required but failed (binary not built, RAM too
             # low, etc.). Registry still holds the new value; tell the
             # user the restart failed and the next launch will use it.
+            self._restarting.pop((name, field), None)
             self.specs = ctl_mod.load_registry()
             invalidate_settings_rows()
             self._refresh += 1
@@ -683,6 +721,11 @@ class LauncherApp(App[dict | None]):
                 line.append(value, style="dim")
             if dropdown:
                 line.append("  ▾", style="dim")
+            if (name, field) in self._restarting:
+                # In-flight marker: the registry has the new value but
+                # llama-server hasn't caught up yet. Cleared by the
+                # next poll (live==reg) or the 8 s hard ceiling.
+                line.append("  ⟳ restarting", style=f"bold {art.YELLOW}")
             out.append(line)
         return out
 
@@ -755,8 +798,11 @@ _SETTINGS_CHOICES: dict[str, dict[str, str]] = {
         "8192": "8192",
         "16384": "16384",
         "32768": "32768",
+        "50000": "50000",
         "65536": "65536",
+        "100000": "100000",
         "131072": "131072",
+        "200000": "200000",
         "custom…": _CUSTOM_VALUE,
     },
     "max_tokens": {
@@ -1013,7 +1059,6 @@ class SettingsChoiceScreen(ModalScreen[str | None]):
             yield Label(
                 f"Edit  [b]{self._model_name}[/b]  ·  [b]{self._field}[/b]"
             )
-            yield Label(f"current: {self._current}", id="settings-choice-current")
             yield Select(
                 options,
                 value=selected,
@@ -1033,6 +1078,26 @@ class SettingsChoiceScreen(ModalScreen[str | None]):
             self.dismiss(None if selected is Select.BLANK else str(selected))
         else:
             self.dismiss(None)
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        """Auto-commit the pick: pressing Enter on a dropdown option now
+        dismisses the modal with that value (no Tab-to-Save dance). The
+        Save button is kept as a fallback for users who confirm via
+        keyboard after focusing it. ``_CUSTOM_VALUE`` chains into the
+        text editor (handled by ``_on_choice_dismissed``).
+
+        Skips the auto-commit when the new value matches the value the
+        modal opened with — the Select widget fires ``Changed`` on its
+        initial construction (when ``compose`` sets the preselect), and
+        dismissing on that would open a confirmation modal for a no-op
+        edit. The Save button stays the explicit "commit" gesture for
+        the no-op case.
+        """
+        if event.value is Select.BLANK:
+            return
+        if str(event.value).lower() == self._current.lower():
+            return
+        self.dismiss(str(event.value))
 
     def action_cancel(self) -> None:
         self.dismiss(None)

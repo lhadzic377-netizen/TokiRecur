@@ -389,6 +389,54 @@ def test_settings_choices_map_covers_expected_fields():
     assert _SETTINGS_CHOICES["reasoning"]["auto"] == "auto"
 
 
+def test_settings_choices_ctx_includes_50000_100000_200000():
+    """The three ctx presets that match the registry's actual default
+    values must be reachable from the dropdown without typing them in
+    through custom…."""
+    from tokirecur.tui.launcher import _SETTINGS_CHOICES
+
+    ctx = _SETTINGS_CHOICES["ctx_size"]
+    for v in ("50000", "100000", "200000"):
+        assert ctx.get(v) == v, f"missing ctx_size preset {v}"
+
+
+def test_settings_choices_ctx_ordering_ascending():
+    """Numeric presets appear in ascending order so the dropdown is
+    scannable; ``custom…`` stays last."""
+    from tokirecur.tui.launcher import _CUSTOM_VALUE, _SETTINGS_CHOICES
+
+    values = [
+        int(v) for v in _SETTINGS_CHOICES["ctx_size"].values()
+        if v != _CUSTOM_VALUE
+    ]
+    assert values == sorted(values), (
+        f"ctx_size presets out of order: {values}"
+    )
+    # And custom is the last entry.
+    keys = list(_SETTINGS_CHOICES["ctx_size"].keys())
+    assert keys[-1] == "custom…"
+
+
+def test_settings_choice_screen_cancel_returns_none():
+    """Escape on the choice modal dismisses with None (no commit)."""
+    async def run_app():
+        app = LauncherApp()
+        async with app.run_test(size=(100, 34)) as pilot:
+            await pilot.pause()
+            await pilot.press("s")
+            await pilot.pause()
+            app.settings_idx = _setting_row_index(app, "kv")
+            await pilot.press("enter")
+            await pilot.pause()
+            assert app.screen.__class__.__name__ == "SettingsChoiceScreen"
+            await pilot.press("escape")
+            await pilot.pause()
+            return app.specs[0].kv
+
+    # 9b defaults to f16; cancelling must leave it untouched.
+    assert asyncio.run(run_app()) == "f16"
+
+
 def _setting_row_index(app, field: str) -> int:
     """Index of the first settings row for `field` across all models."""
     from tokirecur.tui.launcher import _settings_rows
@@ -402,7 +450,7 @@ def _setting_row_index(app, field: str) -> int:
 
 def test_settings_dropdown_save_commits_preset():
     """Enter on a dropdown field opens a choice modal; picking a preset
-    and pressing Save writes it to the registry.
+    auto-commits (no Save-button dance) and writes it to the registry.
 
     kv is a restart-required field, so the commit goes through the
     ConfirmRestartScreen after the choice modal dismisses. Press
@@ -422,11 +470,10 @@ def test_settings_dropdown_save_commits_preset():
             await pilot.press("enter")
             await pilot.pause()
             assert app.screen.__class__.__name__ == "SettingsChoiceScreen"
-            select = app.screen.query_one("#settings-choice-select", Select)
-            select.value = "q8_0"
-            await pilot.click("#settings-save")
+            # on_select_changed auto-commits: setting the value dismisses
+            # the choice modal and the restart confirmation appears.
+            app.screen.query_one("#settings-choice-select", Select).value = "q8_0"
             await pilot.pause()
-            # Choice screen dismissed; the restart-required modal opened.
             assert app.screen.__class__.__name__ == "ConfirmRestartScreen"
             await pilot.click("#confirm-ok")
             await pilot.pause()
@@ -437,7 +484,7 @@ def test_settings_dropdown_save_commits_preset():
 
 def test_settings_dropdown_preselects_unlisted_current_value():
     """A registry value outside the presets (9b defaults to ctx 200000)
-    is surfaced as its own option so Save is a no-op-safe commit."""
+    is surfaced as its own option so the dropdown opens pre-selected."""
     from textual.widgets import Select
 
     async def run_app():
@@ -456,8 +503,10 @@ def test_settings_dropdown_preselects_unlisted_current_value():
 
 
 def test_settings_dropdown_custom_chains_to_text_modal():
-    """Picking ``custom…`` dismisses the choice modal and opens the
-    free-text editor for the same row."""
+    """Picking ``custom…`` auto-commits and dismisses the choice modal,
+    which chains into the free-text editor for the same row."""
+    from textual.widgets import Select
+
     from tokirecur.tui.launcher import _CUSTOM_VALUE
 
     async def run_app():
@@ -469,9 +518,10 @@ def test_settings_dropdown_custom_chains_to_text_modal():
             app.settings_idx = _setting_row_index(app, "ctx_size")
             await pilot.press("enter")
             await pilot.pause()
-            select = app.screen.query_one("#settings-choice-select")
-            select.value = _CUSTOM_VALUE
-            await pilot.click("#settings-save")
+            # Auto-commit on change: setting to _CUSTOM_VALUE dismisses
+            # the choice modal and the launcher chains into the text
+            # editor.
+            app.screen.query_one("#settings-choice-select", Select).value = _CUSTOM_VALUE
             await pilot.pause()
             return app.screen.__class__.__name__
 
@@ -517,6 +567,118 @@ def test_settings_renders_single_value_when_registry_and_live_match():
     # 9b's ctx_size is 200000 (default), live is 200000 — no prefix.
     matching = [v for _, _, v in ctx_rows if v == "200000"]
     assert matching
+
+
+def test_commit_edit_marks_restarting_field(monkeypatch):
+    """A restart-required edit (ctx_size, kv, ...) registers an
+    in-flight marker; sync-only fields do not."""
+    import time as _time
+
+    async def run_app():
+        # Patch update_spec_field so the test never touches the daemon
+        # but still records that _commit_edit was called.
+        from tokirecur import ctl
+        from tokirecur.tui.launcher import _RESTART_REQUIRED_FIELDS, _SYNC_ONLY_FIELDS
+
+        async with LauncherApp().run_test(size=(100, 34)) as pilot:
+            await pilot.pause()
+            await pilot.press("s")
+            await pilot.pause()
+            app = pilot.app
+
+            called: dict[str, str] = {}
+
+            def fake_update(name, field, value, apply=False):
+                called["field"] = field
+                return None
+
+            monkeypatch.setattr(ctl, "update_spec_field", fake_update)
+
+            # Restart-required field.
+            app._commit_edit("9b", "ctx_size", "4096", apply=True)
+            assert ("9b", "ctx_size") in app._restarting
+            assert _RESTART_REQUIRED_FIELDS and "ctx_size" in _RESTART_REQUIRED_FIELDS
+
+            # Sync-only field must NOT register a marker.
+            app._restarting.clear()
+            app._commit_edit("9b", "max_tokens", "256", apply=False)
+            assert not app._restarting
+            assert _SYNC_ONLY_FIELDS and "max_tokens" in _SYNC_ONLY_FIELDS
+
+    asyncio.run(run_app())
+    _time.monotonic()  # ensure import stays
+
+
+def test_poll_statuses_clears_restarting_when_live_matches_reg():
+    """The in-flight marker drops the moment the live value agrees
+    with the registry on the next poll."""
+    import time as _time
+
+    async def run_app():
+        async with LauncherApp().run_test(size=(100, 34)) as pilot:
+            await pilot.pause()
+            app = pilot.app
+
+            # Inject a "just-committed" marker for ctx_size on 9b.
+            app._restarting[("9b", "ctx_size")] = _time.monotonic()
+
+            # And tell the launcher the live slot already agrees with
+            # the registry (the restart finished between commit and
+            # this poll).
+            spec_9b = next(s for s in app.specs if s.name == "9b")
+            app._statuses["9b"] = {"ctx": spec_9b.ctx_size, "llama": True,
+                                    "daemon": True}
+
+            app._poll_statuses()
+            assert ("9b", "ctx_size") not in app._restarting
+
+    asyncio.run(run_app())
+
+
+def test_poll_statuses_clears_restarting_after_timeout(monkeypatch):
+    """An 8 s ceiling drops the marker even if the live value never
+    catches up (poll stalled, daemon wedged, etc.)."""
+    import time as _time
+
+    async def run_app():
+        async with LauncherApp().run_test(size=(100, 34)) as pilot:
+            await pilot.pause()
+            app = pilot.app
+
+            # Pretend the marker was set 9 seconds ago.
+            app._restarting[("9b", "ctx_size")] = _time.monotonic() - 9.0
+
+            # Live value deliberately stays "wrong" — the cap is
+            # what should save us.
+            app._statuses["9b"] = {"ctx": 1, "llama": True, "daemon": True}
+
+            app._poll_statuses()
+            assert ("9b", "ctx_size") not in app._restarting
+
+    asyncio.run(run_app())
+
+
+def test_render_settings_shows_restarting_suffix():
+    """A row whose (name, field) is in ``_restarting`` renders the
+    yellow "⟳ restarting" suffix until cleared."""
+    from rich.text import Text
+
+    async def run_app():
+        from tokirecur.tui.launcher import invalidate_settings_rows
+
+        async with LauncherApp().run_test(size=(100, 34)) as pilot:
+            await pilot.pause()
+            app = pilot.app
+            app._restarting[("9b", "ctx_size")] = 0.0
+            invalidate_settings_rows()
+            rendered = app._render_settings(100)
+            blob = Text().join(rendered).plain
+            assert "⟳ restarting" in blob, (
+                f"expected restarting suffix in rendered settings; "
+                f"got: {blob!r}"
+            )
+
+    asyncio.run(run_app())
 
 
 def test_settings_choices_for_ctx_filters_over_model_max(monkeypatch):
