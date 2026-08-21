@@ -707,30 +707,29 @@ def test_render_settings_shows_restarting_suffix():
 
 
 def test_settings_choices_for_ctx_filters_over_model_max(monkeypatch):
-    """The dynamic ctx_size dropdown excludes values above the model's
-    GGUF max context. A 9B with general.context_length=40960 shouldn't
-    offer 131072."""
-    from tokirecur.tui.launcher import _choices_for_field
+    """The launcher shows the same ctx presets for every model so the
+    selector never vanishes for user-added models. 100k / 200k must be
+    offered even when the GGUF max is 40960 — launch-time validation
+    already clamps with a clear error, and hiding the options confused
+    “selector only shows for 9b / 35b / laguna”."""
+    from tokirecur.tui.launcher import _SETTINGS_CHOICES, _choices_for_field
 
     class FakeSpec:
-        ctx_size = 200000  # registry value
+        ctx_size = 200000
         gguf = "/tmp/fake.gguf"
 
-    # Stub _model_max_ctx to return 40960 (a small-model cap).
     from tokirecur import ctl
     monkeypatch.setattr(ctl, "_model_max_ctx", lambda spec: 40960)
-    # RAM plan says we can fit 200000 — that should NOT widen the cap.
     monkeypatch.setattr(ctl, "_fit_plan", lambda spec, **kw: (200000, "f16", 1))
 
     choices = _choices_for_field(FakeSpec(), "ctx_size")
     assert choices is not None
-    # All preset integers above 40960 should be filtered out.
-    for label, value in choices.items():
-        if value in ("__custom__",):
-            continue
-        assert int(value) <= 40960, (
-            f"choice {label}={value} exceeds model max 40960"
-        )
+    for preset in ("50000", "100000", "200000", "131072"):
+        assert preset in choices, f"global preset {preset} missing"
+        assert choices[preset] == preset
+    # All base presets must be present (global), not filtered by max.
+    for k in _SETTINGS_CHOICES["ctx_size"]:
+        assert k in choices, f"base preset {k} missing from global dropdown"
     # custom… option is always preserved.
     assert "__custom__" in choices.values()
 

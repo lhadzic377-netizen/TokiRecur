@@ -1121,7 +1121,7 @@ class SettingsChoiceScreen(ModalScreen[str | None]):
         self.dismiss(None)
 
 
-_SETTINGS_ROWS_CACHE: dict[int, tuple[tuple[str, str, str], ...]] = {}
+_SETTINGS_ROWS_CACHE: dict[tuple, tuple[tuple[str, str, str], ...]] = {}
 
 
 def _live_value(app: LauncherApp, spec: Any, field: str) -> Any:
@@ -1143,47 +1143,39 @@ def _live_value(app: LauncherApp, spec: Any, field: str) -> Any:
 def _choices_for_field(spec: Any, field: str) -> dict[str, str] | None:
     """Return the dropdown choices for ``field`` on ``spec``.
 
-    Static fields (parallel, kv, reasoning, always_on, boot) get the
-    same choices for every model. Dynamic fields (ctx_size) get a
-    spec-aware list filtered against the GGUF's max context and the
-    RAM clamp from ``_fit_plan`` — so the user can never pick a value
-    that would be rejected by ``_check_ram`` at launch.
-
-    The ``custom…`` option is always appended; power users can still
-    type any value through the text editor (the text-modal path then
-    reuses ``update_spec_field`` which still validates).
+    Every model offers the same ctx_size presets so the launcher
+    works globally — a user who adds a new model must still see
+    50000 / 100000 / 200000 without the selector vanishing. The old
+    filtering hid 100k / 200k behind the GGUF max and the live RAM
+    clamp, so the same model offered different presets on a 16 GB
+    laptop vs a 128 GB halo and confused “selector only shows for
+    9b / 35b / laguna”. Launch-time validation (``_model_max_ctx``
+    + ``_check_ram``) already rejects an impossible value with a
+    clear error, so the dropdown can safely show every preset.
+    The ``custom…`` option is always appended.
     """
     base = _SETTINGS_CHOICES.get(field)
-    if base is None or field != "ctx_size":
+    if base is None:
         return base
-    # Spec-aware ctx_size: filter the preset list against the model's
-    # GGUF max context (e.g. a 9B at 40960 max shouldn't offer 131072).
-    from .. import ctl as ctl_mod
-    cap = spec.ctx_size
-    model_max = ctl_mod._model_max_ctx(spec)
-    if model_max:
-        cap = min(cap, model_max)
-    # The RAM clamp is the smaller of the two. We approximate it with
-    # the live `_fit_plan` value (what llama-server would actually
-    # boot with on this box). If we can't read RAM, fall back to the
-    # registry cap so the user at least sees what's configured.
-    try:
-        plan_ctx = ctl_mod._fit_plan(spec)[0]
-        if plan_ctx:
-            cap = min(cap, plan_ctx)
-    except (RuntimeError, OSError, ValueError):
-        pass
-    filtered: dict[str, str] = {}
-    for label, value in base.items():
-        if value == _CUSTOM_VALUE:
-            continue
-        try:
-            if int(value) <= cap:
-                filtered[label] = value
-        except (ValueError, TypeError):
-            filtered[label] = value
-    filtered["custom…"] = _CUSTOM_VALUE
-    return filtered
+    if field != "ctx_size":
+        return base
+    # No filtering — every model sees every preset. This is the
+    # global fix: “selector only shows for 9b / 35b / laguna” was
+    # the RAM-clamp and GGUF-max hiding 100k / 200k for the other
+    # 21 models. Keep the full list plus the spec's current value
+    # (which may be a non-preset the user typed) and sort numeric.
+    filtered: dict[str, str] = dict(base)
+    cur = str(getattr(spec, "ctx_size", ""))
+    if cur and cur not in filtered.values() and cur != _CUSTOM_VALUE:
+        filtered[cur] = cur
+    ordered: dict[str, str] = {}
+    for k, v in sorted(
+        [(k, v) for k, v in filtered.items() if v != _CUSTOM_VALUE],
+        key=lambda kv: int(kv[0]) if kv[0].isdigit() else 10**9,
+    ):
+        ordered[k] = v
+    ordered["custom…"] = _CUSTOM_VALUE
+    return ordered
 
 
 def _settings_rows(
@@ -1200,17 +1192,29 @@ def _settings_rows(
     registry value and surfaces a two-column layout when they differ,
     so the user can see "what's planned" vs "what's running".
 
-    Cached by the `specs` list's identity (`id(specs)`) so re-renders
-    with the same registry state are O(1). The launcher invalidates
-    the cache after `update_spec_field` reloads the registry. The
-    cache also drops on every status poll refresh (live values change
-    when llama-server boots or restarts).
+    Results are cached by the *contents* of ``specs`` (names +
+    live values), not by ``id(specs)``: ``id`` is the address of the
+    list object and gets recycled after GC, so two different
+    ``[spec]`` temporaries can share an id and return stale rows
+    (“only shows for 9b / 35b / laguna”). A content key is safe for
+    any caller and still O(1) for the launcher's hot path where
+    ``self.specs`` is stable between polls.
     """
-    key = id(specs)
+    from .. import ctl as ctl_mod
+
+    # Content-based cache key: names + live ctx so a poll that changes
+    # slot_ctx invalidates, but repeated renders with the same registry
+    # state stay O(1). No id() — it recycles after GC.
+    try:
+        live_part = tuple(
+            str(_live_value(app, s, "ctx_size")) for s in specs
+        )
+    except Exception:
+        live_part = ()
+    key = (tuple(s.name for s in specs), live_part)
     cached = _SETTINGS_ROWS_CACHE.get(key)
     if cached is not None:
         return cached
-    from .. import ctl as ctl_mod
 
     rows: list[tuple[str, str, str]] = []
     for spec in specs:
@@ -1219,9 +1223,6 @@ def _settings_rows(
                 continue
             reg_value = getattr(spec, field, None)
             live_value = _live_value(app, spec, field)
-            # When the live value agrees with the registry, render the
-            # plain value. When they differ, render "registry · live"
-            # so the user can see what's actually running.
             mismatched = (
                 live_value is not None
                 and reg_value is not None
