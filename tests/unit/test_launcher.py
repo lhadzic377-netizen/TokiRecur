@@ -421,7 +421,7 @@ def test_settings_choices_ctx_includes_50000_100000_200000():
     from tokirecur.tui.launcher import _SETTINGS_CHOICES
 
     ctx = _SETTINGS_CHOICES["ctx_size"]
-    for v in ("50000", "100000", "200000"):
+    for v in ("50000", "100000", "200000", "500000", "1000000"):
         assert ctx.get(v) == v, f"missing ctx_size preset {v}"
 
 
@@ -724,7 +724,7 @@ def test_settings_choices_for_ctx_filters_over_model_max(monkeypatch):
 
     choices = _choices_for_field(FakeSpec(), "ctx_size")
     assert choices is not None
-    for preset in ("50000", "100000", "200000", "131072"):
+    for preset in ("50000", "100000", "200000", "131072", "500000", "1000000"):
         assert preset in choices, f"global preset {preset} missing"
         assert choices[preset] == preset
     # All base presets must be present (global), not filtered by max.
