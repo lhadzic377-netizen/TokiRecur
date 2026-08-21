@@ -1534,6 +1534,11 @@ def _raise_download_error(
 ) -> None:
     """Surface a single actionable error after the combined retry budget
     is exhausted. Never the raw 60-line httpx/httpcore traceback."""
+    try:
+        if dest.exists():
+            dest.unlink()
+    except OSError:
+        pass
     host = url.split("/releases/", 1)[0] + "/…"
     name = type(last_err).__name__ if last_err else "UnknownError"
     msg = str(last_err) if last_err else "no error captured"

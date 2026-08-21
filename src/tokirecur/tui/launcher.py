@@ -529,8 +529,8 @@ class LauncherApp(App[dict | None]):
 
             try:
                 set_active(self.pinned or name)
-            except Exception:
-                pass
+            except Exception as e:
+                self.notify(f"pin failed (not persisted): {e}", timeout=6, severity="warning")
         self._refresh += 1
 
     async def action_launch(self) -> None:

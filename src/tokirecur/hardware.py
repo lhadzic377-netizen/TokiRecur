@@ -690,6 +690,85 @@ def _enumerate_gpus_windows() -> list[GPUProfile]:
                         ))
         except Exception:
             pass
+    # AMD/Intel on Windows via WMI (no DRM). wmic is deprecated but
+    # still present on Win10/11; fall back to PowerShell CIM.
+    # AdapterRAM is bytes on WMI (0xffffffff = 4 GB sentinel for >4 GB,
+    # so treat any >=4 GB as discrete).
+    wmi_gpus: list[tuple[str, float]] = []
+    try:
+        r = subprocess.run(
+            ["wmic", "path", "win32_VideoController", "get", "Name,AdapterRAM", "/format:csv"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if r.returncode == 0:
+            for line in r.stdout.splitlines():
+                if "win32_VideoController" not in line.lower() and "," in line:
+                    # CSV: Node,AdapterRAM,Name
+                    parts = [p.strip() for p in line.split(",")]
+                    if len(parts) >= 3 and parts[2]:
+                        name = parts[2]
+                        try:
+                            ram = int(parts[1]) / (1024**3) if parts[1].isdigit() else 0.0
+                        except ValueError:
+                            ram = 0.0
+                        # 0xffffffff sentinel: driver reports 4 GB max uint32
+                        # for >4 GB cards — treat as discrete.
+                        if ram >= 3.9:
+                            ram = 4.0
+                        wmi_gpus.append((name, ram))
+    except Exception:
+        pass
+    if not wmi_gpus:
+        # PowerShell CIM fallback (works when wmic missing on Win11)
+        try:
+            ps = (
+                "Get-CimInstance Win32_VideoController | ForEach-Object { "
+                "\"{0},{1}\" -f $_.Name,$_.AdapterRAM }"
+            )
+            r = subprocess.run(
+                ["powershell.exe", "-NoProfile", "-Command", ps],
+                capture_output=True, text=True, timeout=5,
+            )
+            if r.returncode == 0:
+                for line in r.stdout.splitlines():
+                    if "," in line:
+                        name, ram_s = line.rsplit(",", 1)
+                        name, ram_s = name.strip(), ram_s.strip()
+                        try:
+                            ram = int(ram_s) / (1024**3) if ram_s.lstrip("-").isdigit() else 0.0
+                        except ValueError:
+                            ram = 0.0
+                        if ram >= 3.9:
+                            ram = 4.0
+                        if name:
+                            wmi_gpus.append((name, ram))
+        except Exception:
+            pass
+    for name, vram in wmi_gpus:
+        low = name.lower()
+        if "nvidia" in low:
+            continue  # already handled via nvidia-smi with accurate VRAM
+        if "amd" in low or "radeon" in low:
+            vendor = "AMD"
+        elif "intel" in low:
+            vendor = "Intel"
+        else:
+            continue
+        # Shared-RAM heuristic: Intel iGPU names contain UHD/HD/Iris
+        is_intel_igpu = vendor == "Intel" and any(k in low for k in ("uhd", "hd graphics", "iris"))
+        shared = is_intel_igpu
+        use = not shared and vram >= 4
+        # AMD UMA with unknown VRAM: fall back to total RAM check elsewhere
+        reason = (
+            "shared RAM (iGPU)" if shared
+            else (f"{vram:.1f} GB VRAM" if vram < 4 else "discrete GPU")
+        )
+        out.append(GPUProfile(
+            vendor=vendor, name=name,
+            vram_gb=vram, driver=None,
+            vulkan_score=1.0, shared_ram=shared,
+            use_for_llm=use, reason=reason,
+        ))
     return out
 
 
@@ -827,12 +906,17 @@ def profile_box(force: bool = False) -> HardwareProfile:
     re-profile and persist.
     """
     cached = load_profile() if not force else None
+    live_gpus: list | None = None
     if cached is not None and cached.is_fresh() \
             and cached.schema_version == PROFILE_VERSION:
-        return cached
+        live_gpus = enumerate_gpus()
+        if live_gpus == cached.gpus:
+            return cached
+        logger.info("hardware profile gpus changed %r -> %r — re-profiling",
+                    [g.name for g in cached.gpus], [g.name for g in live_gpus])
 
     cpu = cpu_topology()
-    gpus = enumerate_gpus()
+    gpus = live_gpus if live_gpus is not None else enumerate_gpus()
     ram_gb = _available_gb()
     profile = HardwareProfile(
         schema_version=PROFILE_VERSION,

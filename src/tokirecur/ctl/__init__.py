@@ -374,12 +374,40 @@ def _available_gb() -> float:
     except OSError:
         pass
     if sys.platform == "darwin":
+        # Prefer available over total — UMA boxes need the real budget,
+        # not the marketing number. vm_stat is cheap and present on
+        # every macOS.
+        try:
+            out = subprocess.run(
+                ["vm_stat"], capture_output=True, text=True, timeout=5,
+            ).stdout
+            ps = 4096
+            free = inactive = speculative = 0
+            for line in out.splitlines():
+                if "page size of" in line.lower():
+                    try:
+                        ps = int(line.split()[-2])
+                    except ValueError:
+                        pass
+                elif "Pages free:" in line:
+                    free = int(line.split(":")[1].strip().split()[0].replace(".", ""))
+                elif "Pages inactive:" in line:
+                    inactive = int(line.split(":")[1].strip().split()[0].replace(".", ""))
+                elif "Pages speculative:" in line:
+                    speculative = int(line.split(":")[1].strip().split()[0].replace(".", ""))
+            avail = (free + inactive + speculative) * ps / 1e9
+            if avail > 1:
+                return avail
+        except Exception:
+            pass
         try:
             out = subprocess.run(
                 ["sysctl", "-n", "hw.memsize"],
                 capture_output=True, text=True, timeout=5,
             )
-            return int(out.stdout.strip()) / 1e9
+            # Total * 0.6 as a conservative available estimate when
+            # vm_stat failed.
+            return int(out.stdout.strip()) / 1e9 * 0.6
         except Exception:
             return float("inf")
     if sys.platform.startswith("win"):
@@ -565,7 +593,22 @@ def _effective_ctx(spec: ModelSpec) -> int:
     sd = getattr(spec, "state_dir", None)
     if callable(sd):
         try:
-            return int((sd() / "effective_ctx.txt").read_text().strip())
+            p = sd() / "effective_ctx.txt"
+            # Stale file: registry ctx changed without a restart (user
+            # edited ctx_size but didn't force_restart). The file's
+            # mtime predates the registry's — discard and recompute
+            # via _fit_plan so clients don't overfill a 131k file
+            # when the registry now asks for 200k.
+            val = int(p.read_text().strip())
+            try:
+                reg_mtime = DEFAULT_REGISTRY.stat().st_mtime
+                if p.stat().st_mtime < reg_mtime:
+                    raise ValueError("stale effective_ctx")
+            except (OSError, ValueError):
+                if "stale" in str(sys.exc_info()[1] or ""):
+                    raise
+                pass
+            return val
         except (OSError, ValueError):
             pass
     # The pre-start fallback must be the plan's actual launch window —
@@ -612,10 +655,34 @@ def load_registry(path: Path | None = None) -> list[ModelSpec]:
 
 
 def _load_registry_yaml(reg: Path) -> dict[str, Any]:
-    """Read + parse the registry YAML, falling back to defaults if missing."""
+    """Read + parse the registry YAML, falling back to defaults if missing.
+
+    A corrupt YAML (hand-edit, disk full, editor crash) previously
+    bubbled ``YAMLError`` and left the launcher in a crash loop until
+    the user hand-deleted the file. Now the corrupt file is backed up
+    to ``.bak-corrupt.<ts>`` and an empty registry is returned so the
+    next ``ensure`` path rebuilds ``DEFAULT_MODELS``.
+    """
     if not reg.exists():
         reg = _ensure_registry()
-    return yaml.safe_load(reg.read_text()) or {}
+    try:
+        return yaml.safe_load(reg.read_text()) or {}
+    except (yaml.YAMLError, UnicodeDecodeError, OSError) as e:
+        try:
+            bak = reg.with_name(f"{reg.name}.bak-corrupt.{int(time.time())}")
+            shutil.copy2(reg, bak)
+            logger.warning("registry %s corrupt (%s) — backed up to %s", reg, e, bak)
+        except OSError:
+            pass
+        try:
+            reg.unlink()
+        except OSError:
+            pass
+        reg = _ensure_registry()
+        try:
+            return yaml.safe_load(reg.read_text()) or {}
+        except (yaml.YAMLError, UnicodeDecodeError, OSError):
+            return {}
 
 
 def _build_spec(m: dict[str, Any]) -> ModelSpec:
@@ -956,11 +1023,43 @@ def update_spec_field(
     return new_spec
 
 
+def _port_free(port: int) -> bool:
+    """True when ``port`` can be bound on 127.0.0.1 (no listener)."""
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind(("127.0.0.1", port))
+            return True
+        except OSError:
+            return False
+
+
 def next_free_ports(specs: list[ModelSpec]) -> tuple[int, int]:
-    """Pick the next unused llama/daemon port pair (max + 1)."""
-    llama = max((s.llama_port for s in specs), default=8087) + 1
-    daemon = max((s.daemon_port for s in specs), default=8786) + 1
-    return llama, daemon
+    """Pick the next unused llama/daemon port pair.
+
+    Starts at max+1 from the registry, then probes the OS so a port
+    already taken by an unrelated service (Jenkins on 8080, etc.)
+    is skipped instead of hanging ``_wait_healthy`` for 30 min.
+    Also rejects a pair where both ports would be identical.
+    """
+    base_llama = max((s.llama_port for s in specs), default=8087) + 1
+    base_daemon = max((s.daemon_port for s in specs), default=8786) + 1
+    for _ in range(100):
+        if base_llama == base_daemon:
+            base_daemon += 1
+        if base_llama < 1024:
+            base_llama = 1024
+        if base_daemon < 1024:
+            base_daemon = 1024
+        if _port_free(base_llama) and _port_free(base_daemon):
+            return base_llama, base_daemon
+        # Bump both and try again — keeps the daemon port consecutive
+        # with the llama port for readability.
+        base_llama += 1
+        base_daemon += 1
+    # Fallback: at least return a non-colliding registry pair
+    return base_llama, base_daemon
 
 
 def _slugify_name(name: str) -> str:
@@ -999,8 +1098,18 @@ def _installed_binary() -> str | None:
     """
     name = "llama-server.exe" if os.name == "nt" else "llama-server"
     candidate = STATE_ROOT / "bin" / name
-    if candidate.exists():
+    if candidate.is_file() and os.access(candidate, os.X_OK):
         return str(candidate)
+    # File exists but not executable (e.g. permission skew after restore)
+    # — try to repair the bit and re-check so the next pull doesn't
+    # hand every new model a bare "llama-server" that fails on Windows.
+    if candidate.exists():
+        try:
+            candidate.chmod(candidate.stat().st_mode | 0o111)
+            if os.access(candidate, os.X_OK):
+                return str(candidate)
+        except OSError:
+            pass
     return None
 
 
@@ -1333,9 +1442,18 @@ def _is_alive(pid: int) -> bool:
             return False
     try:
         os.kill(pid, 0)
-        return True
     except (OSError, SystemError):
         return False
+    # PID may have been recycled to an unrelated process — verify
+    # the cmdline still looks like llama-server/daemon.
+    if os.name == "posix":
+        try:
+            cmd = Path(f"/proc/{pid}/cmdline").read_bytes().decode(errors="replace")
+            if cmd and "llama-server" not in cmd and "uvicorn" not in cmd and "tokirecur" not in cmd:
+                return False
+        except OSError:
+            pass
+    return True
 
 
 def _wait_for(url: str, timeout: float = 240.0) -> bool:
@@ -1505,6 +1623,19 @@ def _pid_on_port(port: int) -> int | None:
         else:
             return None
     except Exception:
+        # Fallback for minimal containers without ss/lsof/netstat:
+        # try fuser, then /proc/net/tcp scan.
+        try:
+            out = subprocess.run(
+                ["fuser", f"{port}/tcp"], capture_output=True, text=True, timeout=5.0
+            ).stdout
+            m = re.search(r"(\d+)", out)
+            if m:
+                pid = int(m.group(1))
+                _PORT_PID_CACHE[port] = (now, pid)
+                return pid
+        except Exception:
+            pass
         return None
     _PORT_PID_CACHE[port] = (now, pid)
     return pid
@@ -1599,11 +1730,10 @@ def _resolve_binary(spec: ModelSpec) -> str:
     name is not on PATH and Popen would fail with WinError 2.
     """
     if spec.binary and spec.binary != "llama-server":
-        # A binary pinned to a path that no longer exists on THIS machine
-        # (e.g. a registry shipped from another box) is dead weight —
-        # fall through to the installed build instead of failing Popen.
         pinned = Path(spec.binary)
-        if not pinned.is_absolute() or pinned.exists():
+        if pinned.is_absolute() and not pinned.exists():
+            pass  # dead weight — fall through to installed build
+        else:
             return spec.binary
     installed = _installed_binary()
     if installed:
@@ -2015,6 +2145,44 @@ def _log_tail(path: Path, n: int = 40) -> str:
         return "(log unavailable)"
 
 
+def _healing_hint_for_log(log_path: Path, service: str) -> str:
+    """Extra hint appended to a startup failure. Inspects the log tail
+    for known self-healable patterns (tensor mismatch, OOM, port busy)
+    and for GPU/backend mismatches via diagnose.hint."""
+    tail = _log_tail(log_path).lower()
+    hints: list[str] = []
+    if "wrong number of tensors" in tail or "done_getting_tensors" in tail:
+        hints.append(
+            "hint: GGUF tensor count mismatch — file was quantized with a "
+            "different llama.cpp version or is truncated. Re-pull the model: "
+            "`toki model pull <repo>` or remove ~/models/<name> and re-pull"
+        )
+    if "out of memory" in tail or "failed to allocate" in tail or "cannot allocate" in tail:
+        hints.append(
+            "hint: OOM — try a smaller ctx_size/kv (e.g. 50000/q8_0) or free RAM by stopping other models"
+        )
+    if "address already in use" in tail or "eaddrinuse" in tail:
+        hints.append("hint: port busy — run `toki model status` and `toki down --yes` to free the port, or change llama_port/daemon_port")
+    # Generic GPU hint (only when service is llama)
+    if "llama" in service.lower():
+        try:
+            from .. import diagnose as _diag
+            if log_path.parent.name != "e2e-test":
+                # Find the spec for this state dir by name
+                name = log_path.parent.name
+                try:
+                    from ..ctl import get_model as _gm
+                    spec = _gm(name)
+                    hs = _diag.hint(_diag.gpu_hardware(), spec)
+                    if hs:
+                        hints.extend(hs)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    return ("\n".join(hints) + "\n") if hints else ""
+
+
 def _wait_healthy(url: str, proc: subprocess.Popen | None, log_path: Path,
                   timeout: float, service: str) -> None:
     """Wait for a service's health endpoint, failing fast if the child
@@ -2026,9 +2194,11 @@ def _wait_healthy(url: str, proc: subprocess.Popen | None, log_path: Path,
     started = time.time()
     while time.time() - started < timeout:
         if proc is not None and proc.poll() is not None:
+            extra = _healing_hint_for_log(log_path, service)
             raise RuntimeError(
                 f"{service} exited during startup (exit code {proc.returncode}); "
-                f"last lines of {log_path}:\n{_log_tail(log_path)}"
+                f"last lines of {log_path}:\n{_log_tail(log_path)}\n"
+                + (extra or "")
             )
         try:
             r = httpx.get(url, timeout=2.0)
@@ -2037,9 +2207,11 @@ def _wait_healthy(url: str, proc: subprocess.Popen | None, log_path: Path,
         except Exception:
             pass
         time.sleep(0.5)
+    extra = _healing_hint_for_log(log_path, service)
     raise RuntimeError(
         f"{service} did not become healthy within {timeout:.0f}s; "
-        f"last lines of {log_path}:\n{_log_tail(log_path)}"
+        f"last lines of {log_path}:\n{_log_tail(log_path)}\n"
+        + (extra or "")
     )
 
 

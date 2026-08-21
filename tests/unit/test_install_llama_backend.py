@@ -637,8 +637,9 @@ def test_stream_download_with_retry_exhausts_attempts_then_raises(tmp_path, monk
     assert "RemoteProtocolError" in msg
     assert "download foo.tar.gz" in msg
     assert "TOKI_GITHUB_TOKEN" in msg
-    # Truncate between attempts so the file isn't poisoned by the partial write.
-    assert dest.exists() and dest.stat().st_size == 0
+    # Partial file is removed on final failure so a later retry
+    # doesn't mistake a 0-byte file for a cached asset.
+    assert not dest.exists()
 
 
 def test_curl_download_writes_file_and_returns(tmp_path, monkeypatch):
