@@ -2137,20 +2137,18 @@ def start_model(spec: ModelSpec, wait: bool = True) -> None:
     state = spec.state_dir()
     state.mkdir(parents=True, exist_ok=True)
 
-    # Self-heal: a registry ctx above the model's real max (e.g. the
-    # old flat 200k pull default on a 128k model) is corrected in place
-    # so it never sneaks back in after an edit.
+    # Keep the user's requested ctx_size in the registry even when
+    # it exceeds the GGUF's declared max. The launch still clamps via
+    # _fit_plan/_clamp_ctx (and shows reg:200000 · live:131072 in the
+    # launcher), but the registry no longer snaps back to 131072
+    # silently — “I want 200000 and it goes to 131072”.
     max_ctx = _model_max_ctx(spec)
     if max_ctx and spec.ctx_size > max_ctx:
-        try:
-            update_spec_field(spec.name, "ctx_size", str(max_ctx))
-            logger.info(
-                "%s: ctx %d exceeds model max %d — registry corrected",
-                spec.name, spec.ctx_size, max_ctx,
-            )
-            spec.ctx_size = max_ctx
-        except (KeyError, ValueError):
-            pass  # best-effort; _clamp_ctx still caps at launch
+        logger.warning(
+            "%s: ctx %d > GGUF max %d — keeping requested %d, "
+            "launch will clamp to %d (reg · live will show the clamp)",
+            spec.name, spec.ctx_size, max_ctx, spec.ctx_size, max_ctx,
+        )
 
     if not llama_reachable(spec):
         if not spec.gguf or spec.gguf == "llama-server":
