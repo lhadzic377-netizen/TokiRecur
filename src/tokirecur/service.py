@@ -91,6 +91,58 @@ def drop_in_dir(instance: str) -> Path:
     return UNIT_DIR / f"toki-model@{instance}.service.d"
 
 
+def _enabled_instances() -> list[str]:
+    """Model names with an ENABLED tokie-model unit symlink in
+    default.target.wants — i.e. things that start at boot. This is
+    the source of truth for cleanup, NOT the registry's current
+    ``boot`` flags: a model that lost its boot flag must still be
+    disabled, or it keeps starting forever ("starts for no reason").
+    """
+    wants = UNIT_DIR / "default.target.wants"
+    names: list[str] = []
+    if not wants.is_dir():
+        return names
+    for link in wants.iterdir():
+        if link.name.startswith("toki-model@") and link.name.endswith(".service"):
+            instance = link.name[len("toki-model@"):-len(".service")]
+            if instance:
+                names.append(instance)
+    return sorted(set(names))
+
+
+def _drop_stale_enablement(keep: set[str]) -> list[str]:
+    """Disable + remove any enabled toki-model instance NOT in
+    ``keep``. Returns the instance names removed."""
+    removed: list[str] = []
+    wants = UNIT_DIR / "default.target.wants"
+    for name in _enabled_instances():
+        if name in keep:
+            continue
+        unit = f"toki-model@{name}.service"
+        _systemctl("disable", "--now", unit)
+        # Unlink the enablement ourselves: systemctl only manages the
+        # link when the template unit exists — after a partial removal
+        # it can leave the phantom boot entry in place.
+        try:
+            (wants / unit).unlink(missing_ok=True)
+        except OSError:
+            pass
+        # Remove leftover drop-ins.
+        d = drop_in_dir(name)
+        if d.is_dir():
+            for f in d.glob("*"):
+                try:
+                    f.unlink()
+                except OSError:
+                    pass
+            try:
+                d.rmdir()
+            except OSError:
+                pass
+        removed.append(name)
+    return removed
+
+
 def install() -> int:
     models = boot_models()
     if not models:
@@ -117,6 +169,13 @@ def install() -> int:
             print(f"wrote {ordering}")
         prev = spec.name
 
+    # Kill enablements for models that USED to be boot-marked and no
+    # longer are — otherwise they keep auto-starting at boot forever.
+    removed = _drop_stale_enablement({s.name for s in models})
+    for name in removed:
+        print(f"disabled stale boot unit: toki-model@{name}.service "
+              f"(no longer marked boot)")
+
     _systemctl("daemon-reload")
     for spec in models:
         unit = f"toki-model@{spec.name}.service"
@@ -134,17 +193,25 @@ def install() -> int:
 
 
 def uninstall() -> int:
-    models = boot_models()
-    for spec in models:
-        unit = f"toki-model@{spec.name}.service"
-        _systemctl("disable", "--now", unit)
-        print(f"disabled {unit}")
+    # Disable EVERY enabled instance — not just currently-boot-marked
+    # models. Orphaned enablements (model unmarked boot / removed from
+    # registry) are exactly the "starts for no reason" class.
+    removed = _drop_stale_enablement(keep=set())
+    for name in removed:
+        print(f"disabled {f'toki-model@{name}.service'}")
+    # The template unit + any remaining artifacts go too.
     for unit in UNIT_DIR.glob("toki-model@*.service"):
         unit.unlink(missing_ok=True)
     for d in UNIT_DIR.glob("toki-model@*.service.d"):
         for f in d.glob("*"):
-            f.unlink(missing_ok=True)
-        d.rmdir()
+            try:
+                f.unlink()
+            except OSError:
+                pass
+        try:
+            d.rmdir()
+        except OSError:
+            pass
     _systemctl("daemon-reload")
     print("removed toki-model units")
     return 0
