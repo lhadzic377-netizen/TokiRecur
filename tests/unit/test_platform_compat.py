@@ -270,8 +270,44 @@ def test_is_alive_posix_uses_kill(monkeypatch):
     seen = {}
     monkeypatch.setattr(ctl.os, "kill",
                         lambda pid, sig: seen.update(pid=pid, sig=sig))
+
+    class FakePath:
+        def __init__(self, p):
+            pass
+
+        def read_bytes(self):
+            return b"/usr/bin/llama-server -m x.gguf\x00"
+
+    # Patch the cmdline read at the module level instead — simpler and
+    # deterministic regardless of what pid 12345 happens to be on this
+    # machine (an unrelated live process must not flip the result).
+    monkeypatch.setattr(
+        "tokirecur.ctl.Path",
+        lambda p: type("P", (), {
+            "read_bytes": staticmethod(
+                lambda: b"/usr/bin/llama-server -m x.gguf\x00"
+            ),
+        })(),
+    )
     assert ctl._is_alive(12345) is True
     assert seen == {"pid": 12345, "sig": 0}
+
+
+def test_is_alive_posix_rejects_recycled_pid(monkeypatch):
+    """A live pid whose cmdline is NOT llama-server/uvicorn/tokirecur
+    (e.g. chromium got the recycled pid) must report dead so a stale
+    pid file never masks a crashed stack."""
+    monkeypatch.setattr(ctl.os, "name", "posix")
+    monkeypatch.setattr(ctl.os, "kill", lambda pid, sig: None)
+    monkeypatch.setattr(
+        "tokirecur.ctl.Path",
+        lambda p: type("P", (), {
+            "read_bytes": staticmethod(
+                lambda: b"/usr/lib/chromium/chromium --flag\x00"
+            ),
+        })(),
+    )
+    assert ctl._is_alive(12345) is False
 
 
 def test_is_alive_posix_returns_false_on_oserror(monkeypatch):
