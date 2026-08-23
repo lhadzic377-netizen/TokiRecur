@@ -795,27 +795,45 @@ class _flock:
     No-op when ``fcntl`` is unavailable (Windows). The lockfile lives
     in the same directory as the target so concurrent processes
     editing the same registry contend on a single inode.
+
+    Contention is resolved by waiting (LOCK_EX blocks) up to
+    ``timeout`` seconds; on timeout the acquisition FAILS LOUDLY
+    (``RuntimeError``) instead of silently continuing — two writers
+    proceeding unlocked would lose one edit to the atomic-rename
+    race, and silence hides exactly the kind of corruption this
+    lock exists to prevent.
     """
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, timeout: float = 10.0) -> None:
         self.path = path
+        self.timeout = timeout
         self._fd: int | None = None
 
     def __enter__(self) -> _flock:
         if not _HAS_FLOCK:
             return self
+        import time as _time
         lock_path = self.path.with_name(self.path.name + ".lock")
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o644)
-        try:
-            fcntl.flock(self._fd, fcntl.LOCK_EX)
-        except OSError:
-            # Best-effort: if we can't acquire the lock, don't block
-            # the registry edit. The atomic-rename still prevents torn
-            # files; we just lose the cross-process coordination.
-            os.close(self._fd)
-            self._fd = None
-        return self
+        deadline = _time.monotonic() + self.timeout
+        while True:
+            try:
+                # Non-blocking acquire inside a retry loop so we can
+                # bound total wait and surface contention clearly.
+                fcntl.flock(self._fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return self
+            except OSError:
+                if _time.monotonic() >= deadline:
+                    os.close(self._fd)
+                    self._fd = None
+                    raise RuntimeError(
+                        f"registry {self.path} is locked by another "
+                        f"toki process (waited {self.timeout:.0f}s). "
+                        f"If no other toki is running, remove "
+                        f"{lock_path} and retry."
+                    ) from None
+                _time.sleep(0.1)
 
     def __exit__(self, *exc) -> None:
         if self._fd is not None:
@@ -2190,8 +2208,14 @@ def _wait_healthy(url: str, proc: subprocess.Popen | None, log_path: Path,
 
     Raises RuntimeError with the log tail on child death, so "starting
     model" can never hang silently behind a crashed llama-server.
+
+    A 2xx/3xx from an endpoint that is NOT our service (a foreign
+    webapp on the same port answering ``/health`` with its own body)
+    fails fast after a short grace window instead of burning the full
+    ``timeout`` — the child can't win a port that's already owned.
     """
     started = time.time()
+    foreign_since: float | None = None
     while time.time() - started < timeout:
         if proc is not None and proc.poll() is not None:
             extra = _healing_hint_for_log(log_path, service)
@@ -2203,9 +2227,36 @@ def _wait_healthy(url: str, proc: subprocess.Popen | None, log_path: Path,
         try:
             r = httpx.get(url, timeout=2.0)
             if r.status_code < 500:
-                return
+                # llama-server /health answers {"status":"ok"}; the
+                # daemon healthz answers {"ok":true} or similar JSON.
+                # Anything else (HTML, empty, other app's schema) that
+                # persists past 5 s means a foreign service owns the
+                # port — fail fast instead of waiting out `timeout`.
+                body = str(getattr(r, "text", "") or "")[:512].lower()
+                looks_ours = (
+                    "status" in body or "ok" in body
+                    or not body.strip()
+                )
+                if looks_ours:
+                    return
+                # Foreign schema persisting past 5 s means another
+                # service owns the port — our child can't win it (it
+                # would bind-fail and be caught by poll() above).
+                if foreign_since is None:
+                    foreign_since = time.time()
+                elif time.time() - foreign_since > 5.0:
+                    raise RuntimeError(
+                        f"port for {url} answers but not with a "
+                        f"{service} response (got "
+                        f"{r.status_code}, body starts: {body[:80]!r}). "
+                        f"Another service likely owns this port — "
+                        f"change llama_port/daemon_port in settings "
+                        f"or stop the other service."
+                    )
+        except RuntimeError:
+            raise
         except Exception:
-            pass
+            foreign_since = None
         time.sleep(0.5)
     extra = _healing_hint_for_log(log_path, service)
     raise RuntimeError(
@@ -3352,6 +3403,11 @@ def sync_cli_configs(spec: ModelSpec, mode: str | None = None) -> dict[str, Path
     Each writer is fault-isolated: a corrupt/foreign config for one CLI
     must never block the other three (that failure mode silently left
     hermes pointing at a stale endpoint for the whole 0.2.16 era).
+
+    Failures are tracked per tool in ``_SYNC_FAILURES``; when the same
+    tool fails ``_SYNC_FAILURE_ESCALATE`` times in a row, the warning
+    escalates to ``logger.error`` with an actionable fix — a
+    persistently read-only config dir should not stay invisible.
     """
     specs = load_registry()
     out: dict[str, Path] = {}
@@ -3364,9 +3420,29 @@ def sync_cli_configs(spec: ModelSpec, mode: str | None = None) -> dict[str, Path
         try:
             tool_mode = _resolve_mode(tool, mode)
             out[tool] = writer(spec, specs, mode=tool_mode)
+            _SYNC_FAILURES.pop(tool, None)
         except Exception as e:  # defensive: one bad config never blocks the rest
-            logger.warning("could not write %s config: %s", tool, e)
+            count = _SYNC_FAILURES.get(tool, 0) + 1
+            _SYNC_FAILURES[tool] = count
+            msg = "could not write %s config (attempt %d): %s"
+            if count >= _SYNC_FAILURE_ESCALATE:
+                logger.error(
+                    msg + "\n  fix: check the path is writable "
+                    "(disk full? read-only home?), then re-run "
+                    "`toki model use` — this failure has repeated %d "
+                    "times and the %s config is stale",
+                    tool, count, e, count, tool,
+                )
+            else:
+                logger.warning(msg, tool, count, e)
     return out
+
+
+# Consecutive-failure counters for sync_cli_configs, keyed by tool.
+_SYNC_FAILURES: dict[str, int] = {}
+# After this many consecutive failures for one tool, escalate from
+# warning to error with an actionable hint.
+_SYNC_FAILURE_ESCALATE = 3
 
 
 def heal_cli_configs(registry: Path | None = None) -> dict[str, Path] | None:

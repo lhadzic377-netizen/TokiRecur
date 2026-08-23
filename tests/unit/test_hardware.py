@@ -8,6 +8,7 @@ output shape is correct.
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 from tokirecur import hardware
@@ -817,6 +818,50 @@ def test_profile_box_skips_cache_when_stale(tmp_path, monkeypatch):
     assert fresh.recommended["threads"] == 2
 
 
+def test_profile_box_reprofiles_on_gpu_swap(tmp_path, monkeypatch):
+    """A GPU swap must re-profile immediately, not after the 30-day
+    TTL — the cached profile would keep recommending the old backend
+    (e.g. cuda) on a box whose discrete card was removed."""
+    monkeypatch.setattr(hardware, "profile_path", lambda: tmp_path / "hw.json")
+    cached_gpu = GPUProfile(
+        vendor="NVIDIA", name="RTX 3090", vram_gb=24.0, driver=None,
+        vulkan_score=1.0, shared_ram=False, use_for_llm=True,
+        reason="discrete GPU",
+    )
+    cached = HardwareProfile(
+        schema_version=hardware.PROFILE_VERSION,
+        profiled_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        os="linux", cpu=CPUProfile(
+            vendor="unknown", name="old", family=0, model=0,
+            physical_cores=1, logical_cores=1,
+            p_core_ids=[0], e_core_ids=[],
+            max_boost_mhz=0.0, simd=[],
+        ),
+        gpus=[cached_gpu], ram_gb=32.0, benchmarks={},
+        recommended={"backend": "cuda", "ngl": 99, "threads": 2},
+    )
+    hardware.save_profile(cached)
+    assert cached.is_fresh()
+    # GPU disappeared — enumerate now returns empty while the cache
+    # still lists the RTX 3090.
+    enumerate_calls = []
+    real_cpu = cached.cpu
+
+    def fake_enumerate():
+        enumerate_calls.append(1)
+        return []
+
+    monkeypatch.setattr(hardware, "enumerate_gpus", fake_enumerate)
+    monkeypatch.setattr(hardware, "cpu_topology", lambda: real_cpu)
+    monkeypatch.setattr(hardware, "_available_gb", lambda: 16.0)
+    monkeypatch.setattr(hardware, "_recommend_defaults",
+                        lambda *a, **k: {"backend": "cpu", "ngl": 0, "threads": 2})
+
+    prof = profile_box()  # NOT force=True — the swap must be detected
+    assert prof.gpus == []
+    assert prof.recommended["backend"] == "cpu"
+
+
 # ── SIMD backend inspection ───────────────────────────────────────
 
 
@@ -1079,3 +1124,64 @@ def test_profile_box_migrates_v2_to_v3_on_next_load(tmp_path, monkeypatch):
     re_saved = json.loads((tmp_path / "hw.json").read_text())
     assert re_saved["schema_version"] == 3
     assert re_saved["cpu"]["core_max_freqs_mhz"] == [4000.0] * 8
+
+
+def test_windows_gpu_enumeration_via_wmi(monkeypatch):
+    """Windows AMD/Intel GPUs are found via wmic (AdapterRAM is bytes,
+    0xffffffff sentinel = >4 GB). NVIDIA entries are skipped because
+    nvidia-smi reports them more accurately; Intel UHD/HD/Iris names
+    are marked shared-RAM and never use_for_llm."""
+    wmic_csv = (
+        "Node,AdapterRAM,Name\n"
+        "DESKTOP,4293918720,NVIDIA GeForce RTX 4070\n"
+        "DESKTOP,1073741824,Intel(R) UHD Graphics\n"
+        "DESKTOP,8589934592,AMD Radeon RX 7600\n"
+        "DESKTOP,,VirtualDisplay\n"
+    )
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        if cmd[0] == "wmic":
+            return type("R", (), {"returncode": 0, "stdout": wmic_csv})()
+        return type("R", (), {"returncode": 0, "stdout": ""})()
+
+    monkeypatch.setattr(hardware.shutil, "which", lambda name: None if name == "nvidia-smi" else "/fake/wnode")
+    monkeypatch.setattr(hardware.subprocess, "run", fake_run)
+    monkeypatch.setattr(hardware.os.name, "nt", True) if False else None
+    gpus = hardware._enumerate_gpus_windows()
+
+    by_vendor = {g.vendor: g for g in gpus}
+    # NVIDIA skipped (would come from nvidia-smi which is absent here,
+    # but wmic's uint32 sentinel makes its VRAM a lie).
+    assert "NVIDIA" not in by_vendor
+    # Intel iGPU: shared RAM, never usable for LLM.
+    intel = next(g for g in gpus if g.vendor == "Intel")
+    assert "UHD" in intel.name
+    assert intel.shared_ram is True
+    assert intel.use_for_llm is False
+    # AMD discrete with real VRAM: usable.
+    amd = next(g for g in gpus if g.vendor == "AMD")
+    assert "Radeon" in amd.name
+    assert amd.shared_ram is False
+    assert amd.use_for_llm is True
+
+
+def test_windows_gpu_enumeration_powershell_fallback(monkeypatch):
+    """When wmic is missing (Win11 22H2+ removed it), the PowerShell
+    CIM query provides Name,AdapterRAM lines instead."""
+    def fake_which(name):
+        return None  # no nvidia-smi, no wmic on PATH
+
+    ps_out = "AMD Radeon 8060S,8589934592\r\nIntel(R) Arc(tm) Graphics,2147483648\r\n"
+
+    def fake_run(cmd, **kw):
+        if cmd[0] == "powershell.exe":
+            return type("R", (), {"returncode": 0, "stdout": ps_out})()
+        return type("R", (), {"returncode": 1, "stdout": ""})()
+
+    monkeypatch.setattr(hardware.shutil, "which", fake_which)
+    monkeypatch.setattr(hardware.subprocess, "run", fake_run)
+    gpus = hardware._enumerate_gpus_windows()
+    vendors = sorted(g.vendor for g in gpus)
+    assert vendors == ["AMD", "Intel"]

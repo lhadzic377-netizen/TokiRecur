@@ -2847,3 +2847,86 @@ def test_update_spec_field_restart_failed_returns_spec_anyway(seeded_env, monkey
         ctl.update_spec_field("9b", "ctx_size", "8192", apply=True)
     # Registry still has the new value.
     assert ctl.get_model("9b").ctx_size == 8192
+
+
+def test_flock_times_out_loudly(seeded_env, monkeypatch):
+    """When another process holds the registry lock past the timeout,
+    _flock raises RuntimeError with the lockfile path instead of
+    silently proceeding unlocked (which loses one writer's edit)."""
+    import fcntl as _fcntl
+
+    reg = ctl.DEFAULT_REGISTRY
+    lock_path = reg.with_name(reg.name + ".lock")
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        _fcntl.flock(fd, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+        monkeypatch.setattr(ctl.time, "sleep", lambda s: None)
+        with pytest.raises(RuntimeError, match="locked by another"):
+            with ctl._flock(reg, timeout=0.2):
+                pass  # never reached
+    finally:
+        _fcntl.flock(fd, _fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def test_flock_acquires_when_free(seeded_env):
+    """No contention: the lock acquires immediately and releases on
+    exit."""
+    with ctl._flock(ctl.DEFAULT_REGISTRY, timeout=0.5):
+        pass  # must not raise
+
+
+def test_sync_cli_configs_escalates_repeated_failures(seeded_env, monkeypatch, caplog):
+    """A persistently unwritable config escalates from warning to
+    error after _SYNC_FAILURE_ESCALATE consecutive failures — a
+    read-only config dir should not stay invisible."""
+    import logging
+
+    from tokirecur import ctl as c
+
+    spec = c.load_registry()[0]
+    monkeypatch.setenv("OPENCODE_CONFIG", "/proc/nope/opencode.json")
+
+    def boom(*a, **kw):
+        raise OSError("read-only filesystem")
+
+    monkeypatch.setattr(c, "write_opencode_config", boom)
+    caplog.set_level(logging.WARNING)
+    for _ in range(c._SYNC_FAILURE_ESCALATE + 1):
+        c.sync_cli_configs(spec)
+    errors = [r for r in caplog.records
+              if r.levelno >= logging.ERROR and "opencode" in r.getMessage()]
+    assert errors, "expected escalation to error level"
+    assert "fix" in errors[-1].getMessage()
+
+
+def test_wait_healthy_fails_fast_on_foreign_service(monkeypatch, tmp_path):
+    """A port answering /health with a foreign body (not llama/daemon
+    JSON) fails within seconds instead of burning the full timeout."""
+    import httpx as _httpx
+
+    calls = {"n": 0}
+
+    class FakeResp:
+        status_code = 200
+        text = "<html><body>Jenkins</body></html>"
+
+    def fake_get(url, timeout=None):
+        calls["n"] += 1
+        return FakeResp()
+
+    monkeypatch.setattr(_httpx, "get", fake_get)
+
+    class DeadProc:
+        returncode = None
+
+        def poll(self):
+            return None  # child still alive (it will bind-fail later)
+
+    started = __import__("time").time()
+    with pytest.raises(RuntimeError, match="[Aa]nother service"):
+        ctl._wait_healthy("http://127.0.0.1:9999/health", DeadProc(),
+                          tmp_path / "llama.log", timeout=600.0,
+                          service="llama-server (t)")
+    elapsed = __import__("time").time() - started
+    assert elapsed < 30, f"foreign-port detection took {elapsed:.0f}s"
