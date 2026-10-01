@@ -4,6 +4,25 @@ All notable changes to TokiRecur are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.6] - 2026-10-01
+
+### Added
+- **A fresh-install test that walks the whole chain** in a temporary home:
+  register a model, sync every client config, build every launch plan, check
+  that every plan carries the daemon token, and authenticate against a real
+  daemon with the token that ends up in those configs.
+
+  This exists because every fault found while wiring up DeepSeek Harness had
+  the same shape - correct when written, silently wrong later - and none of
+  them was *guarded*. A config naming a dead port, a profile that was never
+  bound, a token the daemon does not accept: all three surface as an error
+  inside somebody else's application, so neither the installer job nor the
+  unit tests could ever see them. It runs on all three CI platforms, because
+  the config paths are not the same everywhere.
+
+  It found nothing new in the product, which is the point - it locks in the
+  chain that took five releases to get right.
+
 ## [0.3.5] - 2026-10-01
 
 ### Added

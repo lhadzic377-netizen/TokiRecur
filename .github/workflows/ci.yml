@@ -52,6 +52,16 @@ jobs:
         run: python -c "import tokirecur; print('ok')"
       - name: Run unit tests
         run: pytest tests/unit/ -q
+      - name: Fresh-install chain
+        # The class of fault that keeps arriving is a client that was
+        # configured correctly once and silently went stale: a config naming a
+        # dead port, a profile that was never bound, a token the daemon does
+        # not accept. Every one of those shows up as an error inside another
+        # application, so nothing short of walking the whole chain - register,
+        # sync every config, build every launch plan, check every credential -
+        # catches it. Runs on all three OSes because the config paths are not
+        # the same everywhere.
+        run: pytest tests/integration/test_fresh_install.py -q
 
   installer-linux:
     name: Installer (Linux systemd)
