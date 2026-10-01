@@ -33,7 +33,7 @@ def test_apps_bind_to_pinned_model():
     assert keys == [
         "toki", "ornithcode", "opencode", "hermes", "openclaw", "codex", "mimo",
         "qwen", "droid", "cline", "dsh", "grok", "kilo", "pi",
-        "copilot", "claude", "kimi", "omp", "web",
+        "copilot", "claude", "kimi", "omp", "web", "dsh-web",
     ]
 
 
@@ -62,7 +62,7 @@ def test_launcher_warns_when_restart_pending_marker_present(tmp_path, monkeypatc
     assert keys == [
         "toki", "ornithcode", "opencode", "hermes", "openclaw", "codex", "mimo",
         "qwen", "droid", "cline", "dsh", "grok", "kilo", "pi",
-        "copilot", "claude", "kimi", "omp", "web",
+        "copilot", "claude", "kimi", "omp", "web", "dsh-web",
     ]
     assert all(a.interface in ("chat", "tui", "web") for a in LAUNCH_APPS)
 

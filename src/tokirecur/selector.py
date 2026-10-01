@@ -9,6 +9,7 @@ their own provider configuration.
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -319,6 +320,11 @@ def launch_cmd(interface: str, client: str, spec: Any | None) -> dict:
                              "--model", spec.model_id],
                     "detach": False, "url": None, "env": env}
     elif interface == "web":
+        if client == "dsh":
+            # --no-open because we do the opening, and only once we have read
+            # the tokenised URL it prints on boot.
+            return {"argv": ["dsh", "web", "--no-open"], "detach": True,
+                    "url": None, "env": env}
         if client == "toki":
             return {"argv": ["toki", "web", "--detach",
                              "--raw-url", llama_url, "--daemon-url", daemon_url],
@@ -454,8 +460,50 @@ def _launch_detached(interface: str, client: str, argv: list[str],
         proc = subprocess.Popen(argv, env=env, stdout=log, stderr=subprocess.STDOUT,
                                 stdin=subprocess.DEVNULL, start_new_session=True)
     console.print(f"[dim]pid={proc.pid}  log: {log_path}[/dim]")
+    if interface == "web" and client == "dsh":
+        found = _await_dsh_web_url(proc, log_path)
+        if found is None:
+            console.print("[yellow]dsh did not print a URL - it may have failed to start.[/yellow]")
+            console.print(f"  see: {log_path}")
+            return 0
+        _open_browser(found)
+        return 0
     if url:
         import time
         time.sleep(2.0)
         _open_browser(url)
     return 0
+
+
+# dsh serves its UI behind a one-time token and prints the full URL on boot.
+# Opening the bare port gets a 401, so the URL has to be read from its output
+# rather than assumed.
+_DSH_URL_RE = re.compile(r"https?://127\.0\.0\.1:\d+/\?token=[A-Za-z0-9_=-]+")
+
+
+def _await_dsh_web_url(proc: subprocess.Popen, log_path: str, timeout: float = 25.0) -> str | None:
+    """Wait for dsh to announce its tokenised URL, or give up.
+
+    Fails fast when the process dies rather than sitting out the timeout, so a
+    broken launch says so immediately instead of appearing to hang.
+    """
+    import time
+
+    deadline = time.time() + timeout
+    seen = 0
+    while time.time() < deadline:
+        proc.poll()
+        if proc.returncode is not None:
+            return None
+        try:
+            data = Path(log_path).read_bytes()
+        except OSError:
+            data = b""
+        # Only re-scan what is new, so a long log is not re-read every tick.
+        chunk = data[seen:].decode("utf-8", "replace")
+        seen = len(data)
+        found = _DSH_URL_RE.search(chunk)
+        if found:
+            return found.group(0)
+        time.sleep(0.25)
+    return None

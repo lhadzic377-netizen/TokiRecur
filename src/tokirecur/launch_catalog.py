@@ -160,6 +160,15 @@ LAUNCH_APPS: tuple[LaunchApp, ...] = (
         False,
         "toki",
     ),
+    LaunchApp(
+        "dsh-web",
+        "Launch DeepSeek Harness Web",
+        "DeepSeek Harness browser UI on :3080",
+        "web",
+        "dsh",
+        False,
+        "dsh",
+    ),
 )
 
 

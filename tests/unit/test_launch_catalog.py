@@ -1,9 +1,12 @@
 import json
+import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+from tokirecur import ctl
 from tokirecur.launch_catalog import (
     LAUNCH_APPS,
     configured_provider_model,
@@ -38,7 +41,7 @@ def test_catalog_contains_all_requested_clients():
     assert [app.key for app in LAUNCH_APPS] == [
         "toki", "ornithcode", "opencode", "hermes", "openclaw", "codex", "mimo",
         "qwen", "droid", "cline", "dsh", "grok", "kilo", "pi",
-        "copilot", "claude", "kimi", "omp", "web",
+        "copilot", "claude", "kimi", "omp", "web", "dsh-web",
     ]
     assert all(get_launch_app(key) is not None for key in NEW_CLIENTS)
     assert all(get_launch_app(key) is None for key in REMOVED_ACCOUNT_CLIENTS)
@@ -308,3 +311,69 @@ def test_dsh_profile_list_ignores_directories_without_a_patch_layer(monkeypatch,
     (dsh / "profiles" / "node_modules").mkdir(parents=True)
     monkeypatch.setenv("DSH_HOME", str(dsh))
     assert ctl._existing_dsh_profiles() == []
+
+
+def test_dsh_web_is_offered_as_its_own_entry():
+    """It was unreachable: the only web row was a hardcoded toki entry."""
+    from tokirecur.launch_catalog import LAUNCH_APPS
+
+    web_rows = {a.client for a in LAUNCH_APPS if a.interface == "web"}
+    assert "dsh" in web_rows
+    dsh_web = next(a for a in LAUNCH_APPS if a.key == "dsh-web")
+    # Not model-bound: dsh web reads the same settings file as the other
+    # profiles, it is not a tokirecur model client.
+    assert dsh_web.model_binding is False
+
+
+def test_dsh_web_plan_detaches_and_lets_us_open_the_browser():
+    from tokirecur.selector import launch_cmd
+
+    spec = ctl.get_model(ctl.load_registry()[0].name)
+    plan = launch_cmd("web", "dsh", spec)
+    assert plan["argv"] == ["dsh", "web", "--no-open"]
+    assert plan["detach"] is True
+    # No url: dsh prints a tokenised one at boot that we read from its log.
+    # A hardcoded http://127.0.0.1:3080/ gets a 401.
+    assert plan["url"] is None
+
+
+def test_dsh_web_does_not_shadow_the_chat_tui_launch():
+    """A branch in the chat block was unreachable, shadowed by the real one."""
+    from tokirecur.selector import launch_cmd
+
+    spec = ctl.get_model(ctl.load_registry()[0].name)
+    chat = launch_cmd("chat", "dsh", spec)
+    assert chat["argv"] == ["dsh", "--profile", "tui"]
+    assert chat["detach"] is False
+
+
+def test_dsh_url_is_read_from_its_output(tmp_path):
+    """The token lives in dsh's own boot line, nowhere else."""
+    from tokirecur.selector import _DSH_URL_RE
+
+    log = tmp_path / "dsh-web.log"
+    log.write_text(
+        "dsh web: http://127.0.0.1:3080/?token=abc_DEF-123=\n"
+    )
+    found = _DSH_URL_RE.search(log.read_text())
+    assert found is not None
+    assert found.group(0) == "http://127.0.0.1:3080/?token=abc_DEF-123="
+
+
+def test_dsh_url_regex_ignores_a_bare_port():
+    from tokirecur.selector import _DSH_URL_RE
+
+    # The bare port 401s, so it must never be handed to the browser.
+    assert _DSH_URL_RE.search("dsh web: http://127.0.0.1:3080/\n") is None
+    assert _DSH_URL_RE.search("dsh: some unrelated line\n") is None
+
+
+def test_dsh_web_gives_up_when_dsh_never_prints_a_url(tmp_path):
+    """Should say so rather than appear to hang for the full timeout."""
+    from tokirecur.selector import _await_dsh_web_url
+
+    log = tmp_path / "dsh-web.log"
+    log.write_text("dsh: some unrelated line\n")
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    proc.wait()
+    assert _await_dsh_web_url(proc, str(log), timeout=5.0) is None
