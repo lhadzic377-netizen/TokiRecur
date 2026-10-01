@@ -377,3 +377,54 @@ def test_dsh_web_gives_up_when_dsh_never_prints_a_url(tmp_path):
     proc = subprocess.Popen([sys.executable, "-c", "pass"])
     proc.wait()
     assert _await_dsh_web_url(proc, str(log), timeout=5.0) is None
+
+
+def test_dsh_web_ignores_urls_left_by_a_previous_run(tmp_path):
+    """The log is appended, so scanning from 0 hands back a dead token.
+
+    Without a start offset the previous run's URL matches first, and the
+    browser opens a session that no longer exists.
+    """
+    from tokirecur.selector import _await_dsh_web_url, _log_size
+
+    log = tmp_path / "dsh-web.log"
+    log.write_text("dsh web: http://127.0.0.1:3080/?token=OLD_TOKEN\n")
+    start = _log_size(str(log))
+
+    dead = subprocess.Popen([sys.executable, "-c", "raise SystemExit(1)"])
+    dead.wait()
+    assert _await_dsh_web_url(dead, str(log), timeout=2.0, start=start) is None
+
+    # And with fresh bytes it does find the new one.
+    alive = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(5)"])
+    try:
+        with log.open("a") as fh:
+            fh.write("dsh web: http://127.0.0.1:3080/?token=NEW_TOKEN\n")
+        found = _await_dsh_web_url(alive, str(log), timeout=3.0, start=start)
+        assert found is not None
+        assert found.endswith("token=NEW_TOKEN")
+    finally:
+        alive.kill()
+        alive.wait()
+
+
+def test_dsh_web_reuses_a_running_instance(tmp_path):
+    """A second `dsh web` dies with EADDRINUSE and prints no URL.
+
+    The first one is serving fine, so report that rather than a failure the
+    user cannot act on.
+    """
+    from tokirecur.selector import _existing_dsh_web_url
+
+    log = tmp_path / "dsh-web.log"
+    log.write_text(
+        "dsh web: http://127.0.0.1:3080/?token=first\n"
+        "dsh: startup failed: EADDRINUSE\n"
+        "dsh web: http://127.0.0.1:3080/?token=second\n"
+    )
+    # The most recent one wins.
+    assert _existing_dsh_web_url(str(log)).endswith("token=second")
+
+    log.write_text("dsh: startup failed: EADDRINUSE\n")
+    assert _existing_dsh_web_url(str(log)) is None
+    assert _existing_dsh_web_url(str(tmp_path / "missing.log")) is None

@@ -461,12 +461,22 @@ def _launch_detached(interface: str, client: str, argv: list[str],
                                 stdin=subprocess.DEVNULL, start_new_session=True)
     console.print(f"[dim]pid={proc.pid}  log: {log_path}[/dim]")
     if interface == "web" and client == "dsh":
-        found = _await_dsh_web_url(proc, log_path)
-        if found is None:
-            console.print("[yellow]dsh did not print a URL - it may have failed to start.[/yellow]")
-            console.print(f"  see: {log_path}")
+        start = _log_size(log_path)
+        found = _await_dsh_web_url(proc, log_path, start=start)
+        if found is not None:
+            _open_browser(found)
             return 0
-        _open_browser(found)
+        # A second `dsh web` dies with EADDRINUSE and prints no URL, even
+        # though the first one is serving perfectly well. Reuse it instead of
+        # reporting a failure the user cannot act on.
+        existing = _existing_dsh_web_url(log_path)
+        if existing is not None:
+            console.print("[dim]dsh web is already running - opening that one[/dim]")
+            _open_browser(existing)
+            return 0
+        console.print("[yellow]dsh web did not start.[/yellow]")
+        console.print(f"  see: {log_path}")
+        console.print("  common cause: port 3080 is taken by something that is not dsh")
         return 0
     if url:
         import time
@@ -481,7 +491,30 @@ def _launch_detached(interface: str, client: str, argv: list[str],
 _DSH_URL_RE = re.compile(r"https?://127\.0\.0\.1:\d+/\?token=[A-Za-z0-9_=-]+")
 
 
-def _await_dsh_web_url(proc: subprocess.Popen, log_path: str, timeout: float = 25.0) -> str | None:
+def _log_size(path: str) -> int:
+    try:
+        return Path(path).stat().st_size
+    except OSError:
+        return 0
+
+
+def _existing_dsh_web_url(log_path: str) -> str | None:
+    """The most recent URL a previous dsh web wrote, if it is still serving."""
+    found = None
+    try:
+        for line in Path(log_path).read_text("utf-8", "replace").splitlines():
+            match = _DSH_URL_RE.search(line)
+            if match:
+                found = match.group(0)
+    except OSError:
+        return None
+    if found is None:
+        return None
+    return found
+
+
+def _await_dsh_web_url(proc: subprocess.Popen, log_path: str, timeout: float = 25.0,
+                       start: int | None = None) -> str | None:
     """Wait for dsh to announce its tokenised URL, or give up.
 
     Fails fast when the process dies rather than sitting out the timeout, so a
@@ -490,7 +523,10 @@ def _await_dsh_web_url(proc: subprocess.Popen, log_path: str, timeout: float = 2
     import time
 
     deadline = time.time() + timeout
-    seen = 0
+    # Start past anything a previous run left in the log. The file is opened in
+    # append mode, so scanning from 0 matches last run's URL first and hands
+    # the browser a token for a session that is long gone.
+    seen = _log_size(log_path) if start is None else start
     while time.time() < deadline:
         proc.poll()
         if proc.returncode is not None:
@@ -499,7 +535,9 @@ def _await_dsh_web_url(proc: subprocess.Popen, log_path: str, timeout: float = 2
             data = Path(log_path).read_bytes()
         except OSError:
             data = b""
-        # Only re-scan what is new, so a long log is not re-read every tick.
+        if len(data) < seen:
+            # Truncated and rewritten; start over rather than slice nonsense.
+            seen = 0
         chunk = data[seen:].decode("utf-8", "replace")
         seen = len(data)
         found = _DSH_URL_RE.search(chunk)

@@ -4,6 +4,20 @@ All notable changes to TokiRecur are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.4] - 2026-10-01
+
+### Fixed
+- **DeepSeek Harness Web opens even when one is already running.** A second
+  `dsh web` dies with `EADDRINUSE: address already in use 127.0.0.1:3080` and
+  never prints a URL, so the launcher had nothing to open and reported a
+  failure the user could not act on - while a perfectly good instance was
+  serving on 3080. It now reuses the running instance's URL instead.
+- **A launch no longer picks up the previous run's token.** The log is opened
+  in append mode and the URL scan started at offset 0, so the first match was
+  last run's URL: the browser opened a token for a session that no longer
+  existed. Scanning now starts at the file size recorded when the process was
+  spawned.
+
 ## [0.3.3] - 2026-10-01
 
 ### Added
