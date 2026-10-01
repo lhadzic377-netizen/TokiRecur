@@ -220,10 +220,13 @@ def test_dsh_profile_patch_binds_the_profile_to_the_bound_model(monkeypatch, tmp
     dsh = tmp_path / ".dsh"
     profile = dsh / "profiles" / "tui"
     profile.mkdir(parents=True)
+    # A profile is only bound if it has a user patch layer to write into.
+    # Creating one where the user has none would be inventing structure.
+    (profile / "cordis.patch.yml").write_text("[]\n")
     monkeypatch.setenv("DSH_HOME", str(dsh))
 
     spec = ctl.get_model(ctl.load_registry()[0].name)
-    out = ctl._write_dsh_profile_patch(spec)
+    out = ctl._write_dsh_profile_patch(spec, "tui")
     assert out == profile / "cordis.patch.yml"
 
     patch = yaml.safe_load(out.read_text())
@@ -245,7 +248,7 @@ def test_dsh_profile_patch_skips_a_profile_that_was_never_created(monkeypatch, t
     dsh.mkdir()
     monkeypatch.setenv("DSH_HOME", str(dsh))
     spec = ctl.get_model(ctl.load_registry()[0].name)
-    assert ctl._write_dsh_profile_patch(spec) is None
+    assert ctl._write_dsh_profile_patch(spec, "tui") is None
 
 
 def test_dsh_config_write_also_updates_the_profile_layer(monkeypatch, tmp_path):
@@ -257,6 +260,7 @@ def test_dsh_config_write_also_updates_the_profile_layer(monkeypatch, tmp_path):
     dsh = tmp_path / ".dsh"
     profile = dsh / "profiles" / "tui"
     profile.mkdir(parents=True)
+    (profile / "cordis.patch.yml").write_text("[]\n")
     monkeypatch.setenv("DSH_HOME", str(dsh))
     spec = ctl.get_model(ctl.load_registry()[0].name)
 
@@ -269,3 +273,38 @@ def test_dsh_config_write_also_updates_the_profile_layer(monkeypatch, tmp_path):
     assert settings["agent-default-model"]["model"] == by_id["agent-default-model"]["config"]["model"]
     assert (settings["llm-pi-ai"]["providers"]["tokirecur"]["baseURL"]
             == by_id["llm-pi-ai"]["config"]["providers"]["tokirecur"]["baseURL"])
+
+
+def test_dsh_binds_every_profile_not_just_tui(monkeypatch, tmp_path):
+    """An unbound `web` profile serves its UI and fails the first message.
+
+    That reads as a broken web UI rather than a missing binding, which is
+    exactly how this was reported: the TUI worked and the browser did not.
+    """
+    from tokirecur import ctl
+
+    dsh = tmp_path / ".dsh"
+    for name in ("tui", "web", "headless"):
+        (dsh / "profiles" / name).mkdir(parents=True)
+    (dsh / "profiles" / "tui" / "cordis.patch.yml").write_text("[]\n")
+    (dsh / "profiles" / "web" / "cordis.patch.yml").write_text("[]\n")
+    # headless has no patch layer of its own; settings.yaml is its config.
+    monkeypatch.setenv("DSH_HOME", str(dsh))
+
+    spec = ctl.get_model(ctl.load_registry()[0].name)
+    assert ctl._existing_dsh_profiles() == ["tui", "web"]
+
+    written = ctl._write_all_dsh_profile_patches(spec)
+    assert [p.parent.name for p in written] == ["tui", "web"]
+    for path in written:
+        assert "agent-default-model" in path.read_text()
+
+
+def test_dsh_profile_list_ignores_directories_without_a_patch_layer(monkeypatch, tmp_path):
+    from tokirecur import ctl
+
+    dsh = tmp_path / ".dsh"
+    (dsh / "profiles" / "web").mkdir(parents=True)  # no cordis.patch.yml
+    (dsh / "profiles" / "node_modules").mkdir(parents=True)
+    monkeypatch.setenv("DSH_HOME", str(dsh))
+    assert ctl._existing_dsh_profiles() == []

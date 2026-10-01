@@ -3218,3 +3218,68 @@ def test_wait_healthy_fails_fast_on_foreign_service(monkeypatch, tmp_path):
                           service="llama-server (t)")
     elapsed = __import__("time").time() - started
     assert elapsed < 30, f"foreign-port detection took {elapsed:.0f}s"
+
+
+def test_auth_token_matches_the_daemon_resolver(monkeypatch, tmp_path):
+    """Client configs must carry the token the daemon will actually accept.
+
+    The two resolvers have to agree: api.app._get_auth_token reads env then
+    ~/.config/tokirecur/auth, and ctl.auth_token used to read env then invent
+    a fresh random token. With no env var that meant two calls returned two
+    different tokens and neither matched the daemon, so a dsh web profile
+    loaded, showed the model selector, and failed its first turn with
+    "API key is invalid".
+    """
+    monkeypatch.delenv("TOKI_AUTH_TOKEN", raising=False)
+    auth = tmp_path / ".config" / "tokirecur" / "auth"
+    auth.parent.mkdir(parents=True)
+    auth.write_text("the-real-daemon-token\n")
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+
+    first = ctl.auth_token()
+    assert first == "the-real-daemon-token"
+    # Stable across calls - a fresh random per call was the original bug.
+    assert ctl.auth_token() == first
+
+
+def test_auth_token_prefers_the_env_var(monkeypatch, tmp_path):
+    monkeypatch.setenv("TOKI_AUTH_TOKEN", "from-env")
+    auth = tmp_path / ".config" / "tokirecur" / "auth"
+    auth.parent.mkdir(parents=True)
+    auth.write_text("from-file")
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    # Same order as the daemon, so the env var still wins on both sides.
+    assert ctl.auth_token() == "from-env"
+
+
+def test_auth_token_falls_back_to_random_when_nothing_is_configured(monkeypatch, tmp_path):
+    monkeypatch.delenv("TOKI_AUTH_TOKEN", raising=False)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    token = ctl.auth_token()
+    assert token and token != "demo-token"
+    assert len(token) >= 16
+
+
+def test_dsh_settings_use_the_daemon_token(monkeypatch, tmp_path):
+    """A client config written from a stale token 401s on the first turn."""
+    import yaml
+
+    monkeypatch.delenv("TOKI_AUTH_TOKEN", raising=False)
+    auth = tmp_path / ".config" / "tokirecur" / "auth"
+    auth.parent.mkdir(parents=True)
+    auth.write_text("shared-secret\n")
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+
+    dsh = tmp_path / ".dsh"
+    (dsh / "profiles" / "tui").mkdir(parents=True)
+    (dsh / "profiles" / "tui" / "cordis.patch.yml").write_text("[]\n")
+    monkeypatch.setenv("DSH_HOME", str(dsh))
+
+    spec = ctl.get_model(ctl.load_registry()[0].name)
+    ctl.write_dsh_config(spec)
+
+    settings = yaml.safe_load((dsh / "settings.yaml").read_text())
+    # apiKeyEnv, not a literal - dsh reads the env var at launch, so what
+    # matters is that the env var we hand it is the daemon's token.
+    assert settings["llm-pi-ai"]["providers"]["tokirecur"]["apiKeyEnv"] == "TOKI_AUTH_TOKEN"
+    assert ctl.auth_token() == "shared-secret"

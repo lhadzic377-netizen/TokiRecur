@@ -167,16 +167,41 @@ class TestConstantTimeAuth:
 
 
 class TestDefaultToken:
-    def test_default_auth_is_random_not_known(self, monkeypatch):
+    # Pointed at an empty home so these do not read the machine's real auth
+    # file. The property under test is that the *fallback* is never a
+    # well-known value; whether an auth file exists is a separate case, and
+    # conflating the two is what let the random-per-call bug look correct.
+    @pytest.fixture(autouse=True)
+    def _no_auth_file(self, monkeypatch, tmp_path):
+        from pathlib import Path as _Path
         monkeypatch.delenv("TOKI_AUTH_TOKEN", raising=False)
+        monkeypatch.setattr(_Path, "home", classmethod(lambda cls: tmp_path))
+        yield
+
+    def test_default_auth_is_random_not_known(self):
         tok = ctl.auth_token()
         assert tok
         assert tok != "demo-token"
         assert len(tok) >= 32
 
-    def test_generated_default_looks_like_a_token(self, monkeypatch):
-        monkeypatch.delenv("TOKI_AUTH_TOKEN", raising=False)
+    def test_generated_default_looks_like_a_token(self):
         assert re.fullmatch(r"[A-Za-z0-9_-]+", ctl.auth_token())
+
+    def test_auth_file_value_is_used_when_present(self, tmp_path):
+        # Must agree with api.app._get_auth_token, or every request 401s.
+        auth = tmp_path / ".config" / "tokirecur" / "auth"
+        auth.parent.mkdir(parents=True)
+        auth.write_text("configured-secret\n")
+        assert ctl.auth_token() == "configured-secret"
+
+    def test_configured_token_is_stable_across_calls(self, tmp_path):
+        # The original bug: a fresh token per call, so no client config could
+        # ever match the daemon and every turn 401'd with "API key is
+        # invalid". Stability is what makes a written config usable.
+        auth = tmp_path / ".config" / "tokirecur" / "auth"
+        auth.parent.mkdir(parents=True)
+        auth.write_text("configured-secret\n")
+        assert ctl.auth_token() == ctl.auth_token() == "configured-secret"
 
     def test_env_var_wins_over_random_default(self, monkeypatch):
         monkeypatch.setenv("TOKI_AUTH_TOKEN", "my-configured-token")

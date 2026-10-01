@@ -150,13 +150,37 @@ def _configured_auth_token() -> str | None:
 
 
 def auth_token() -> str:
-    """Auth token used in client configs when none is configured.
+    """The token the daemon will actually accept.
 
-    Honors TOKI_AUTH_TOKEN if set; otherwise a fresh random token, so
-    the fallback is never a well-known value (the daemon accepts it on
-    loopback when no token is configured).
+    Order has to match api.app._get_auth_token exactly - env, then the auth
+    file - or client configs and the daemon disagree and every request is a
+    401. The previous version skipped the auth file entirely and invented a
+    fresh random token instead, which meant that with no env var set:
+
+      * two calls returned two different tokens, and
+      * neither matched the token the daemon was using
+
+    so a dsh web profile came up, displayed the model selector, and then
+    failed its first turn with "API key is invalid". Symmetry with the daemon
+    is the whole fix; do not reorder one side without the other.
     """
-    return os.environ.get("TOKI_AUTH_TOKEN") or secrets.token_urlsafe(32)
+    env = os.environ.get("TOKI_AUTH_TOKEN")
+    if env:
+        return env
+    for path in (
+        Path.home() / ".config" / "tokirecur" / "auth",
+        Path("/etc/toki-recur/auth"),
+    ):
+        try:
+            if path.is_file():
+                content = path.read_text().strip()
+                if content:
+                    return content
+        except OSError:
+            pass
+    # No token configured anywhere. The daemon accepts anything on loopback,
+    # but never hand out a well-known value.
+    return secrets.token_urlsafe(32)
 
 
 # Back-compat alias: historically a module-level constant frozen at
@@ -2884,11 +2908,32 @@ def _dsh_config_path() -> Path:
     return (Path(home).expanduser() if home else Path.home() / ".dsh") / "settings.yaml"
 
 
-def _dsh_profile_patch_path(profile: str = "tui") -> Path:
-    """A dsh profile's own patch layer, which outranks every bundle layer."""
+def _dsh_profiles_root() -> Path:
     home = os.environ.get("DSH_HOME")
-    root = Path(home).expanduser() if home else Path.home() / ".dsh"
-    return root / "profiles" / profile / "cordis.patch.yml"
+    return (Path(home).expanduser() if home else Path.home() / ".dsh") / "profiles"
+
+
+def _dsh_profile_patch_path(profile: str) -> Path:
+    """A dsh profile's own patch layer, which outranks every bundle layer."""
+    return _dsh_profiles_root() / profile / "cordis.patch.yml"
+
+
+def _existing_dsh_profiles() -> list[str]:
+    """Every profile directory that actually exists.
+
+    All of them need the binding, not just the TUI one. A profile ignores
+    ~/.dsh/settings.yaml, so an unbound `web` profile boots, serves its UI,
+    and then fails the first message with a MISSING_CREDENTIAL for
+    deepseek-official - which looks exactly like a broken web UI.
+    """
+    root = _dsh_profiles_root()
+    if not root.is_dir():
+        return []
+    return sorted(
+        entry.name
+        for entry in root.iterdir()
+        if entry.is_dir() and (entry / "cordis.patch.yml").is_file()
+    )
 
 
 _DSH_PATCH_HEADER = """# Managed by toki. Do not edit by hand - `toki model use` rewrites this.
@@ -2904,7 +2949,7 @@ _DSH_PATCH_HEADER = """# Managed by toki. Do not edit by hand - `toki model use`
 
 
 def _write_dsh_profile_patch(
-    spec: ModelSpec, profile: str = "tui", mode: str | None = None,
+    spec: ModelSpec, profile: str, mode: str | None = None,
 ) -> Path | None:
     """Bind one dsh profile to the bound model.
 
@@ -2936,6 +2981,16 @@ def _write_dsh_profile_patch(
     _write_private_config(path, _DSH_PATCH_HEADER + yaml.safe_dump(
         patch, sort_keys=False, default_flow_style=False))
     return path
+
+
+def _write_all_dsh_profile_patches(
+    spec: ModelSpec, mode: str | None = None,
+) -> list[Path]:
+    return [
+        written
+        for profile in _existing_dsh_profiles()
+        if (written := _write_dsh_profile_patch(spec, profile, mode=mode)) is not None
+    ]
 
 
 def _grok_config_path() -> Path:
@@ -3281,10 +3336,10 @@ def write_dsh_config(
         "model": spec.model_id,
     }
     _write_private_config(cfg_path, yaml.safe_dump(cfg, sort_keys=False))
-    # The profile layer is what the TUI actually reads. Written here so it can
-    # never drift from the headless settings above.
+    # The profile layers are what tui and web actually read. Written here so
+    # they can never drift from the headless settings above.
     try:
-        _write_dsh_profile_patch(spec, mode=mode)
+        _write_all_dsh_profile_patches(spec, mode=mode)
     except Exception as e:  # never let a profile write break the settings write
         logger.warning("could not write dsh profile patch: %s", e)
     return cfg_path

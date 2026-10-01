@@ -4,6 +4,31 @@ All notable changes to TokiRecur are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] - 2026-10-01
+
+### Fixed
+- **The DeepSeek Harness web UI works.** `dsh web` served its UI, showed the
+  model selector, and then failed every turn with `API key is invalid`.
+- **Every dsh profile is now bound, not just `tui`.** `write_dsh_config`
+  hardcoded the `tui` profile, so `web` and `headless` kept the empty patch
+  layer and fell through to `deepseek-official/deepseek-flash`, which demands
+  a `DEEPSEEK_API_KEY` this machine does not have. It now walks the profiles
+  that exist and writes each one. A profile directory with no
+  `cordis.patch.yml` is skipped rather than created — inventing a user patch
+  layer is not ours to do.
+- **`auth_token()` now reads `~/.config/tokirecur/auth`.** It read the env var
+  and otherwise invented a fresh random token, so it never agreed with
+  `api.app._get_auth_token`, which reads env then that file. With no env var
+  set, two calls returned two different tokens and neither matched the
+  daemon — so a written client config could not work, and a stray
+  `TOKI_AUTH_TOKEN` in the environment silently overrode the configured token
+  on the daemon side. The two resolvers now have the same order, and
+  `test_security.py` is hermetic so it cannot pass by reading the machine's
+  real auth file again.
+
+Verified in a browser: `http://127.0.0.1:3080/?token=…` loads the Harness UI,
+lists the local `Qwen3.5-0.8B-Q4_K_M`, and a turn completes in ~2s.
+
 ## [0.3.1] - 2026-10-01
 
 ### Fixed
