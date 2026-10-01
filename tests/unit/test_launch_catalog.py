@@ -203,3 +203,69 @@ def test_removed_account_clients_are_not_offered():
         assert key not in [app.key for app in LAUNCH_APPS]
 
 
+
+
+def test_dsh_profile_patch_binds_the_profile_to_the_bound_model(monkeypatch, tmp_path):
+    """settings.yaml is not the user override layer for a named profile.
+
+    `dsh --profile tui --dump-config` and `--dump-default-config` are
+    identical, so a profile never reads ~/.dsh/settings.yaml and falls through
+    to deepseek-official/deepseek-flash. Without this, the TUI boots and then
+    asks for a DEEPSEEK_API_KEY this machine does not have.
+    """
+    import yaml
+
+    from tokirecur import ctl
+
+    dsh = tmp_path / ".dsh"
+    profile = dsh / "profiles" / "tui"
+    profile.mkdir(parents=True)
+    monkeypatch.setenv("DSH_HOME", str(dsh))
+
+    spec = ctl.get_model(ctl.load_registry()[0].name)
+    out = ctl._write_dsh_profile_patch(spec)
+    assert out == profile / "cordis.patch.yml"
+
+    patch = yaml.safe_load(out.read_text())
+    by_id = {entry["id"]: entry for entry in patch}
+    assert by_id["agent-default-model"]["config"]["provider"] == "tokirecur"
+    assert by_id["agent-default-model"]["config"]["model"] == spec.model_id
+    provider = by_id["llm-pi-ai"]["config"]["providers"]["tokirecur"]
+    assert provider["apiKeyEnv"] == "TOKI_AUTH_TOKEN"
+    assert provider["api"] == "openai-completions"
+    assert provider["baseURL"].startswith("http://127.0.0.1:")
+    assert [m["id"] for m in provider["models"]] == [spec.model_id]
+
+
+def test_dsh_profile_patch_skips_a_profile_that_was_never_created(monkeypatch, tmp_path):
+    """Inventing a profile would install a plugin tree nobody asked for."""
+    from tokirecur import ctl
+
+    dsh = tmp_path / ".dsh"
+    dsh.mkdir()
+    monkeypatch.setenv("DSH_HOME", str(dsh))
+    spec = ctl.get_model(ctl.load_registry()[0].name)
+    assert ctl._write_dsh_profile_patch(spec) is None
+
+
+def test_dsh_config_write_also_updates_the_profile_layer(monkeypatch, tmp_path):
+    """One call keeps both layers in step; they cannot drift apart."""
+    import yaml
+
+    from tokirecur import ctl
+
+    dsh = tmp_path / ".dsh"
+    profile = dsh / "profiles" / "tui"
+    profile.mkdir(parents=True)
+    monkeypatch.setenv("DSH_HOME", str(dsh))
+    spec = ctl.get_model(ctl.load_registry()[0].name)
+
+    ctl.write_dsh_config(spec)
+
+    settings = yaml.safe_load((dsh / "settings.yaml").read_text())
+    patch = yaml.safe_load((profile / "cordis.patch.yml").read_text())
+    by_id = {entry["id"]: entry for entry in patch}
+    # Same model in both, or one of them is pointing somewhere stale.
+    assert settings["agent-default-model"]["model"] == by_id["agent-default-model"]["config"]["model"]
+    assert (settings["llm-pi-ai"]["providers"]["tokirecur"]["baseURL"]
+            == by_id["llm-pi-ai"]["config"]["providers"]["tokirecur"]["baseURL"])

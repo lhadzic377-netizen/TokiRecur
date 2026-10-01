@@ -2884,6 +2884,60 @@ def _dsh_config_path() -> Path:
     return (Path(home).expanduser() if home else Path.home() / ".dsh") / "settings.yaml"
 
 
+def _dsh_profile_patch_path(profile: str = "tui") -> Path:
+    """A dsh profile's own patch layer, which outranks every bundle layer."""
+    home = os.environ.get("DSH_HOME")
+    root = Path(home).expanduser() if home else Path.home() / ".dsh"
+    return root / "profiles" / profile / "cordis.patch.yml"
+
+
+_DSH_PATCH_HEADER = """# Managed by toki. Do not edit by hand - `toki model use` rewrites this.
+#
+# ~/.dsh/settings.yaml is the config for `dsh --profile headless`. It is NOT
+# the user override layer for a named profile: `dsh --profile tui
+# --dump-config` and `--dump-default-config` come back identical, so a profile
+# ignores it entirely and falls through to its bundle default of
+# deepseek-official/deepseek-flash, which wants a DEEPSEEK_API_KEY this machine
+# does not have. These two entries are what bind the profile to the local
+# daemon, and they have to live here.
+"""
+
+
+def _write_dsh_profile_patch(
+    spec: ModelSpec, profile: str = "tui", mode: str | None = None,
+) -> Path | None:
+    """Bind one dsh profile to the bound model.
+
+    Returns None when the profile does not exist. A missing profile is not an
+    error: it means that profile was never created, and inventing one would
+    install a plugin tree nobody asked for.
+    """
+    path = _dsh_profile_patch_path(profile)
+    if not path.parent.is_dir():
+        return None
+    model = {
+        "id": spec.model_id,
+        "name": spec.label,
+        "contextWindow": _effective_ctx(spec),
+        "maxTokens": _client_output_limit(spec),
+        "input": ["text"],
+    }
+    patch = [
+        {"id": "agent-default-model",
+         "config": {"provider": "tokirecur", "model": spec.model_id}},
+        {"id": "llm-pi-ai",
+         "config": {"providers": {"tokirecur": {
+             "apiKeyEnv": "TOKI_AUTH_TOKEN",
+             "api": "openai-completions",
+             "baseURL": _client_endpoint(spec, _resolve_mode("dsh", mode)),
+             "models": [model],
+         }}}},
+    ]
+    _write_private_config(path, _DSH_PATCH_HEADER + yaml.safe_dump(
+        patch, sort_keys=False, default_flow_style=False))
+    return path
+
+
 def _grok_config_path() -> Path:
     home = os.environ.get("GROK_HOME")
     return (Path(home).expanduser() if home else Path.home() / ".grok") / "config.toml"
@@ -3227,6 +3281,12 @@ def write_dsh_config(
         "model": spec.model_id,
     }
     _write_private_config(cfg_path, yaml.safe_dump(cfg, sort_keys=False))
+    # The profile layer is what the TUI actually reads. Written here so it can
+    # never drift from the headless settings above.
+    try:
+        _write_dsh_profile_patch(spec, mode=mode)
+    except Exception as e:  # never let a profile write break the settings write
+        logger.warning("could not write dsh profile patch: %s", e)
     return cfg_path
 
 
