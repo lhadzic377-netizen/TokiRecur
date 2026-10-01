@@ -4,6 +4,22 @@ All notable changes to TokiRecur are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.5] - 2026-10-01
+
+### Added
+- **The DeepSeek Harness TUI and web UI now open together.** Selecting dsh
+  starts the browser UI in the background and opens it, then hands the
+  terminal to the TUI. Both surfaces are the same model on the same daemon,
+  so there was no reason to make them two separate selections.
+
+  The companion is started *before* the foreground launch on purpose: a
+  foreground launch `exec`s and replaces the process, so anything spawned
+  afterwards never exists. A companion that fails to start is reported and
+  the TUI launches anyway - a browser that will not open must not cost you
+  the terminal.
+
+  dsh-web still works as its own entry for when you only want the browser.
+
 ## [0.3.4] - 2026-10-01
 
 ### Fixed

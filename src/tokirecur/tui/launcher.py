@@ -1222,7 +1222,16 @@ def invalidate_settings_rows() -> None:
 
 
 def _execute_launch(request: dict[str, Any]) -> int:
-    from ..selector import _launch_detached, _launch_foreground
+    from ..selector import _launch_detached, _launch_foreground, start_companion
+
+    # Before the exec, not after: a foreground launch replaces this process,
+    # so a companion started afterwards would never exist.
+    companion = request.get("companion")
+    if companion:
+        try:
+            start_companion(companion, request["env"])
+        except Exception:  # never block the primary launch
+            pass
 
     if request["detach"]:
         return _launch_detached(
@@ -1246,7 +1255,7 @@ def run():
 
             if not _gateway_up():
                 argv = ["openclaw", "chat"]
-        return {
+        request = {
             "interface": interface,
             "client": client,
             "model": model,
@@ -1255,6 +1264,9 @@ def run():
             "url": plan["url"],
             "env": plan["env"],
         }
+        if plan.get("companion"):
+            request["companion"] = plan["companion"]
+        return request
 
     from rich.console import Console
 

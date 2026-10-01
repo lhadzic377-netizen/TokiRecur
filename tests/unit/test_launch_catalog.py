@@ -428,3 +428,71 @@ def test_dsh_web_reuses_a_running_instance(tmp_path):
     log.write_text("dsh: startup failed: EADDRINUSE\n")
     assert _existing_dsh_web_url(str(log)) is None
     assert _existing_dsh_web_url(str(tmp_path / "missing.log")) is None
+
+
+def test_dsh_chat_plan_brings_the_web_ui_alongside_the_tui():
+    """One selection, both surfaces - the TUI in the terminal, web in a tab."""
+    from tokirecur.selector import launch_cmd
+
+    spec = ctl.get_model(ctl.load_registry()[0].name)
+    plan = launch_cmd("chat", "dsh", spec)
+    assert plan["detach"] is False
+    assert plan["companion"] == {
+        "client": "dsh",
+        "argv": ["dsh", "web", "--no-open"],
+    }
+
+
+def test_only_dsh_declares_a_companion():
+    from tokirecur.selector import launch_cmd
+
+    spec = ctl.get_model(ctl.load_registry()[0].name)
+    for client in ("opencode", "codex", "claude", "toki"):
+        assert launch_cmd("chat", client, spec).get("companion") is None
+
+
+def test_companion_starts_before_the_foreground_exec():
+    """A foreground launch replaces the process; later children never exist."""
+    from tokirecur.tui.launcher import _execute_launch
+
+    order = []
+    import tokirecur.selector as sel
+
+    original = sel.start_companion
+    original_fg = sel._launch_foreground
+    try:
+        sel.start_companion = lambda c, e: order.append("companion")
+        sel._launch_foreground = lambda argv, env: order.append("foreground") or 0
+        _execute_launch({
+            "interface": "chat", "client": "dsh", "argv": ["dsh"], "env": {},
+            "detach": False, "url": None,
+            "companion": {"client": "dsh", "argv": ["dsh", "web", "--no-open"]},
+        })
+    finally:
+        sel.start_companion = original
+        sel._launch_foreground = original_fg
+    assert order == ["companion", "foreground"]
+
+
+def test_companion_failure_does_not_block_the_primary_launch(monkeypatch):
+    """A browser that will not open must not cost you the TUI."""
+    import tokirecur.selector as sel
+    from tokirecur.tui.launcher import _execute_launch
+
+    def boom(companion, env):
+        raise RuntimeError("no browser here")
+
+    original = sel.start_companion
+    original_fg = sel._launch_foreground
+    try:
+        sel.start_companion = boom
+        sel._launch_foreground = lambda argv, env: 0
+        rc = _execute_launch({
+            "interface": "chat", "client": "dsh", "argv": ["dsh"], "env": {},
+            "detach": False, "url": None,
+            "companion": {"client": "dsh", "argv": ["dsh", "web", "--no-open"]},
+        })
+    finally:
+        sel.start_companion = original
+        sel._launch_foreground = original_fg
+    assert rc == 0

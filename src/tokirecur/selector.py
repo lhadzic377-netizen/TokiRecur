@@ -297,8 +297,13 @@ def launch_cmd(interface: str, client: str, spec: Any | None) -> dict:
                     "detach": False, "url": None, "env": env}
 
         if client == "dsh":
+            # The web UI is the same model over the same daemon, so launching
+            # the TUI also brings the browser UI up. The TUI execs and takes
+            # the terminal, so the companion has to be started first - which
+            # is what "companion" is for.
             return {"argv": ["dsh", "--profile", "tui"], "detach": False,
-                    "url": None, "env": env}
+                    "url": None, "env": env,
+                    "companion": {"client": "dsh", "argv": ["dsh", "web", "--no-open"]}}
         if client == "grok":
             return {"argv": ["grok", "--model", provider], "detach": False,
                     "url": None, "env": env}
@@ -427,6 +432,39 @@ def run() -> int:
 
     from .tui.launcher import run as launcher_run
     return launcher_run()
+
+
+def start_companion(companion: dict, env: dict) -> None:
+    """Start a detached side-surface and open it in a browser.
+
+    Runs before any exec, because the foreground launch replaces this process
+    and anything not already spawned dies with it.
+    """
+    argv = list(companion.get("argv") or [])
+    if not argv:
+        return
+    client = companion.get("client") or ""
+    log_dir = Path.home() / ".local/state/tokirecur"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = str(log_dir / f"{client}-companion.log")
+    try:
+        with open(log_path, "ab") as log:
+            proc = subprocess.Popen(argv, env=env, stdout=log, stderr=subprocess.STDOUT,
+                                    stdin=subprocess.DEVNULL, start_new_session=True)
+    except OSError as e:
+        console.print(f"[yellow]could not start the {client} web UI: {e}[/yellow]")
+        return
+    found = _await_dsh_web_url(proc, log_path, start=_log_size(log_path))
+    if found is None:
+        existing = _existing_dsh_web_url(log_path)
+        if existing is not None:
+            console.print(f"[dim]{client} web UI is already running[/dim]")
+            _open_browser(existing)
+            return
+        console.print(f"[yellow]{client} web UI did not start - see {log_path}[/yellow]")
+        return
+    console.print(f"[dim]{client} web UI: {found}[/dim]")
+    _open_browser(found)
 
 
 def _launch_foreground(argv: list[str], env: dict) -> int:
