@@ -67,7 +67,7 @@ toki model pull Qwen/Qwen3-4B-GGUF --name qwen3-4b
 toki model install-llama --backend rocm --name qwen3-4b
 
 # 4. Start it (this boots llama-server + the toki daemon and wires
-#    opencode/openclaw/hermes at it):
+#    every model-capable CLI client at it):
 toki model use qwen3-4b
 
 # 5. Talk to it — the full-screen TUI chat (or open the web UI with `toki web`)
@@ -139,19 +139,37 @@ Or point `binary:` at any llama-server on PATH in the registry
 
 ## The launcher
 
-Bare `toki` opens an Ollama-style full-screen launcher in a black + yellow
-design: a letter-spaced yellow `TOKI` wordmark with tagline and amber divider,
-then a vertically-centred column of app cards — toki Chat, OpenCode, Hermes,
-OpenClaw, web dashboards — each bound to the pinned model. The active row is
-highlighted with a yellow accent bar. Keys `1`–`5` jump straight to an app (or
-model).
+Bare `toki` opens an Ollama-style full-screen launcher in a black + yellow design: a letter-spaced yellow `TOKI` wordmark with tagline and amber divider, then a navigable column of app cards. The model-bound clients (Toki Chat, OpenCode, MiMo Code, Hermes, OpenClaw, Codex, Qwen Code, Factory Droid, Cline CLI, DeepSeek Harness, Grok Build, Kilo Code, Pi, GitHub Copilot CLI, Kimi Code, OMP, and Claude Code) use the pinned TokiRecur model. Each one's own config file is rewritten when it launches, so a client can never be left pointing at a model or port that is no longer running — the failure mode that made DeepSeek Harness sit there rendering nothing. OpenAI-compatible clients use the daemon's OpenAI route; Claude Code uses the daemon's local Anthropic-compatible `/anthropic/v1/messages` route. Web Dashboards remains available at the end of the list. The active row is highlighted with a yellow accent bar. Keys `1`–`9` jump to the first nine apps; use `↑`/`↓` for the full list.
+
 
 | Key | Action |
 |---|---|
+| `1`–`9` | jump to the first nine apps (or models) |
 | `↑` / `↓` (or `k` / `j`) | navigate apps or models |
-| `Enter` | launch the highlighted app with the pinned model |
+| `Enter` | launch the highlighted app; model-bound clients use the pinned model |
 | `→` / `Tab` | flip to the model picker (per-model health dots + ctx) |
 | `←` | back to the app list |
+
+### Claude Code and local models
+
+Claude Code talks to the daemon's Anthropic-compatible route: a private override at
+`~/.config/tokirecur/claude/settings.json` (owner-only) points `ANTHROPIC_BASE_URL`
+at `http://127.0.0.1:<daemon port>/anthropic`, pins every model alias to the active
+model, and sets `ANTHROPIC_API_KEY` only — a stale `ANTHROPIC_AUTH_TOKEN` in your
+shell or global settings is dropped from the launch environment. The daemon accepts
+either credential header, so a client that sends both still authenticates. Streams
+carry Anthropic `ping` keepalives, so a slow local prompt evaluation cannot trip the
+client's idle timeout and trigger a two-minute retry.
+
+A full Claude Code setup (plugins, MCP servers, hooks, LSP) plus extended thinking
+makes every prompt tens of thousands of tokens, which is slow on a local 35B. These
+opt-in environment variables trim it:
+
+| Variable | Effect |
+|---|---|
+| `TOKI_CLAUDE_BARE=1` | launch with `--bare` (skips hooks, LSP, plugin sync, auto-memory) |
+| `TOKI_CLAUDE_MCP=none` | launch with an empty MCP config (`--strict-mcp-config`) |
+| `TOKI_CLAUDE_EFFORT=low` | set the session effort level (`low`…`max`) |
 | `Space` | pin the highlighted model in the picker |
 | `s` | open the settings pane (edit any registry field) |
 | `Esc` / `q` | quit |
@@ -183,6 +201,11 @@ toki web                                              # browser chat UI (127.0.0
 toki web --detach                                     # background
 toki web --tls-cert cert.pem --tls-key key.pem        # HTTPS + wss, Secure cookies
 toki diff --system "<long>" "<user prompt>"           # one-shot raw/cached A/B
+
+# ── MiMo Code ───────────────────────────────────────────────────────────────
+# `toki model use` also writes MiMo Code's native mimocode.json provider
+# configuration. MiMo then selects the same local model with:
+#   mimo -m tokirecur-<model>/<model-id>
 
 # ── benchmark (the headline tool) ───────────────────────────────────────────
 toki bench                                            # interactive: pick model + workload

@@ -126,6 +126,13 @@ class TestRequestModels:
         assert req.tools[0]["function"]["name"] == "bash"
         assert req.tool_choice == "auto"
 
+    def test_request_accepts_kimi_context_sized_output_budget(self):
+        req = ChatCompletionRequest(
+            messages=[ChatMessage(role="user", content="hi")],
+            max_tokens=131072,
+        )
+        assert req.max_tokens == 131072
+
 
 # ── Engine relay ───────────────────────────────────────────────────────
 

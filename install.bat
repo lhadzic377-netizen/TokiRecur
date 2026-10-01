@@ -19,7 +19,7 @@ rem   4. toki model install-llama (official llama-server.exe for this machine)
 rem   5. Microsoft Visual C++ runtime (llama-server.exe hard dependency) -
 rem      best-effort: needs an elevated prompt to install
 rem   6. verification: toki --version + llama-server --version
-rem   7. agent config wiring (opencode/openclaw/hermes/codex) - no model download
+rem   7. agent config wiring (opencode/mimo/openclaw/hermes/codex) - no model download
 rem
 rem No tokens needed - the clone already authenticated you. Re-runnable.
 rem
@@ -222,11 +222,11 @@ if exist "%LLAMA%" (
 )
 
 rem ── 7. agent config wiring (0.2.17: plug-and-play) ─
-rem    Windows never wired the four agent configs at install time, so
+rem    Windows never wired the five agent configs at install time, so
 rem    direct agent launches hit stale/absent configs (hermes "model
 rem    '<name>' not found"). Toki Recur never downloads models -- the
 rem    user installs their own. This only re-syncs
-rem    opencode/openclaw/hermes/codex (--sync-only writes configs
+rem    opencode/mimo/openclaw/hermes/codex (--sync-only writes configs
 rem    without booting a model) when a model is already registered.
 set "HAS_MODELS=0"
 for /f "delims=" %%a in ('"%TOKI%" model list') do set "HAS_MODELS=1"

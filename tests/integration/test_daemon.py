@@ -342,5 +342,9 @@ class TestDaemonCacheAdmin:
         assert cache_id not in ids
 
     def test_cache_delete_missing_returns_404(self, client):
-        r = client.delete("/cache/does-not-exist")
+        r = client.delete("/cache/deadbeef")
         assert r.status_code == 404
+
+    def test_cache_delete_invalid_id_returns_400(self, client):
+        r = client.delete("/cache/does-not-exist")
+        assert r.status_code == 400

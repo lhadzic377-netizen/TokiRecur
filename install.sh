@@ -195,7 +195,7 @@ if [[ $EUID -ne 0 ]]; then
     # the agent configs. Old versions left stale entries pointing at
     # llama-server (or carrying legacy repo-path model ids), which
     # surfaces as hermes "model '<name>' not found". `--sync-only`
-    # rewrites opencode/openclaw/hermes/codex without booting a model.
+    # rewrites opencode/mimo/openclaw/hermes/codex without booting a model.
     #
     # When llama-server was (re)installed, also RESTART the active
     # model: a running stack keeps its old binary in memory, so an

@@ -1,6 +1,6 @@
 """Tests for the OpenAI Codex CLI config writer.
 
-Codex parity with opencode/openclaw/hermes: `toki model use` writes
+Codex parity with opencode/mimo/openclaw/hermes: `toki model use` writes
 ~/.codex/config.toml (or $CODEX_HOME/config.toml) with a provider
 entry per registry spec and the active model selected, and the launcher
 menu offers codex like the other clients.
@@ -23,6 +23,18 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(ctl, "DEFAULT_REGISTRY", reg)
     monkeypatch.setattr(ctl, "STATE_ROOT", state)
     monkeypatch.setattr(ctl, "ACTIVE_MARKER", marker)
+    monkeypatch.setenv("MIMOCODE_CONFIG", str(tmp_path / "mimocode.json"))
+    monkeypatch.setenv("QWEN_CONFIG", str(tmp_path / "qwen-settings.json"))
+    monkeypatch.setenv("FACTORY_CONFIG", str(tmp_path / "factory-settings.json"))
+    monkeypatch.setenv("CLINE_TOKIRECUR_CONFIG", str(tmp_path / "cline-settings"))
+    monkeypatch.setenv("DSH_HOME", str(tmp_path / "dsh"))
+    monkeypatch.setenv("GROK_HOME", str(tmp_path / "grok"))
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes"))
+    monkeypatch.setenv("KILO_CONFIG", str(tmp_path / "kilo.jsonc"))
+    monkeypatch.setenv("PI_CODING_AGENT_DIR", str(tmp_path / "pi-agent"))
+    monkeypatch.setenv("KIMI_CODE_HOME", str(tmp_path / "kimi"))
+    monkeypatch.setenv("OMP_CONFIG_DIR", str(tmp_path / "omp-agent"))
+    monkeypatch.setenv("ORNITHCODE_CONFIG", str(tmp_path / "ornithcode" / "config.json"))
     return tmp_path
 
 
@@ -60,7 +72,7 @@ def test_codex_config_writer(env, monkeypatch):
     assert prov["base_url"] == "http://127.0.0.1:8787/v1"
     assert prov["wire_api"] == "responses"
     assert prov["env_key"] == "TOKI_AUTH_TOKEN"
-    assert prov["env"]["TOKI_AUTH_TOKEN"] == "test-tok-0123456789abcdef"
+    assert "env" not in prov
     ctl.write_codex_config(spec, [spec], path=cfg_path)
     assert Path(str(cfg_path) + ".bak-model").exists()
     # Anti-loop guardrail: codex has NO system_prompt config key (v1's

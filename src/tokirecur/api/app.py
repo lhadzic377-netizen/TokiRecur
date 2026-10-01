@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request, status
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel, Field
 
@@ -43,6 +43,20 @@ from ..core.recycling import (
 from ..daemon.metrics import METRICS
 from ..daemon.ratelimit import RateLimiter
 from ..index import Index
+from .anthropic import (
+    AnthropicMessagesRequest,
+    approximate_input_text,
+    chat_template_kwargs,
+    error_event,
+    response_message,
+    stream_message,
+    to_openai_messages,
+    to_openai_tool_choice,
+    to_openai_tools,
+)
+from .anthropic import (
+    session_id as anthropic_session_id,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +71,7 @@ logger = logging.getLogger(__name__)
 # 512 used when thinking is disabled.
 MAX_TOKENS_FLOOR = 512
 THINKING_TOKENS_FLOOR = 2048
+MAX_REQUEST_TOKENS = 262144
 
 # Sampling defaults for every request the daemon serves. Greedy decode
 # (temperature 0.0) with no repetition penalty is the loop engine behind
@@ -261,7 +276,7 @@ class CompletionRequest(BaseModel):
     prompt: str
     # Hard bounds instead of trusting the client: llama.cpp truncates
     # out-of-range values silently, which made overrides look broken.
-    max_tokens: int = Field(256, ge=1, le=65536)
+    max_tokens: int = Field(256, ge=1, le=MAX_REQUEST_TOKENS)
     # None = the active model's sampling defaults (temperature 0.4,
     # repeat_penalty 1.15, top_k 40, min_p 0.05) — greedy-with-no-
     # penalty is the loop amplifier behind agent harnesses.
@@ -308,7 +323,7 @@ class ChatCompletionRequest(BaseModel):
     messages: list[ChatMessage]
     # Hard bounds instead of trusting the client: llama.cpp truncates
     # out-of-range values silently, which made overrides look broken.
-    max_tokens: int = Field(256, ge=1, le=65536)
+    max_tokens: int = Field(256, ge=1, le=MAX_REQUEST_TOKENS)
     # None = the active model's sampling defaults (temperature 0.4,
     # repeat_penalty 1.15, top_k 40, min_p 0.05). A client value always
     # wins. Greedy decode with no repetition penalty is the loop engine
@@ -357,7 +372,7 @@ class ResponsesRequest(BaseModel):
     model: str = "default"
     input: str | list[ResponsesItem]
     instructions: str | None = None  # mapped to a system message
-    max_output_tokens: int | None = Field(None, ge=1, le=65536)
+    max_output_tokens: int | None = Field(None, ge=1, le=MAX_REQUEST_TOKENS)
     temperature: float = Field(1.0, ge=0.0, le=2.0)
     top_p: float | None = Field(None, ge=0.0, le=1.0)
     # Repetition controls (toki extension, same knobs as chat): None
@@ -437,16 +452,25 @@ def _check_auth(request: Request) -> None:
                 detail="TOKI_AUTH_TOKEN not set; refusing non-localhost request",
             )
         return
+    candidates: list[str] = []
     auth = request.headers.get("authorization", "")
-    if not auth.startswith("Bearer "):
+    if auth.startswith("Bearer "):
+        candidates.append(auth[len("Bearer "):].strip())
+    api_key = request.headers.get("x-api-key", "").strip()
+    if api_key:
+        candidates.append(api_key)
+    provided = next((value for value in candidates if value), "")
+    if not provided:
         METRICS.auth_failures.inc()
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="missing Authorization: Bearer <token>",
+            detail="missing Authorization: Bearer <token> or x-api-key",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    provided = auth[len("Bearer "):].strip()
-    if not hmac.compare_digest(provided.encode("utf-8"), expected.encode("utf-8")):
+    if not any(
+        hmac.compare_digest(value.encode("utf-8"), expected.encode("utf-8"))
+        for value in candidates
+    ):
         METRICS.auth_failures.inc()
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -514,9 +538,11 @@ def create_app(
     # ---- Middleware ----
     @app.middleware("http")
     async def observe_and_authorize(request: Request, call_next):
-        # Skip auth on health/metrics (monitoring needs access).
+        # Skip auth on health/metrics (monitoring needs access) and on the
+        # Anthropic connectivity probe, which clients send before they have
+        # credentials and which must not look like an auth failure.
         path = request.url.path
-        public = path in ("/healthz", "/metrics")
+        public = path in ("/healthz", "/metrics", "/anthropic/api/hello")
         if enable_auth and not public:
             try:
                 _check_auth(request)
@@ -1572,6 +1598,100 @@ def create_app(
                                     detail=_overflow_detail()) from e
             logger.exception("chat completion failed")
             raise HTTPException(status_code=500, detail=str(e)) from e
+
+    @app.api_route("/anthropic/api/hello", methods=["GET", "HEAD"])
+    async def anthropic_hello() -> Response:
+        """Anthropic-style connectivity probe.
+
+        Claude Code sends this before it has credentials; answering 401 makes a
+        working endpoint look broken, so return a static OK instead.
+        """
+        return JSONResponse({"status": "ok"})
+
+    @app.post("/anthropic/v1/messages")
+    @app.post("/v1/messages")
+    async def anthropic_messages(req: AnthropicMessagesRequest) -> Response:
+        active_model = _active_model_id()
+        model_name = active_model or req.model
+        messages = to_openai_messages(req)
+        tools = to_openai_tools(req.tools)
+        tool_choice = to_openai_tool_choice(req.tool_choice)
+        template_kwargs = chat_template_kwargs(req, default_reasoning)
+        reasoning_mode = default_reasoning if template_kwargs.get("enable_thinking") else "off"
+        max_tokens = _resolve_max_tokens(req.max_tokens, reasoning=reasoning_mode)
+        temperature, sampling = _resolve_sampling(
+            temperature=req.temperature,
+            top_p=req.top_p,
+        )
+        session = anthropic_session_id(req)
+
+        if req.stream:
+            async def event_stream() -> Any:
+                try:
+                    items = engine.serve_chat_stream(
+                        messages,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                        max_slots=_resolve_max_slots(2),
+                        session_id=session,
+                        chat_template_kwargs=template_kwargs,
+                        tools=tools,
+                        tool_choice=tool_choice,
+                        sampling=sampling,
+                    )
+                    async for event in stream_message(items, model_name):
+                        yield event
+                except Exception as e:
+                    logger.exception("Anthropic messages streaming failed")
+                    yield error_event(str(e))
+
+            return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+        try:
+            result = await _run_engine(
+                engine.serve_chat,
+                messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                max_slots=_resolve_max_slots(2),
+                session_id=session,
+                chat_template_kwargs=template_kwargs,
+                tools=tools,
+                tool_choice=tool_choice,
+                sampling=sampling,
+            )
+            state = engine.slot_state()
+            slot_ctx = next(
+                (s["context_tokens"] for s in state["slots"] if s["slot_id"] == result.slot_id),
+                0,
+            )
+            METRICS.observe_completion(
+                ttft_ms=result.ttft_ms,
+                prefill_tokens=result.prefilled_tokens,
+                generated_tokens=result.generated_tokens,
+                skipped_tokens=result.skipped_tokens,
+                hit=result.hit,
+                soft_hit=result.soft_hit,
+                slot_id=result.slot_id,
+                context_tokens=slot_ctx,
+                spilled=result.spilled,
+            )
+            return JSONResponse(response_message(result, model_name))
+        except Exception as e:
+            if _context_overflow_status(e):
+                raise HTTPException(status_code=413, detail=_overflow_detail()) from e
+            logger.exception("Anthropic messages completion failed")
+            raise HTTPException(status_code=500, detail=str(e)) from e
+
+    @app.post("/anthropic/v1/messages/count_tokens")
+    @app.post("/v1/messages/count_tokens")
+    async def anthropic_count_tokens(req: AnthropicMessagesRequest) -> Response:
+        text = approximate_input_text(req)
+        try:
+            count = len(engine.backend.tokenize(text))
+        except Exception:
+            count = max(1, len(text) // 4)
+        return JSONResponse({"input_tokens": count})
 
     @app.post("/v1/responses")
     async def responses(req: ResponsesRequest) -> Response:

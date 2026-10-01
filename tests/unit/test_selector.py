@@ -1,8 +1,9 @@
 """Tests for the interactive launcher selector and systemd service mgmt."""
 
 from dataclasses import dataclass
+from pathlib import Path
 
-from tokirecur.selector import default_index, launch_cmd
+from tokirecur.selector import _launch_foreground, default_index, launch_cmd
 from tokirecur.service import unit_text
 
 
@@ -70,10 +71,20 @@ def test_tui_hermes_uses_provider():
     assert not plan["detach"]
 
 
-def test_tui_toki_includes_auth_token(monkeypatch):
+def test_cline_launch_disables_ai_sdk_warning_logging():
+    plan = launch_cmd("tui", "cline", spec())
+    options = plan["env"]["BUN_OPTIONS"]
+    assert "cline-ai-sdk-preload.js" in options
+    assert Path(__file__).parents[2].joinpath(
+        "src/tokirecur/tui/cline-ai-sdk-preload.js"
+    ).is_file()
+
+
+def test_tui_toki_keeps_auth_token_out_of_argv(monkeypatch):
     monkeypatch.setenv("TOKI_AUTH_TOKEN", "demo-token")
     plan = launch_cmd("tui", "toki", spec())
-    assert "--auth-token" in plan["argv"]
+    assert "--auth-token" not in plan["argv"]
+    assert plan["env"]["TOKI_AUTH_TOKEN"] == "demo-token"
 
 
 def test_web_toki_detaches_and_opens_url():
@@ -103,6 +114,21 @@ def test_unknown_combo_raises():
         launch_cmd("web", "nope", spec())
     with pytest.raises(ValueError):
         launch_cmd("desktop", "opencode", spec())
+
+
+def test_foreground_launch_restores_terminal_before_exec(monkeypatch):
+    calls = []
+    monkeypatch.setattr("tokirecur.selector.restore_now", lambda: calls.append("restore"))
+
+    def fake_execvpe(file, argv, env):
+        calls.append(("exec", file, argv, env))
+
+    monkeypatch.setattr("tokirecur.selector.os.execvpe", fake_execvpe)
+    assert _launch_foreground(["fake-client", "--flag"], {"KEY": "value"}) == 1
+    assert calls == [
+        "restore",
+        ("exec", "fake-client", ["fake-client", "--flag"], {"KEY": "value"}),
+    ]
 
 
 def test_codex_injects_auth_token_from_env(monkeypatch):

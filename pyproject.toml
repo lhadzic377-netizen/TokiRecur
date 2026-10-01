@@ -64,6 +64,7 @@ version = {attr = "tokirecur.__version__"}
 # with "missing css file or variables" (TUI) or 404 on /static (web).
 "tokirecur" = [
     "tui/*.tcss",
+    "tui/*.js",
     "web/static/*",
     "dashboard/static/*",
 ]

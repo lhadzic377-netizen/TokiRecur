@@ -24,7 +24,22 @@ def test_menu_shows_apps(quit_after, capsys):
     assert "1) Chat" in out
     assert "2) Switch model" in out
     assert "Launch OpenCode" in out
+    assert "Launch MiMo Code" in out
+    assert "Launch Qwen Code" in out
+    assert "Launch Factory Droid" in out
+    assert "Launch Cline CLI" in out
+    assert "Launch DeepSeek Harness" in out
+    assert "Launch Grok Build" in out
+    assert "Launch Kilo Code" in out
+    assert "Launch Pi" in out
+    assert "Launch GitHub Copilot" in out
+    assert "Launch Claude Code" in out
+    assert "Launch Kimi Code" in out
+    assert "Launch OMP" in out
     assert "Web Dashboards" in out
+    # Removed in 0.3.0: account-bound providers, so none could use a bound model.
+    for gone in ("Launch Muse Code", "Launch Cursor Agent", "Launch Devin"):
+        assert gone not in out
     assert "Doctor" in out
     assert "0) Quit" in out
 
@@ -67,7 +82,7 @@ def test_web_opens_browsers(monkeypatch, quit_after, capsys):
     monkeypatch.setattr(clilauncher.webbrowser, "open", lambda u: opened.append(u))
     monkeypatch.setattr(clilauncher, "_active_spec", lambda: None)
     monkeypatch.setattr(clilauncher, "_port_open", lambda port: True)
-    assert quit_after("7") == 0
+    assert quit_after(str(len(clilauncher.AGENTS) + 3)) == 0
     assert opened == list(clilauncher.WEB_URLS)
     assert "dashboards" in capsys.readouterr().out
 
@@ -110,15 +125,29 @@ def test_web_starts_ui_when_port_closed(monkeypatch, quit_after, capsys):
 
     monkeypatch.setattr(clilauncher, "_port_open", fake_port_open)
     monkeypatch.setattr(clilauncher, "_wait_for_port", lambda port, timeout: True)
-    assert quit_after("7") == 0
+    assert quit_after(str(len(clilauncher.AGENTS) + 3)) == 0
     assert "toki" in spawned[0][0] and "web" in spawned[0]
     assert "http://127.0.0.1:7777" in opened
 
 
+def test_windows_fallback_binary_counts_as_available(monkeypatch, tmp_path):
+    appdata = tmp_path / "npm"
+    appdata.mkdir()
+    (appdata / "opencode.cmd").write_text("@echo off\n")
+    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setattr(clilauncher.shutil, "which", lambda _: None)
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    assert clilauncher._agent_available("opencode") is True
+
+
 def test_missing_agent_warns(monkeypatch, quit_after, capsys):
     monkeypatch.setattr("shutil.which", lambda _: None)
-    assert quit_after("3") == 0
-    assert "not found in PATH: opencode" in capsys.readouterr().out
+    # Agents are numbered from 3 in catalog order; opencode is the 2nd.
+    opencode_pick = str(next(
+        i for i, (app, _, _) in enumerate(clilauncher.AGENTS, 3) if app == "opencode"
+    ))
+    assert quit_after(opencode_pick) == 0
+    assert "cannot launch opencode" in capsys.readouterr().out
 
 
 def test_menu_marks_missing_agents(monkeypatch, quit_after, capsys):
@@ -139,6 +168,18 @@ def _stub_spec():
     )
 
 
+
+
+def test_selector_launches_mimo_with_model_ref():
+    from tokirecur.selector import launch_cmd
+
+    plan = launch_cmd("chat", "mimo", _stub_spec())
+    assert plan["argv"] == [
+        "mimo", "-m", "tokirecur-qwen3/Qwen3-8B-GGUF",
+    ]
+    assert plan["detach"] is False
+
+
 def test_launch_agent_uses_selector_launch_cmd(monkeypatch, capsys):
     """The CLI launcher must route through selector.launch_cmd so it
     can never drift from the Textual launcher."""
@@ -155,13 +196,17 @@ def test_launch_agent_uses_selector_launch_cmd(monkeypatch, capsys):
 
     monkeypatch.setattr(
         cl.subprocess, "Popen",
-        lambda argv, **kw: (captured.__setitem__("argv", argv), FakeProc())[1],
+        lambda argv, **kw: (
+            captured.update(argv=argv, env=kw.get("env")),
+            FakeProc(),
+        )[1],
     )
 
     cl._launch_agent("opencode")
     assert captured["argv"] == [
         r"C:\bin\opencode.exe", "-m", "tokirecur-qwen3/Qwen3-8B-GGUF",
     ]
+    assert captured["env"] == os.environ
 
 
 def test_launch_agent_openclaw_falls_back_to_chat_when_gateway_down(monkeypatch, capsys):
@@ -274,6 +319,7 @@ def test_agent_launch_exe(monkeypatch, capsys):
     monkeypatch.setattr("tokirecur.ctl.daemon_reachable", lambda spec: True)
     monkeypatch.setattr(cl.shutil, "which", lambda _: r"C:\bin\codex.exe")
     monkeypatch.setattr(cl, "_active_spec", _stub_spec)
+    monkeypatch.setenv("TOKI_AUTH_TOKEN", "test-token")
     monkeypatch.setattr(os, "name", "nt")
     captured = {}
 

@@ -93,7 +93,7 @@ def serve(
     from ..index import BruteForceIndex
     healed = heal_cli_configs()
     if healed:
-        click.echo("agent configs synced for the active model")
+        click.echo("model-capable CLI configs synced for the active model")
 
     # Fail loudly-but-kindly: a daemon with no llama-server behind it
     # looks exactly like "the server doesn't start". Ping the backend
@@ -418,7 +418,7 @@ def doctor(fix: bool) -> None:
                 except (KeyError, FileNotFoundError, RuntimeError, OSError) as e:
                     click.echo(f"fix: use_model failed: {e}", err=True)
 
-    # 3) Heal the four agent configs for the active model (0.2.17):
+    # 3) Heal model-capable CLI configs for the active model:
     #    legacy repo-path model ids are normalized and any stale
     #    endpoint is rewritten to the active model's daemon. This is
     #    the one-command fix for the "model '<name>' not found" 404.
@@ -685,12 +685,12 @@ def up(
         click.echo("hint: set TOKI_MODEL or pass --model", err=True)
         raise SystemExit(2)
 
-    # 0.2.17: `toki up` is a repair point — heal the four agent configs
+    # `toki up` is a repair point — heal model-capable CLI configs
     # for the active registry model before the stack comes up.
     from ..ctl import heal_cli_configs
     healed = heal_cli_configs()
     if healed:
-        click.echo("agent configs synced for the active model")
+        click.echo("model-capable CLI configs synced for the active model")
 
     if not skip_llama:
         try:
@@ -852,7 +852,7 @@ def model() -> None:
 
     Each model gets its own llama-server + toki daemon on dedicated
     ports; `toki model use <name>` starts it, stops competing big-model
-    stacks, and points opencode, openclaw and hermes at it.
+    stacks, and points the supported agent clients at it.
     """
 
 
@@ -916,8 +916,8 @@ def status() -> None:  # noqa: F811
 )
 @click.option(
     "--sync-only", is_flag=True,
-    help="Only rewrite the opencode/openclaw/hermes/codex configs; do "
-         "not start or stop any stack (installer-friendly heal).",
+    help="Only rewrite model-capable CLI configs; do not start or stop any "
+         "stack (installer-friendly heal).",
 )
 @click.option(
     "--force-restart", is_flag=True,
@@ -927,16 +927,19 @@ def status() -> None:  # noqa: F811
 )
 @click.option(
     "--mode", type=click.Choice(["raw", "managed"]), default=None,
-    help="Inference path for all four clients: managed (through the "
+    help="Inference path for model-capable clients: managed (through the "
          "toki daemon — context truth, KV recycling) or raw (direct "
          "llama-server). Persisted; default is managed.",
 )
 def use(name: str, keep_others: bool, wait: bool, sync_only: bool,
         mode: str | None, force_restart: bool) -> None:
-    """Start the model stack and select it in opencode/openclaw/hermes."""
+    """Start the model stack and select it in the agent clients."""
     from ..ctl import _effective_ctx, model_status, sync_cli_configs, use_model, write_client_mode
     if mode:
-        for tool in ("opencode", "openclaw", "hermes", "codex"):
+        for tool in (
+            "opencode", "mimo", "openclaw", "hermes", "codex", "qwen",
+            "droid", "cline", "dsh", "grok", "kilo", "pi", "copilot", "kimi", "omp",
+        ):
             write_client_mode(tool, mode)
     try:
         spec = use_model(name, stop_others=not keep_others,
@@ -984,8 +987,8 @@ def use(name: str, keep_others: bool, wait: bool, sync_only: bool,
         click.echo(f"  {tool:9s} -> {path}")
     if mode:
         click.echo(f"mode: {mode} for all clients (codex stays on the daemon)")
-    click.echo("switched. per-run override: opencode --model, openclaw agent --model, "
-               "hermes -m --provider")
+    click.echo("switched. per-run override: opencode --model, mimo --model, "
+               "openclaw agent --model, hermes -m --provider")
     if wait:
         # systemd KillMode=control-group reaps the spawned llama-server /
         # daemon when this process exits, so stay alive until stopped.
@@ -1006,7 +1009,11 @@ def use(name: str, keep_others: bool, wait: bool, sync_only: bool,
 
 
 @model.command("mode")
-@click.argument("client", type=click.Choice(["opencode", "openclaw", "hermes", "codex"]))
+@click.argument("client", type=click.Choice([
+    "opencode", "mimo", "openclaw", "hermes", "codex", "qwen", "droid",
+    "cline", "dsh", "grok", "kilo", "pi", "copilot", "kimi", "omp",
+    "ornithcode",
+]))
 @click.argument("mode", type=click.Choice(["raw", "managed"]))
 def model_mode(client: str, mode: str) -> None:
     """Set one client's inference path.
@@ -1046,7 +1053,7 @@ def stop(name: str, force: bool) -> None:
 def remove(name: str, force: bool, purge: bool) -> None:
     """Drop a model from the registry.
 
-    Stops the stack first so the launcher and opencode / openclaw / hermes
+    Stops the stack first so the launcher and model-capable CLI clients
     never point at a model that is no longer registered. By default the
     model weights and runtime state are kept on disk so you can re-add the
     same name with `toki model pull` without re-downloading; pass --purge
@@ -1156,7 +1163,7 @@ def fix_model_ids() -> None:
     Face repo id. hermes and other agents compare the request's
     ``model`` field against this string and 404 when it doesn't match
     the loaded alias. Running this once normalises every spec and
-    re-writes the opencode/openclaw/hermes/codex configs.
+    re-writes the model-capable CLI configs.
     """
     from ..ctl import normalize_model_ids
     changes = normalize_model_ids()
@@ -1165,8 +1172,8 @@ def fix_model_ids() -> None:
         return
     for name, old, new in changes:
         click.echo(f"  {name}: {old!r} -> {new!r}")
-    # Re-sync the agent configs so the new short names land in
-    # hermes/openclaw/opencode/codex immediately.
+    # Re-sync the model-capable CLI configs so the new short names land
+    # in every supported harness immediately.
     from ..ctl import get_model, read_active, sync_cli_configs
     active = read_active()
     if active:

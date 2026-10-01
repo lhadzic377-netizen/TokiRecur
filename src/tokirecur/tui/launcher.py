@@ -13,7 +13,6 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -27,6 +26,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, Select, Static
 
 from ..ctl import load_registry, model_status, read_client_modes, write_client_mode
+from ..launch_catalog import LAUNCH_APPS, configured_provider_model, unavailable_reason
 from . import _cleanup as _tui_cleanup
 from . import art
 
@@ -47,57 +47,6 @@ _MODEL_SWAP_FIELDS = frozenset({"gguf", "binary"})
 # advertises contextWindow/limit.output). No daemon restart needed.
 _SYNC_ONLY_FIELDS = frozenset({"max_tokens", "model_id", "reasoning"})
 
-
-@dataclass(frozen=True)
-class LaunchApp:
-    """A single launcher entry: a client opened with an interface."""
-
-    key: str
-    title: str
-    description: str
-    interface: str
-    client: str
-    model_binding: bool = True
-
-
-LAUNCH_APPS: tuple[LaunchApp, ...] = (
-    LaunchApp(
-        "toki",
-        "Chat",
-        "Chat with models in the Toki TUI",
-        "chat", "toki",
-    ),
-    LaunchApp(
-        "opencode",
-        "Launch OpenCode",
-        "Anomaly's open-source coding agent",
-        "chat", "opencode",
-    ),
-    LaunchApp(
-        "hermes",
-        "Launch Hermes Agent",
-        "Self-improving AI agent built by Nous Research",
-        "chat", "hermes",
-    ),
-    LaunchApp(
-        "openclaw",
-        "Launch OpenClaw",
-        "Personal AI with 100+ skills",
-        "chat", "openclaw",
-    ),
-    LaunchApp(
-        "codex",
-        "Launch Codex",
-        "OpenAI CLI coding agent (Responses API)",
-        "chat", "codex",
-    ),
-    LaunchApp(
-        "web",
-        "Launch Web Dashboards",
-        "browser UIs: toki · openclaw · hermes",
-        "web", "toki", model_binding=False,
-    ),
-)
 
 CSS = f"""
 Screen {{
@@ -138,6 +87,10 @@ class LauncherApp(App[dict | None]):
         Binding("3", "jump(2)", "3", show=False, priority=True),
         Binding("4", "jump(3)", "4", show=False, priority=True),
         Binding("5", "jump(4)", "5", show=False, priority=True),
+        Binding("6", "jump(5)", "6", show=False, priority=True),
+        Binding("7", "jump(6)", "7", show=False, priority=True),
+        Binding("8", "jump(7)", "8", show=False, priority=True),
+        Binding("9", "jump(8)", "9", show=False, priority=True),
         Binding("enter", "launch", "Launch", priority=True),
         Binding("right", "switch", "Configure", show=False, priority=True),
         Binding("left", "back", "Back", show=False, priority=True),
@@ -156,9 +109,9 @@ class LauncherApp(App[dict | None]):
 
     def __init__(
         self,
-        on_launch: Callable[[str, str, str], int] | None = None,
+        on_launch: Callable[[str, str, str | None], dict[str, Any] | None] | None = None,
     ) -> None:
-        """`on_launch(interface, client, model_name)` returns exit code."""
+        """Prepare a launch request for execution after the app exits."""
         super().__init__()
         self._on_launch = on_launch
         self.specs: list[Any] = []
@@ -291,7 +244,7 @@ class LauncherApp(App[dict | None]):
         self._refresh += 1
 
     def action_jump(self, index: int) -> None:
-        """1-5: jump straight to an app (or model)."""
+        """1-9: jump straight to an app (or model)."""
         if self.focus_pane == "launchers":
             if 0 <= index < len(LAUNCH_APPS):
                 self.launch_idx = index
@@ -393,9 +346,11 @@ class LauncherApp(App[dict | None]):
           * Restart-required (ctx_size, kv, parallel, gguf, binary,
             llama_port, daemon_port) → confirmation modal, then
             update_spec_field(apply=True) which restarts the daemon.
-          * Sync-only (max_tokens, model_id, reasoning) → write the
-            registry and re-sync opencode/openclaw/hermes/codex
-            configs without touching the running daemon.
+           * Sync-only (max_tokens, model_id, reasoning) → write the
+             registry and re-sync model-capable CLI configs without
+             touching the running daemon.
+
+
           * No-op (always_on, boot) → registry write only.
 
         The legacy behaviour ("registry only, no daemon work") used to
@@ -495,7 +450,13 @@ class LauncherApp(App[dict | None]):
             self.action_back()
             return
         app = LAUNCH_APPS[self.launch_idx]
-        if not app.model_binding or app.client == "codex":
+        if app.protocol == "anthropic":
+            self.notify(f"{app.title}: uses the local Anthropic adapter", timeout=3)
+            return
+        if not app.model_binding:
+            self.notify(f"{app.title}: uses its own provider configuration", timeout=3)
+            return
+        if app.client == "codex":
             self.notify(
                 f"{app.title}: always uses the daemon (managed)", timeout=3
             )
@@ -544,20 +505,33 @@ class LauncherApp(App[dict | None]):
             self.focus_pane = "launchers"
             self._refresh += 1
             return
-        if not self.pinned:
+        needs_model = app.model_binding or app.interface == "web"
+        if needs_model and not self.pinned:
+            self.notify("pin a model before launching this client", timeout=3, severity="warning")
             return
+        reason = unavailable_reason(app)
+        if reason is not None:
+            self.notify(f"{app.title}: {reason}", timeout=4, severity="warning")
+            return
+        model = self.pinned if needs_model else None
         if self._on_launch is not None:
             self._launching = app.title
             self._refresh += 1
-            code = await asyncio.to_thread(
-                self._on_launch, app.interface, app.client, self.pinned
-            )
+            try:
+                request = await asyncio.to_thread(
+                    self._on_launch, app.interface, app.client, model
+                )
+            except (KeyError, FileNotFoundError, OSError, RuntimeError, ValueError) as e:
+                self._launching = None
+                self._refresh += 1
+                self.notify(f"launch failed: {e}", timeout=6, severity="error")
+                return
             self._launching = None
             self._refresh += 1
-            if not code:
-                self.notify(f"launched {app.title} with {self.pinned}", timeout=3)
+            if request is not None:
+                self.exit(request)
         else:
-            self.exit({"interface": app.interface, "client": app.client, "model": self.pinned})
+            self.exit({"interface": app.interface, "client": app.client, "model": model})
 
     def action_quit_app(self) -> None:
         # Escape from settings/models goes back to the launcher list,
@@ -616,32 +590,31 @@ class LauncherApp(App[dict | None]):
         else:
             line.append("no model pinned", style="dim")
         line.append("    ", style="dim")
-        line.append("1-5 jump · m mode · enter launch · esc quit", style="dim")
+        line.append("1-9 jump · m mode · enter launch · esc quit", style="dim")
         return line
 
     def _render_launchers(self, width: int) -> list[Text]:
         out: list[Text] = []
-        for i, app in enumerate(LAUNCH_APPS):
+        visible = max(3, min(len(LAUNCH_APPS), max(3, self.size.height - 13)))
+        start = max(0, min(self.launch_idx - visible // 2, len(LAUNCH_APPS) - visible))
+        end = start + visible
+        if start:
+            out.append(Text(f"{self._GUT}↑ more", style="dim"))
+        for i in range(start, end):
+            app = LAUNCH_APPS[i]
             active = i == self.launch_idx
-            chip = (
-                f"({self.pinned})"
-                if (app.model_binding and self.pinned)
-                else ""
-            )
+            chip = f"({self.pinned})" if app.model_binding and self.pinned else ""
+            if not chip and app.protocol == "anthropic":
+                model = configured_provider_model(app.client)
+                chip = f"({model})" if model else "(Anthropic API)"
             mode_tag = ""
-            if app.model_binding and app.client in ("opencode", "openclaw",
-                                                    "hermes", "codex"):
+            if app.protocol == "anthropic":
+                mode_tag = " · Anthropic API"
+            elif app.model_binding:
                 mode = self._client_modes.get(app.client, "managed")
-                if app.client == "codex":
-                    mode_tag = " · daemon"
-                else:
-                    mode_tag = f" · {mode}"
-
+                mode_tag = " · daemon" if app.client == "codex" else f" · {mode}"
+            reason = unavailable_reason(app)
             if active:
-                # Active row: yellow accent + bold title + chip pinned
-                # tight to the title so the row reads as one unit
-                # instead of stretching the title and the chip across
-                # the whole width with empty space in the middle.
                 row = Text(self._GUT, end="")
                 row.append("▌ ", style=f"bold {art.YELLOW}")
                 row.append(app.title, style=f"bold {art.YELLOW}")
@@ -649,18 +622,21 @@ class LauncherApp(App[dict | None]):
                     row.append("  ", style="dim")
                     row.append(chip, style=f"bold {art.AMBER}")
                 out.append(row)
-                # Description: tight under the title, aligned to the gutter
-                # so the `▌` bar stays the visual anchor.
-                out.append(
-                    Text(self._GUT + app.description + mode_tag, style="dim")
-                )
+                detail = app.description + mode_tag
+                if reason:
+                    detail += f" · {reason}"
+                out.append(Text(self._GUT + detail, style="dim"))
             else:
                 row = Text(self._GUT, end="")
                 row.append(app.title, style=art.MUTED)
                 if chip:
                     row.append("  ", style="dim")
                     row.append(chip, style=f"dim {art.AMBER}")
+                if reason:
+                    row.append(f"  · {reason}", style=art.RED)
                 out.append(row)
+        if end < len(LAUNCH_APPS):
+            out.append(Text(f"{self._GUT}↓ more", style="dim"))
         return out
 
     def _render_models(self, width: int) -> list[Text]:
@@ -755,7 +731,7 @@ class LauncherApp(App[dict | None]):
         elif self.focus_pane == "settings":
             hint = "↑/↓ field · enter edit · esc back · q quit"
         else:
-            hint = "1-5 jump · ↑/↓ navigate · enter launch · s settings · esc quit"
+            hint = "1-9 jump · ↑/↓ navigate · enter launch · s settings · esc quit"
         return Text(self._GUT + hint, style="dim")
 
 
@@ -1245,30 +1221,40 @@ def invalidate_settings_rows() -> None:
     _SETTINGS_ROWS_CACHE.clear()
 
 
+def _execute_launch(request: dict[str, Any]) -> int:
+    from ..selector import _launch_detached, _launch_foreground
+
+    if request["detach"]:
+        return _launch_detached(
+            request["interface"], request["client"], request["argv"],
+            request["env"], request["url"],
+        )
+    return _launch_foreground(request["argv"], request["env"])
+
+
 def run():
     """Shim entry used by ``toki`` when bare in a TTY."""
     from ..ctl import use_model
-    from ..selector import _launch_detached, _launch_foreground, launch_cmd
+    from ..selector import launch_cmd
 
-    def on_launch(interface: str, client: str, model: str) -> int:
-        try:
-            spec = use_model(model)
-        except (KeyError, FileNotFoundError, RuntimeError) as e:
-            from rich.console import Console
-
-            Console().print(f"[red]error: {e}[/red]")
-            return 1
+    def on_launch(interface: str, client: str, model: str | None) -> dict[str, Any]:
+        spec = None if model is None else use_model(model)
         plan = launch_cmd(interface, client, spec)
         argv = plan["argv"]
         if client == "openclaw" and argv[:2] == ["openclaw", "tui"]:
             from ..selector import _gateway_up
 
             if not _gateway_up():
-                print("OpenClaw gateway is not running; falling back to local TUI.")
                 argv = ["openclaw", "chat"]
-        if plan["detach"]:
-            return _launch_detached(interface, client, argv, plan["env"], plan["url"])
-        return _launch_foreground(argv, plan["env"])
+        return {
+            "interface": interface,
+            "client": client,
+            "model": model,
+            "argv": argv,
+            "detach": plan["detach"],
+            "url": plan["url"],
+            "env": plan["env"],
+        }
 
     from rich.console import Console
 
@@ -1282,4 +1268,7 @@ def run():
     # quits.
     _tui_cleanup.install()
     app = LauncherApp(on_launch=on_launch)
-    return app.run() or 0
+    request = app.run()
+    if request is None:
+        return 0
+    return _execute_launch(request)

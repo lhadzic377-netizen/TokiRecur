@@ -4,8 +4,8 @@ Each model in the registry owns a full stack: a llama-server and a
 tokirecur daemon on dedicated ports. ``toki model use <name>`` brings
 up the chosen model (the 9B "small" model stays on at all times),
 stops any other big-model stack to free RAM, and rewrites the default
-model in opencode, openclaw and hermes configs so the same model is
-selected everywhere.
+model in every model-capable CLI config so the same model is selected
+wherever the client supports a local OpenAI-compatible endpoint.
 
 Registry:    ~/.config/tokirecur/models.yaml
 State:       ~/.local/state/tokirecur/<name>/  (pid files + logs)
@@ -27,6 +27,7 @@ import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -129,6 +130,25 @@ try:
 except Exception:  # noqa: BLE001 — never let path resolution crash import
     pass
 
+def _configured_auth_token() -> str | None:
+    """Read the daemon token without manufacturing a fallback value."""
+    token = os.environ.get("TOKI_AUTH_TOKEN")
+    if token:
+        return token
+    for path in (
+        Path.home() / ".config" / "tokirecur" / "auth",
+        Path("/etc/toki-recur/auth"),
+    ):
+        try:
+            if path.is_file():
+                value = path.read_text().strip()
+                if value:
+                    return value
+        except OSError:
+            pass
+    return None
+
+
 def auth_token() -> str:
     """Auth token used in client configs when none is configured.
 
@@ -158,8 +178,9 @@ DEFAULT_SAMPLING: dict[str, Any] = {
     "min_p": 0.05,
 }
 
-# Behavioral guardrail injected into the CLI harness configs (opencode,
-# openclaw, hermes, codex) so agentic models don't lock into repeating
+# Behavioral guardrail injected into the existing CLI harness configs
+# (opencode, mimo, openclaw, hermes, codex) so agentic models don't lock
+# into repeating
 # the same tool call / message. Never written if the user already has
 # their own instructions/system prompt in that harness's config.
 #
@@ -759,7 +780,7 @@ def set_active(name: str, registry: Path | None = None) -> None:
 # ── Registry save / pull ──────────────────────────────────────────────
 
 
-def _atomic_write_text(path: Path, text: str) -> None:
+def _atomic_write_text(path: Path, text: str, *, mode: int | None = None) -> None:
     """Write `text` to `path` atomically.
 
     A non-atomic ``write_text`` truncates the target before writing the
@@ -771,6 +792,8 @@ def _atomic_write_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(text)
+    if mode is not None:
+        tmp.chmod(mode)
     os.replace(tmp, path)
 
 
@@ -955,7 +978,8 @@ def update_spec_field(
       * ``ctx_size``, ``kv``, ``parallel``, ``binary``, ``gguf``,
         ``llama_port``, ``daemon_port`` → ``use_model(name)`` (stops
         the running daemon if any, restarts with the new settings,
-        rewrites the four CLI configs).
+        rewrites the model-capable CLI configs).
+
       * ``max_tokens``, ``model_id``, ``reasoning`` → ``sync_cli_configs``
         only (no daemon restart).
       * ``always_on``, ``boot`` → registry-only (no restart, no sync).
@@ -1015,8 +1039,9 @@ def update_spec_field(
         if field in _RESTART_REQUIRED_FIELDS:
             # use_model() restarts the model's stack (stops the running
             # daemon if any, restarts with the new settings, and
-            # rewrites the four CLI configs). We swallow errors so the
-            # caller's UX still shows the registry write succeeded even
+             # rewrites the model-capable CLI configs). We swallow errors so the
+             # caller's UX still shows the registry write succeeded even
+
             # if the restart hiccups — the user can retry from the
             # same screen.
             try:
@@ -1505,8 +1530,9 @@ def daemon_reachable(spec: ModelSpec) -> bool:
     backend live AND that backend is the model's llama_url.
     """
     headers = None
-    if os.environ.get("TOKI_AUTH_TOKEN"):
-        headers = {"Authorization": f"Bearer {os.environ['TOKI_AUTH_TOKEN']}"}
+    token = _configured_auth_token()
+    if token:
+        headers = {"Authorization": f"Bearer {token}"}
     try:
         if httpx.get(
             f"{spec.daemon_url}/healthz", timeout=2.0, headers=headers
@@ -2695,9 +2721,9 @@ def use_model(
 
     The always-on small model (9b) is kept running; other big-model
     stacks are stopped (unless ``stop_others=False``) to free RAM.
-    On success the opencode / openclaw / hermes configs are rewritten
-    so they have a provider entry for every registry spec — callers
-    (``toki model use``, ``toki model pull --use``, the launcher)
+    On success the model-capable CLI configs are rewritten so they point
+    at the active registry model —
+    callers (``toki model use``, ``toki model pull --use``, the launcher)
     don't have to do this themselves.
 
     ``force_restart=True`` (used by settings edits) stops the target's
@@ -2708,7 +2734,7 @@ def use_model(
 
     With ``sync_only=True`` nothing is started or stopped: the registry
     is healed (legacy model ids normalized, missing binary/env backfilled),
-    the active marker is set, and the four agent configs are rewritten.
+    the active marker is set, and all model-capable CLI configs are rewritten.
     This is the plug-and-play repair path used by installers and daemon
     startup so agent configs are always correct without user commands.
     """
@@ -2782,8 +2808,8 @@ def use_model(
 
     set_active(target.name, registry)
 
-    # Wire opencode / openclaw / hermes so every spec (defaults + pulled)
-    # has a provider entry and the active model line points at `target`.
+    # Wire model-capable CLI clients so the active model line points at
+    # `target` and every registry spec remains available where supported.
     # We never fail `use_model` because of a sync hiccup — a broken
     # client config is recoverable; an unstarted stack isn't.
     try:
@@ -2795,6 +2821,675 @@ def use_model(
 
 
 # ── CLI config writers ─────────────────────────────────────────────────
+
+
+def _client_endpoint(spec: ModelSpec, mode: str = "managed") -> str:
+    base = spec.llama_url if mode == "raw" else spec.daemon_url
+    return f"{base}/v1"
+
+
+def _client_output_limit(spec: ModelSpec) -> int:
+    ctx = max(1, _effective_ctx(spec))
+    configured = getattr(spec, "max_output_tokens", None)
+    return max(1, min(int(configured or 8192), max(1, ctx // 2)))
+
+
+def _client_reasoning(spec: ModelSpec) -> bool:
+    return getattr(spec, "reasoning", "auto") != "off"
+
+
+def _qwen_config_path() -> Path:
+    explicit = os.environ.get("QWEN_CONFIG")
+    if explicit:
+        path = Path(explicit).expanduser()
+        return path / "settings.json" if path.is_dir() else path
+    home = os.environ.get("QWEN_HOME")
+    if home:
+        return Path(home).expanduser() / "settings.json"
+    return Path.home() / ".qwen" / "settings.json"
+
+
+def _factory_config_path() -> Path:
+    explicit = os.environ.get("FACTORY_CONFIG")
+    if explicit:
+        return Path(explicit).expanduser()
+    home = os.environ.get("FACTORY_HOME")
+    return (Path(home).expanduser() if home else Path.home() / ".factory") / "settings.json"
+
+
+def _cline_config_dir() -> Path:
+    explicit = os.environ.get("CLINE_TOKIRECUR_CONFIG")
+    if explicit:
+        return Path(explicit).expanduser()
+    return Path.home() / ".cline" / "tokirecur"
+
+
+def cline_config_dir() -> Path:
+    return _cline_config_dir()
+
+
+def _cline_config_path() -> Path:
+    return cline_config_dir() / "data" / "settings" / "providers.json"
+
+
+def _claude_settings_path() -> Path:
+    explicit = os.environ.get("TOKI_CLAUDE_SETTINGS")
+    if explicit:
+        return Path(explicit).expanduser()
+    return Path.home() / ".config" / "tokirecur" / "claude" / "settings.json"
+
+
+def _dsh_config_path() -> Path:
+    home = os.environ.get("DSH_HOME")
+    return (Path(home).expanduser() if home else Path.home() / ".dsh") / "settings.yaml"
+
+
+def _grok_config_path() -> Path:
+    home = os.environ.get("GROK_HOME")
+    return (Path(home).expanduser() if home else Path.home() / ".grok") / "config.toml"
+
+
+def _kilo_config_path() -> Path:
+    explicit = os.environ.get("KILO_CONFIG")
+    if explicit:
+        return Path(explicit).expanduser()
+    config_dir = os.environ.get("KILO_CONFIG_DIR")
+    if config_dir:
+        base = Path(config_dir).expanduser()
+        for name in ("kilo.jsonc", "kilo.json"):
+            candidate = base / name
+            if candidate.exists():
+                return candidate
+        return base / "kilo.jsonc"
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    base = Path(xdg).expanduser() if xdg else Path.home() / ".config"
+    return base / "kilo" / "kilo.jsonc"
+
+
+def _pi_config_dir() -> Path:
+    explicit = os.environ.get("PI_CODING_AGENT_DIR")
+    return Path(explicit).expanduser() if explicit else Path.home() / ".pi" / "agent"
+
+
+def _kimi_config_path() -> Path:
+    home = os.environ.get("KIMI_CODE_HOME")
+    return (Path(home).expanduser() if home else Path.home() / ".kimi-code") / "config.toml"
+
+
+def _hermes_config_path() -> Path:
+    explicit = os.environ.get("HERMES_CONFIG")
+    if explicit:
+        return Path(explicit).expanduser()
+    home = os.environ.get("HERMES_HOME")
+    if home:
+        return Path(home).expanduser() / "config.yaml"
+    if os.name == "nt":
+        local = os.environ.get("LOCALAPPDATA")
+        base = Path(local).expanduser() if local else Path.home() / "AppData" / "Local"
+        return base / "hermes" / "config.yaml"
+    return Path.home() / ".hermes" / "config.yaml"
+
+
+def _omp_config_dir() -> Path:
+    root_value = os.environ.get("PI_CONFIG_DIR") or os.environ.get("OMP_CONFIG_DIR")
+    root = Path(root_value).expanduser() if root_value else Path.home() / ".omp"
+    if not root.is_absolute():
+        root = Path.home() / root
+    profile = os.environ.get("OMP_PROFILE")
+    if profile is None:
+        profile = os.environ.get("PI_PROFILE")
+    profile = profile.strip() if profile else None
+    if profile and profile.lower() == "default":
+        profile = None
+    reserved = re.fullmatch(r"(con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\..*)?", profile or "")
+    if profile and not reserved and re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", profile):
+        return root / "profiles" / profile / "agent"
+    if profile:
+        raise ValueError(f"invalid OMP profile: {profile!r}")
+    explicit = os.environ.get("PI_CODING_AGENT_DIR")
+    if explicit:
+        return Path(explicit).expanduser()
+    return root / "agent"
+
+
+def _omp_config_path() -> Path:
+    config_dir = _omp_config_dir()
+    for name in ("models.yml", "models.yaml"):
+        candidate = config_dir / name
+        if candidate.exists():
+            return candidate
+    legacy = config_dir / "models.json"
+    if legacy.exists():
+        return legacy
+    return config_dir / "models.yml"
+
+
+def _strip_jsonc_trailing_commas(text: str) -> str:
+    out: list[str] = []
+    in_string = False
+    escaped = False
+    for i, ch in enumerate(text):
+        out.append(ch)
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == ",":
+            next_index = i + 1
+            while next_index < len(text) and text[next_index].isspace():
+                next_index += 1
+            if next_index < len(text) and text[next_index] in "}]":
+                out.pop()
+    return "".join(out)
+
+
+def _load_jsonc(path: Path) -> dict[str, Any]:
+    text = path.read_text() if path.exists() else "{}"
+    try:
+        value = json.loads(text)
+        return value if isinstance(value, dict) else {}
+    except json.JSONDecodeError:
+        cleaned: list[str] = []
+        in_string = False
+        escaped = False
+        i = 0
+        while i < len(text):
+            ch = text[i]
+            if in_string:
+                cleaned.append(ch)
+                if escaped:
+                    escaped = False
+                elif ch == "\\":
+                    escaped = True
+                elif ch == '"':
+                    in_string = False
+                i += 1
+                continue
+            if ch == '"':
+                in_string = True
+                cleaned.append(ch)
+                i += 1
+                continue
+            if ch == "/" and i + 1 < len(text) and text[i + 1] == "/":
+                i += 2
+                while i < len(text) and text[i] not in "\r\n":
+                    i += 1
+                continue
+            if ch == "/" and i + 1 < len(text) and text[i + 1] == "*":
+                i += 2
+                while i + 1 < len(text) and not (text[i] == "*" and text[i + 1] == "/"):
+                    i += 1
+                i = min(len(text), i + 2)
+                continue
+            cleaned.append(ch)
+            i += 1
+        value = json.loads(_strip_jsonc_trailing_commas("".join(cleaned)))
+        return value if isinstance(value, dict) else {}
+
+
+def write_qwen_config(
+    spec: ModelSpec, specs: list[ModelSpec] | None = None,
+    path: Path | None = None, mode: str | None = None,
+) -> Path:
+    """Write Qwen Code's local OpenAI-compatible route and default model."""
+    cfg_path = path or _qwen_config_path()
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
+    if not isinstance(cfg, dict):
+        cfg = {}
+    providers = cfg.get("modelProviders")
+    if not isinstance(providers, dict):
+        providers = {}
+        cfg["modelProviders"] = providers
+    entries = providers.get("openai")
+    if not isinstance(entries, list):
+        entries = []
+    entries = [
+        entry for entry in entries
+        if not (isinstance(entry, dict)
+                and str(entry.get("name", "")).startswith("Toki Recur ("))
+    ]
+    endpoint = _client_endpoint(spec, _resolve_mode("qwen", mode))
+    output = _client_output_limit(spec)
+    entries.append({
+        "id": spec.model_id,
+        "name": f"Toki Recur ({spec.label})",
+        "envKey": "TOKI_AUTH_TOKEN",
+        "baseUrl": endpoint,
+        "wireApi": "chat-completions",
+        "generationConfig": {
+            "contextWindowSize": _effective_ctx(spec),
+            "samplingParams": {"max_tokens": output},
+        },
+    })
+    providers["openai"] = entries
+    cfg["model"] = {"name": spec.model_id}
+    security = cfg.get("security")
+    if not isinstance(security, dict):
+        security = {}
+        cfg["security"] = security
+    auth = security.get("auth")
+    if not isinstance(auth, dict):
+        auth = {}
+        security["auth"] = auth
+    auth["baseUrl"] = endpoint
+    auth["selectedType"] = "openai"
+    _write_private_config(cfg_path, json.dumps(cfg, indent=2) + "\n")
+    return cfg_path
+
+
+def write_droid_config(
+    spec: ModelSpec, specs: list[ModelSpec] | None = None,
+    path: Path | None = None, mode: str | None = None,
+) -> Path:
+    """Write Factory Droid's BYOK custom model entry."""
+    cfg_path = path or _factory_config_path()
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
+    if not isinstance(cfg, dict):
+        cfg = {}
+    models = cfg.get("customModels")
+    if not isinstance(models, list):
+        models = []
+    models = [
+        model for model in models
+        if not (isinstance(model, dict)
+                and str(model.get("displayName", "")).startswith("Toki Recur ("))
+    ]
+    endpoint = _client_endpoint(spec, _resolve_mode("droid", mode))
+    models.append({
+        "model": spec.model_id,
+        "displayName": f"Toki Recur ({spec.label})",
+        "baseUrl": endpoint,
+        "apiKey": "${TOKI_AUTH_TOKEN}",
+        "provider": "generic-chat-completion-api",
+        "maxOutputTokens": _client_output_limit(spec),
+    })
+    cfg["customModels"] = models
+    cfg["model"] = f"custom:{spec.model_id}"
+    _write_private_config(cfg_path, json.dumps(cfg, indent=2) + "\n")
+    return cfg_path
+
+
+def write_cline_config(
+    spec: ModelSpec, specs: list[ModelSpec] | None = None,
+    path: Path | None = None, mode: str | None = None,
+) -> Path:
+    """Write Cline's isolated OpenAI-compatible provider settings."""
+    cfg_path = path or _cline_config_path()
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
+    if not isinstance(cfg, dict):
+        cfg = {}
+    cfg["version"] = cfg.get("version", 1)
+    providers = cfg.get("providers")
+    if not isinstance(providers, dict):
+        providers = {}
+        cfg["providers"] = providers
+    provider = providers.get("openai-compatible")
+    if not isinstance(provider, dict):
+        provider = {}
+        providers["openai-compatible"] = provider
+    settings = provider.get("settings")
+    if not isinstance(settings, dict):
+        settings = {}
+        provider["settings"] = settings
+    settings.update({
+        "provider": "openai-compatible",
+        "apiKey": _configured_auth_token() or auth_token(),
+        "model": spec.model_id,
+        "baseUrl": _client_endpoint(spec, _resolve_mode("cline", mode)),
+        "contextWindow": _effective_ctx(spec),
+        "maxTokens": _client_output_limit(spec),
+    })
+    provider["updatedAt"] = datetime.now(timezone.utc).isoformat(
+        timespec="milliseconds",
+    ).replace("+00:00", "Z")
+    provider["tokenSource"] = "manual"
+    cfg["lastUsedProvider"] = "openai-compatible"
+    _backup(cfg_path, mode=0o600)
+    _atomic_write_text(cfg_path, json.dumps(cfg, indent=2) + "\n", mode=0o600)
+    return cfg_path
+
+
+def write_claude_config(
+    spec: ModelSpec, specs: list[ModelSpec] | None = None,
+    path: Path | None = None, mode: str | None = None,
+) -> Path:
+    """Write a private Claude Code override for the local Anthropic route."""
+    del specs, mode
+    cfg_path = path or _claude_settings_path()
+    token = _configured_auth_token() or auth_token()
+    model_id = spec.model_id
+    cfg = {
+        "env": {
+            "ANTHROPIC_BASE_URL": f"{spec.daemon_url}/anthropic",
+            "ANTHROPIC_API_KEY": token,
+            "ANTHROPIC_MODEL": model_id,
+            "ANTHROPIC_DEFAULT_SONNET_MODEL": model_id,
+            "ANTHROPIC_DEFAULT_OPUS_MODEL": model_id,
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL": model_id,
+        },
+    }
+    _write_private_config(cfg_path, json.dumps(cfg, indent=2) + "\n")
+    return cfg_path
+
+
+def write_dsh_config(
+    spec: ModelSpec, specs: list[ModelSpec] | None = None,
+    path: Path | None = None, mode: str | None = None,
+) -> Path:
+    """Write DeepSeek Harness's llm-pi-ai route and default model."""
+    cfg_path = path or _dsh_config_path()
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg = yaml.safe_load(cfg_path.read_text()) if cfg_path.exists() else {}
+    if not isinstance(cfg, dict):
+        cfg = {}
+    llm = cfg.get("llm-pi-ai")
+    if not isinstance(llm, dict):
+        llm = {}
+        cfg["llm-pi-ai"] = llm
+    providers = llm.get("providers")
+    if not isinstance(providers, dict):
+        providers = {}
+        llm["providers"] = providers
+    providers.pop("tokirecur", None)
+    reasoning_efforts = False if not _client_reasoning(spec) else {
+        "off": None,
+        "minimal": "minimal",
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": "max",
+    }
+    providers["tokirecur"] = {
+        "apiKeyEnv": "TOKI_AUTH_TOKEN",
+        "api": "openai-completions",
+        "baseURL": _client_endpoint(spec, _resolve_mode("dsh", mode)),
+        "models": [{
+            "id": spec.model_id,
+            "name": spec.label,
+            "contextWindow": _effective_ctx(spec),
+            "maxTokens": _client_output_limit(spec),
+            "input": ["text"],
+            "reasoningEfforts": reasoning_efforts,
+        }],
+    }
+    cfg["agent-default-model"] = {
+        "provider": "tokirecur",
+        "model": spec.model_id,
+    }
+    _write_private_config(cfg_path, yaml.safe_dump(cfg, sort_keys=False))
+    return cfg_path
+
+
+def write_grok_config(
+    spec: ModelSpec, specs: list[ModelSpec] | None = None,
+    path: Path | None = None, mode: str | None = None,
+) -> Path:
+    """Write Grok Build's custom OpenAI-compatible model route."""
+    cfg_path = path or _grok_config_path()
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg: dict[str, Any] = {}
+    if cfg_path.exists():
+        with cfg_path.open("rb") as fh:
+            loaded = tomllib.load(fh)
+        if isinstance(loaded, dict):
+            cfg = loaded
+    models = cfg.get("models")
+    if not isinstance(models, dict):
+        models = {}
+        cfg["models"] = models
+    model_table = cfg.get("model")
+    if not isinstance(model_table, dict):
+        model_table = {}
+        cfg["model"] = model_table
+    alias = f"tokirecur-{spec.name}"
+    for key in [key for key in model_table if str(key).startswith("tokirecur-")]:
+        model_table.pop(key, None)
+    model_table[alias] = {
+        "model": spec.model_id,
+        "name": f"Toki Recur ({spec.label})",
+        "base_url": _client_endpoint(spec, _resolve_mode("grok", mode)),
+        "env_key": "TOKI_AUTH_TOKEN",
+        "api_backend": "chat_completions",
+        "context_window": _effective_ctx(spec),
+        "max_completion_tokens": _client_output_limit(spec),
+    }
+    models["default"] = alias
+    _write_private_config(cfg_path, tomli_w.dumps(cfg))
+    return cfg_path
+
+
+def write_kilo_config(
+    spec: ModelSpec, specs: list[ModelSpec] | None = None,
+    path: Path | None = None, mode: str | None = None,
+) -> Path:
+    """Write Kilo Code's custom OpenAI-compatible provider."""
+    cfg_path = path or _kilo_config_path()
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg = _load_jsonc(cfg_path)
+    providers = cfg.get("provider")
+    if not isinstance(providers, dict):
+        providers = {}
+        cfg["provider"] = providers
+    provider = providers.get("openai-compatible")
+    if not isinstance(provider, dict):
+        provider = {}
+        providers["openai-compatible"] = provider
+    options = provider.get("options")
+    if not isinstance(options, dict):
+        options = {}
+        provider["options"] = options
+    options.update({
+        "apiKey": "{env:TOKI_AUTH_TOKEN}",
+        "baseURL": _client_endpoint(spec, _resolve_mode("kilo", mode)),
+    })
+    models = provider.get("models")
+    if not isinstance(models, dict):
+        models = {}
+        provider["models"] = models
+    models = {
+        key: value for key, value in models.items()
+        if not (isinstance(value, dict)
+                and str(value.get("name", "")).startswith("Toki Recur ("))
+    }
+    models[spec.model_id] = {
+        "name": f"Toki Recur ({spec.label})",
+        "tool_call": True,
+        "reasoning": _client_reasoning(spec),
+        "limit": {
+            "context": _effective_ctx(spec),
+            "output": _client_output_limit(spec),
+        },
+        "cost": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0},
+    }
+    provider["models"] = models
+    cfg["model"] = f"openai-compatible/{spec.model_id}"
+    _write_private_config(cfg_path, json.dumps(cfg, indent=2) + "\n")
+    return cfg_path
+
+
+def write_pi_config(
+    spec: ModelSpec, specs: list[ModelSpec] | None = None,
+    path: Path | None = None, mode: str | None = None,
+) -> Path:
+    """Write Pi's compatible endpoint and startup defaults."""
+    agent_dir = path.parent if path is not None else _pi_config_dir()
+    cfg_path = path or agent_dir / "models.json"
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
+    if not isinstance(cfg, dict):
+        cfg = {}
+    providers = cfg.get("providers")
+    if not isinstance(providers, dict):
+        providers = {}
+        cfg["providers"] = providers
+    providers["tokirecur"] = {
+        "baseUrl": _client_endpoint(spec, _resolve_mode("pi", mode)),
+        "api": "openai-completions",
+        "apiKey": "${TOKI_AUTH_TOKEN}",
+        "models": [{
+            "id": spec.model_id,
+            "name": f"Toki Recur ({spec.label})",
+            "contextWindow": _effective_ctx(spec),
+            "maxTokens": _client_output_limit(spec),
+            "input": ["text"],
+            "reasoning": _client_reasoning(spec),
+        }],
+    }
+    settings_path = agent_dir / "settings.json"
+    settings = json.loads(settings_path.read_text()) if settings_path.exists() else {}
+    if not isinstance(settings, dict):
+        settings = {}
+    settings["defaultProvider"] = "tokirecur"
+    settings["defaultModel"] = spec.model_id
+    _write_private_config(cfg_path, json.dumps(cfg, indent=2) + "\n")
+    _write_private_config(settings_path, json.dumps(settings, indent=2) + "\n")
+    return cfg_path
+
+
+def write_kimi_config(
+    spec: ModelSpec, specs: list[ModelSpec] | None = None,
+    path: Path | None = None, mode: str | None = None,
+) -> Path:
+    """Write Kimi Code's OpenAI-compatible provider and model alias."""
+    cfg_path = path or _kimi_config_path()
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg: dict[str, Any] = {}
+    if cfg_path.exists():
+        with cfg_path.open("rb") as fh:
+            loaded = tomllib.load(fh)
+        if isinstance(loaded, dict):
+            cfg = loaded
+    providers = cfg.get("providers")
+    if not isinstance(providers, dict):
+        providers = {}
+        cfg["providers"] = providers
+    models = cfg.get("models")
+    if not isinstance(models, dict):
+        models = {}
+        cfg["models"] = models
+    providers["tokirecur"] = {
+        "type": "openai",
+        "base_url": _client_endpoint(spec, _resolve_mode("kimi", mode)),
+        "api_key_env": "TOKI_AUTH_TOKEN",
+    }
+    for key, value in list(models.items()):
+        if isinstance(value, dict) and value.get("provider") == "tokirecur":
+            models.pop(key, None)
+    alias = f"tokirecur/{spec.model_id}"
+    models[alias] = {
+        "provider": "tokirecur",
+        "model": spec.model_id,
+        "max_context_size": _effective_ctx(spec),
+        "display_name": f"Toki Recur ({spec.label})",
+        "capabilities": ["thinking", "tool_use"] if _client_reasoning(spec)
+        else ["tool_use"],
+    }
+    cfg["default_model"] = alias
+    _write_private_config(cfg_path, tomli_w.dumps(cfg))
+    return cfg_path
+
+
+def write_omp_config(
+    spec: ModelSpec, specs: list[ModelSpec] | None = None,
+    path: Path | None = None, mode: str | None = None,
+) -> Path:
+    """Write OMP's custom OpenAI-compatible provider."""
+    cfg_path = path or _omp_config_path()
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    if cfg_path.suffix.lower() == ".json":
+        cfg = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
+    else:
+        cfg = yaml.safe_load(cfg_path.read_text()) if cfg_path.exists() else {}
+    if not isinstance(cfg, dict):
+        cfg = {}
+    providers = cfg.get("providers")
+    if not isinstance(providers, dict):
+        providers = {}
+        cfg["providers"] = providers
+    providers["tokirecur"] = {
+        "baseUrl": _client_endpoint(spec, _resolve_mode("omp", mode)),
+        "api": "openai-completions",
+        "apiKey": "TOKI_AUTH_TOKEN",
+        "auth": "apiKey",
+        "models": [{
+            "id": spec.model_id,
+            "name": f"Toki Recur ({spec.label})",
+            "contextWindow": _effective_ctx(spec),
+            "maxTokens": _client_output_limit(spec),
+            "input": ["text"],
+            "reasoning": _client_reasoning(spec),
+        }],
+    }
+    if cfg_path.suffix.lower() == ".json":
+        text = json.dumps(cfg, indent=2) + "\n"
+    else:
+        text = yaml.safe_dump(cfg, sort_keys=False)
+    _write_private_config(cfg_path, text)
+    return cfg_path
+
+
+def _ornithcode_config_path() -> Path:
+    explicit = os.environ.get("ORNITHCODE_CONFIG")
+    if explicit:
+        return Path(explicit).expanduser()
+    return Path.home() / ".config" / "ornithcode" / "config.json"
+
+
+# The model card's recommended general-task sampling. Kept as a selectable
+# profile next to the stack's own anti-loop defaults, which the daemon
+# applies when a request leaves sampling unset.
+ORNITH_CARD_SAMPLING: dict[str, Any] = {
+    "temperature": 0.6,
+    "top_p": 0.95,
+    "top_k": 20,
+}
+
+
+def write_ornithcode_config(
+    spec: ModelSpec, specs: list[ModelSpec] | None = None,
+    path: Path | None = None, mode: str | None = None,
+) -> Path:
+    """Write OrnithCode's provider config from the live model spec."""
+    del specs
+    cfg_path = path or _ornithcode_config_path()
+    mode = _resolve_mode("ornithcode", mode)
+    token = _configured_auth_token() or auth_token()
+    cfg: dict[str, Any] = {
+        "$schema": "ornithcode/config/1",
+        "model": spec.name,
+        "label": spec.label,
+        "provider": {
+            "name": "tokirecur",
+            "baseUrl": _client_endpoint(spec, mode),
+            "apiKey": token,
+            "modelId": spec.model_id,
+            "contextWindow": _effective_ctx(spec),
+            "maxOutputTokens": _client_output_limit(spec),
+            "reasoning": _client_reasoning(spec),
+        },
+        "raw": {
+            "baseUrl": spec.llama_url,
+            "contextWindow": _effective_ctx(spec),
+        },
+        "sampling": {"profile": "toki"},
+        "samplingProfiles": {
+            "toki": merged_sampling(spec),
+            "ornith-card": dict(ORNITH_CARD_SAMPLING),
+        },
+        "maxSlots": spec.parallel,
+    }
+    _write_private_config(cfg_path, json.dumps(cfg, indent=2) + "\n")
+    return cfg_path
 
 
 def _client_modes_path(root: Path | None = None) -> Path:
@@ -2835,9 +3530,17 @@ def _resolve_mode(client: str, mode: str | None,
     return mode if mode in ("raw", "managed") else client_mode(client, root)
 
 
-def _backup(path: Path) -> None:
+def _backup(path: Path, *, mode: int | None = None) -> None:
     if path.exists():
-        shutil.copy2(path, path.with_suffix(path.suffix + ".bak-model"))
+        backup = path.with_suffix(path.suffix + ".bak-model")
+        shutil.copy2(path, backup)
+        if mode is not None:
+            backup.chmod(mode)
+
+
+def _write_private_config(path: Path, text: str) -> None:
+    _backup(path, mode=0o600)
+    _atomic_write_text(path, text, mode=0o600)
 
 
 # Marker used to spot a toki-owned anti-loop block inside a user's
@@ -2973,7 +3676,7 @@ def _provider_entry(spec: ModelSpec, mode: str = "managed") -> dict[str, Any]:
         "npm": "@ai-sdk/openai-compatible",
         "options": {
             "baseURL": f"{base}/v1",
-            "apiKey": auth_token(),
+            "apiKey": _configured_auth_token() or auth_token(),
         },
         "models": {
             spec.model_id: {
@@ -3031,6 +3734,116 @@ def _small_model_ref(
     return "tokirecur/qwen3.5-9b"
 
 
+MIMO_SCHEMA = "https://mimo.xiaomi.com/mimocode/config.json"
+
+
+def _mimo_config_file(base: Path) -> Path:
+    for name in ("mimocode.jsonc", "mimocode.json"):
+        candidate = base / name
+        if candidate.exists():
+            return candidate
+    return base / "mimocode.json"
+
+
+def _mimo_config_path() -> Path:
+    explicit = os.environ.get("MIMOCODE_CONFIG")
+    if explicit:
+        return Path(explicit).expanduser()
+    config_dir = os.environ.get("MIMOCODE_CONFIG_DIR")
+    if config_dir:
+        return _mimo_config_file(Path(config_dir).expanduser())
+    profile = os.environ.get("MIMOCODE_HOME")
+    if profile:
+        return _mimo_config_file(Path(profile).expanduser() / "config")
+    if os.name == "nt":
+        local = os.environ.get("LOCALAPPDATA")
+        base = Path(local).expanduser() if local else Path.home() / "AppData" / "Local"
+    else:
+        xdg = os.environ.get("XDG_CONFIG_HOME")
+        base = Path(xdg).expanduser() if xdg else Path.home() / ".config"
+    return _mimo_config_file(base / "mimocode")
+
+
+def _mimo_model_ref(spec: ModelSpec) -> str:
+    return f"tokirecur-{spec.name}/{spec.model_id}"
+
+
+def _mimo_small_model_ref(
+    specs: list[ModelSpec], active: ModelSpec | None = None,
+) -> str:
+    if not specs:
+        return "tokirecur/qwen3.5-9b"
+    primary = next((s for s in specs if s.always_on), None)
+    if primary is None:
+        primary = next(
+            (s for s in specs if active is None or s.name != active.name),
+            None,
+        )
+    return _mimo_model_ref(primary or specs[0])
+
+
+def _mimo_provider_entry(spec: ModelSpec, mode: str = "managed") -> dict[str, Any]:
+    ctx = _effective_ctx(spec)
+    base = spec.llama_url if mode == "raw" else spec.daemon_url
+    return {
+        "name": f"Toki Recur ({spec.label})",
+        "npm": "@ai-sdk/openai-compatible",
+        "only_configured_models": True,
+        "options": {
+            "baseURL": f"{base}/v1",
+            "apiKey": _configured_auth_token() or auth_token(),
+        },
+        "models": {
+            spec.model_id: {
+                "name": f"{spec.label} (Toki Recur)",
+                "limit": {
+                    "context": ctx,
+                    "output": _client_output_limit(spec),
+                },
+            }
+        },
+    }
+
+
+def write_mimo_config(
+    spec: ModelSpec, specs: list[ModelSpec] | None = None,
+    path: Path | None = None, mode: str | None = None,
+) -> Path:
+    """Write MiMo Code's OpenAI-compatible provider configuration."""
+    cfg_path = path or _mimo_config_path()
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg: dict[str, Any] = _load_jsonc(cfg_path) if cfg_path.exists() else {}
+
+    providers = cfg.get("provider")
+    if not isinstance(providers, dict):
+        providers = {}
+        cfg["provider"] = providers
+    for stale in [k for k in providers if k.startswith("tokirecur-")]:
+        providers.pop(stale, None)
+
+    all_specs = specs if specs is not None else load_registry()
+    mode = _resolve_mode("mimo", mode)
+    advertised = _advertised_specs(all_specs, spec, mode)
+    for advertised_spec in advertised:
+        providers[f"tokirecur-{advertised_spec.name}"] = _mimo_provider_entry(
+            advertised_spec, mode=mode,
+        )
+
+    cfg["$schema"] = MIMO_SCHEMA
+    cfg["model"] = _mimo_model_ref(spec)
+    cfg["small_model"] = _mimo_small_model_ref(advertised, active=spec)
+
+    existing = cfg.get("instructions")
+    if not existing:
+        md = _inject_anti_loop_md_file(cfg_path.parent)
+        if md is not None:
+            cfg["instructions"] = [md]
+
+    _backup(cfg_path, mode=0o600)
+    _atomic_write_text(cfg_path, json.dumps(cfg, indent=2) + "\n", mode=0o600)
+    return cfg_path
+
+
 def write_opencode_config(
     spec: ModelSpec, specs: list[ModelSpec] | None = None,
     path: Path | None = None, mode: str | None = None,
@@ -3078,8 +3891,8 @@ def write_opencode_config(
         if md is not None:
             cfg["instructions"] = [md]
 
-    _backup(cfg_path)
-    _atomic_write_text(cfg_path, json.dumps(cfg, indent=2) + "\n")
+    _backup(cfg_path, mode=0o600)
+    _atomic_write_text(cfg_path, json.dumps(cfg, indent=2) + "\n", mode=0o600)
     return cfg_path
 
 
@@ -3120,7 +3933,7 @@ def write_openclaw_config(
         providers[f"tokirecur-{s.name}"] = {
             "api": "openai-completions",
             "baseUrl": f"{base}/v1",
-            "apiKey": auth_token(),
+            "apiKey": _configured_auth_token() or auth_token(),
             "timeoutSeconds": 3600,
             "models": [
                 {
@@ -3151,8 +3964,8 @@ def write_openclaw_config(
         workspace = Path(defaults["workspace"])
     _inject_anti_loop_bootstrap(workspace / "AGENTS.md")
 
-    _backup(cfg_path)
-    _atomic_write_text(cfg_path, json.dumps(cfg, indent=2) + "\n")
+    _backup(cfg_path, mode=0o600)
+    _atomic_write_text(cfg_path, json.dumps(cfg, indent=2) + "\n", mode=0o600)
     return cfg_path
 
 
@@ -3182,10 +3995,11 @@ def write_hermes_config(
     404. We purge and re-take the ``llamacpp`` key in BOTH formats so
     hermes always routes through the toki daemon.
     """
-    cfg_path = path or Path(os.environ.get(
-        "HERMES_CONFIG", str(Path.home() / ".hermes/config.yaml")))
+    cfg_path = path or _hermes_config_path()
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     cfg: dict[str, Any] = yaml.safe_load(cfg_path.read_text()) if cfg_path.exists() else {}
+    if not isinstance(cfg, dict):
+        cfg = {}
 
     # Drop any legacy tokirecur-* provider keys left by a previous toki
     # version, plus any non-toki "llamacpp" key (see docstring). The user
@@ -3222,7 +4036,7 @@ def write_hermes_config(
     entry = {
         "name": "llamacpp",
         "base_url": f"{base}/v1",
-        "api_key": auth_token(),
+        "api_key": _configured_auth_token() or auth_token(),
         "models": models_with_ctx,
         "default_model": spec.model_id,
         "_toki": True,  # marker so a future re-write can find it
@@ -3241,7 +4055,7 @@ def write_hermes_config(
     # "llamacpp" key would keep pointing requests at llama-server.
     providers["llamacpp"] = {
         "api": f"{base}/v1",
-        "api_key": auth_token(),
+        "api_key": _configured_auth_token() or auth_token(),
         "models": models_with_ctx,
         "default_model": spec.model_id,
         "name": "Toki Recur (llamacpp)",
@@ -3256,7 +4070,7 @@ def write_hermes_config(
         cfg["model"] = model_cfg
     model_cfg.update(
         {
-            "api_key": auth_token(),
+            "api_key": _configured_auth_token() or auth_token(),
             "base_url": f"{base}/v1",
             "default": spec.model_id,
             "provider": "llamacpp",
@@ -3273,8 +4087,8 @@ def write_hermes_config(
 
     _purge_stale_hermes_context_cache(all_specs)
 
-    _backup(cfg_path)
-    _atomic_write_text(cfg_path, yaml.safe_dump(cfg, sort_keys=False))
+    _backup(cfg_path, mode=0o600)
+    _atomic_write_text(cfg_path, yaml.safe_dump(cfg, sort_keys=False), mode=0o600)
     return cfg_path
 
 
@@ -3289,9 +4103,7 @@ def _purge_stale_hermes_context_cache(specs: list[ModelSpec]) -> None:
     base URLs are removed; user caches (ollama, ...) survive.
     """
     try:
-        home = Path(os.environ.get(
-            "HERMES_HOME", str(Path.home() / ".hermes")))
-        path = home / "context_length_cache.yaml"
+        path = _hermes_config_path().parent / "context_length_cache.yaml"
         if not path.exists():
             return
         data = yaml.safe_load(path.read_text()) or {}
@@ -3358,12 +4170,9 @@ def write_codex_config(
             # pipeline.
             "wire_api": "responses",
             # env_key tells codex which environment variable carries the
-            # bearer key — without it codex falls back to OPENAI_API_KEY
-            # and sends no Authorization header. The env map below only
-            # declares the variable name; codex requires the real var in
-            # its process environment (launcher injection, or exported).
+            # bearer key. The launcher injects the real value into the
+            # child environment; it is never persisted in this config.
             "env_key": "TOKI_AUTH_TOKEN",
-            "env": {"TOKI_AUTH_TOKEN": auth_token()},
         }
 
     top["model_provider"] = f"tokirecur-{spec.name}"
@@ -3382,13 +4191,13 @@ def write_codex_config(
         top.pop("system_prompt")
     _inject_anti_loop_bootstrap(cfg_path.parent / "AGENTS.md")
 
-    _backup(cfg_path)
-    _atomic_write_text(cfg_path, tomli_w.dumps({**top, **tables}))
+    _backup(cfg_path, mode=0o600)
+    _atomic_write_text(cfg_path, tomli_w.dumps({**top, **tables}), mode=0o600)
     return cfg_path
 
 
 def sync_cli_configs(spec: ModelSpec, mode: str | None = None) -> dict[str, Path]:
-    """Write the active model into all four CLI configs.
+    """Write the active model into every model-capable CLI config.
 
     Reads the registry once and threads the loaded specs through each
     writer — the previous version re-parsed the YAML four times per
@@ -3413,9 +4222,21 @@ def sync_cli_configs(spec: ModelSpec, mode: str | None = None) -> dict[str, Path
     out: dict[str, Path] = {}
     for tool, writer in (
         ("opencode", write_opencode_config),
+        ("mimo", write_mimo_config),
         ("openclaw", write_openclaw_config),
         ("hermes", write_hermes_config),
         ("codex", write_codex_config),
+        ("qwen", write_qwen_config),
+        ("droid", write_droid_config),
+        ("cline", write_cline_config),
+        ("claude", write_claude_config),
+        ("ornithcode", write_ornithcode_config),
+        ("dsh", write_dsh_config),
+        ("grok", write_grok_config),
+        ("kilo", write_kilo_config),
+        ("pi", write_pi_config),
+        ("kimi", write_kimi_config),
+        ("omp", write_omp_config),
     ):
         try:
             tool_mode = _resolve_mode(tool, mode)
@@ -3446,12 +4267,12 @@ _SYNC_FAILURE_ESCALATE = 3
 
 
 def heal_cli_configs(registry: Path | None = None) -> dict[str, Path] | None:
-    """Best-effort self-heal of the four agent configs for the active model.
+    """Best-effort self-heal of model-capable CLI configs.
 
     Called at every stack startup (``toki serve``, ``toki up``, daemon
     spawn) so the agent configs are correct even when the user never
     runs ``toki model use``: legacy repo-path model ids are normalized
-    and the four agent configs are rewritten to point at the active
+    and the model-capable CLI configs are rewritten to point at the active
     model's daemon. This is the plug-and-play repair point that kills
     the "model '<name>' not found" 404 class from stale configs.
 

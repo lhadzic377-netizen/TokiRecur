@@ -1,7 +1,7 @@
 """Unit tests for the multi-model plug-and-play manager.
 
 Covers: registry loading (with default file creation), active-model
-marker, and the opencode / openclaw / hermes config writers
+marker, and the opencode / mimo / openclaw / hermes config writers
 (merge-safe, backup-first). No real processes are spawned.
 """
 
@@ -26,6 +26,20 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(ctl, "DEFAULT_REGISTRY", reg)
     monkeypatch.setattr(ctl, "STATE_ROOT", state)
     monkeypatch.setattr(ctl, "ACTIVE_MARKER", marker)
+    monkeypatch.setenv("MIMOCODE_CONFIG", str(tmp_path / "mimocode.json"))
+    monkeypatch.setenv("QWEN_CONFIG", str(tmp_path / "qwen-settings.json"))
+    monkeypatch.setenv("FACTORY_CONFIG", str(tmp_path / "factory-settings.json"))
+    monkeypatch.setenv("CLINE_TOKIRECUR_CONFIG", str(tmp_path / "cline-settings"))
+    monkeypatch.setenv("DSH_HOME", str(tmp_path / "dsh"))
+    monkeypatch.setenv("GROK_HOME", str(tmp_path / "grok"))
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes"))
+    monkeypatch.setenv("KILO_CONFIG", str(tmp_path / "kilo.jsonc"))
+    monkeypatch.setenv("PI_CODING_AGENT_DIR", str(tmp_path / "pi-agent"))
+    monkeypatch.setenv("KIMI_CODE_HOME", str(tmp_path / "kimi"))
+    monkeypatch.setenv("OMP_CONFIG_DIR", str(tmp_path / "omp-agent"))
+    monkeypatch.setenv("TOKI_CLAUDE_SETTINGS", str(tmp_path / "claude" / "settings.json"))
+    monkeypatch.setenv("ORNITHCODE_CONFIG", str(tmp_path / "ornithcode" / "config.json"))
+    monkeypatch.setenv("TOKI_AUTH_TOKEN", "test-tok-0123456789abcdef")
     return tmp_path
 
 
@@ -113,6 +127,100 @@ def test_opencode_config_writer(env, with_pulled_model, monkeypatch):
     # toki-owned markdown file next to the config.
     assert cfg["instructions"] == [str(env / "tokirecur-anti-loop.md")]
     assert ctl.ANTI_LOOP_SYSTEM_PROMPT in (env / "tokirecur-anti-loop.md").read_text()
+
+
+def test_mimo_config_writer(env, with_pulled_model, monkeypatch):
+    monkeypatch.setenv("TOKI_AUTH_TOKEN", "test-tok-0123456789abcdef")
+    monkeypatch.setattr(ctl, "daemon_reachable", lambda spec: True)
+    monkeypatch.setattr(ctl, "llama_reachable", lambda spec: True)
+    spec = with_pulled_model["35b"]
+    cfg_path = env / "mimocode" / "mimocode.json"
+    cfg_path.parent.mkdir(parents=True)
+    cfg_path.write_text(json.dumps({
+        "provider": {"existing": {"name": "keep me"}},
+        "instructions": ["MY_RULES.md"],
+    }))
+
+    out = ctl.write_mimo_config(spec, [ctl.get_model(s.name) for s in ctl.load_registry()], path=cfg_path)
+    cfg = json.loads(out.read_text())
+
+    assert cfg["$schema"] == ctl.MIMO_SCHEMA
+    assert cfg["model"] == "tokirecur-35b/qwen3.6-35b-a3b"
+    assert cfg["small_model"] == "tokirecur-9b/qwen3.5-9b"
+    assert cfg["provider"]["existing"]["name"] == "keep me"
+    provider = cfg["provider"]["tokirecur-35b"]
+    assert provider["npm"] == "@ai-sdk/openai-compatible"
+    assert provider["only_configured_models"] is True
+    assert provider["options"] == {
+        "baseURL": f"{spec.daemon_url}/v1",
+        "apiKey": "test-tok-0123456789abcdef",
+    }
+    model = provider["models"][spec.model_id]
+    assert model["limit"] == {
+        "context": ctl._effective_ctx(spec),
+        "output": ctl._client_output_limit(spec),
+    }
+    assert cfg_path.with_suffix(".json.bak-model").exists()
+
+
+def test_mimo_config_writer_honors_mimocode_home(env, with_pulled_model, monkeypatch):
+    spec = with_pulled_model["9b"]
+    home = env / "mimo-home"
+    monkeypatch.delenv("MIMOCODE_CONFIG", raising=False)
+    monkeypatch.setenv("MIMOCODE_HOME", str(home))
+    monkeypatch.setenv("TOKI_AUTH_TOKEN", "test-tok-0123456789abcdef")
+    out = ctl.write_mimo_config(spec, [spec])
+    assert out == home / "config" / "mimocode.json"
+    assert out.exists()
+
+
+def test_jsonc_loader_preserves_commas_inside_strings(tmp_path):
+    cfg = tmp_path / "config.jsonc"
+    cfg.write_text('{"text": "text,}", "items": [1,]}')
+    assert ctl._load_jsonc(cfg) == {"text": "text,}", "items": [1]}
+
+
+def test_configured_auth_token_reads_user_auth_file(monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    auth = home / ".config" / "tokirecur" / "auth"
+    auth.parent.mkdir(parents=True)
+    auth.write_text("file-token\n")
+    monkeypatch.delenv("TOKI_AUTH_TOKEN", raising=False)
+    monkeypatch.setattr(ctl.Path, "home", classmethod(lambda cls: home))
+    assert ctl._configured_auth_token() == "file-token"
+
+
+def test_mimo_explicit_config_path_is_not_treated_as_directory(monkeypatch, tmp_path):
+    path = tmp_path / "custom-config"
+    monkeypatch.setenv("MIMOCODE_CONFIG", str(path))
+    assert ctl._mimo_config_path() == path
+
+
+def test_mimo_config_writer_prefers_existing_jsonc(env, with_pulled_model, monkeypatch):
+    spec = with_pulled_model["9b"]
+    config_dir = env / "mimo-jsonc"
+    config_dir.mkdir()
+    cfg_path = config_dir / "mimocode.jsonc"
+    cfg_path.write_text(
+        '{\n  // preserve this user setting\n  "mcp": {"server": true},\n}\n'
+    )
+    monkeypatch.delenv("MIMOCODE_CONFIG", raising=False)
+    monkeypatch.setenv("MIMOCODE_CONFIG_DIR", str(config_dir))
+    out = ctl.write_mimo_config(spec, [spec])
+    assert out == cfg_path
+    data = json.loads(out.read_text())
+    assert data["mcp"] == {"server": True}
+    assert data["model"] == ctl._mimo_model_ref(spec)
+    assert out.stat().st_mode & 0o777 == 0o600
+
+
+def test_mimo_config_writer_uses_raw_mode(env, with_pulled_model, monkeypatch):
+    spec = with_pulled_model["9b"]
+    monkeypatch.setenv("TOKI_AUTH_TOKEN", "test-tok-0123456789abcdef")
+    monkeypatch.setattr(ctl, "llama_reachable", lambda spec: True)
+    cfg = json.loads(ctl.write_mimo_config(spec, [spec], mode="raw").read_text())
+    provider = cfg["provider"]["tokirecur-9b"]
+    assert provider["options"]["baseURL"] == f"{spec.llama_url}/v1"
 
 
 def test_opencode_config_writer_only_advertises_reachable_daemons(
@@ -321,13 +429,18 @@ def test_sync_cli_configs_writes_all(env, with_pulled_model, monkeypatch):
     spec = with_pulled_model["laguna"]
     monkeypatch.setenv("CODEX_HOME", str(env / "codex-home"))
     paths = ctl.sync_cli_configs(spec)
-    assert len(paths) == 4
+    assert len(paths) == 16
+    assert "ornithcode" in paths
     for p in paths.values():
         assert Path(p).exists()
+        assert Path(p).stat().st_mode & 0o777 == 0o600
     # And every CLI config picked up the pulled provider.
     pulled_name = with_pulled_model["pulled"].name
     oc = json.loads(paths["opencode"].read_text())
     assert f"tokirecur-{pulled_name}" in oc["provider"]
+    mimo = json.loads(paths["mimo"].read_text())
+    assert f"tokirecur-{pulled_name}" in mimo["provider"]
+    assert mimo["model"].startswith("tokirecur-laguna/")
     cla = json.loads(paths["openclaw"].read_text())
     assert f"tokirecur-{pulled_name}" in cla["models"]["providers"]
     h = yaml.safe_load(paths["hermes"].read_text())
@@ -343,6 +456,163 @@ def test_sync_cli_configs_writes_all(env, with_pulled_model, monkeypatch):
     with paths["codex"].open("rb") as fh:
         codex = toml_load(fh)
     assert f"tokirecur-{pulled_name}" in codex["model_providers"]
+
+
+def test_new_client_config_writers_bind_active_model(env, with_pulled_model, monkeypatch):
+    monkeypatch.setenv("TOKI_AUTH_TOKEN", "test-tok-0123456789abcdef")
+    monkeypatch.setattr(ctl, "daemon_reachable", lambda spec: True)
+    monkeypatch.setattr(ctl, "llama_reachable", lambda spec: True)
+    spec = with_pulled_model["laguna"]
+    paths = ctl.sync_cli_configs(spec)
+
+    qwen = json.loads(paths["qwen"].read_text())
+    assert qwen["model"]["name"] == spec.model_id
+    assert qwen["modelProviders"]["openai"][-1]["baseUrl"] == f"{spec.daemon_url}/v1"
+
+    droid = json.loads(paths["droid"].read_text())
+    assert droid["model"] == f"custom:{spec.model_id}"
+    assert droid["customModels"][-1]["provider"] == "generic-chat-completion-api"
+
+    cline = json.loads(paths["cline"].read_text())
+    assert cline["lastUsedProvider"] == "openai-compatible"
+    provider = cline["providers"]["openai-compatible"]
+    assert provider["settings"]["model"] == spec.model_id
+    assert provider["settings"]["contextWindow"] == ctl._effective_ctx(spec)
+    assert provider["settings"]["maxTokens"] == ctl._client_output_limit(spec)
+    assert provider["updatedAt"].endswith("Z")
+    assert paths["cline"].stat().st_mode & 0o777 == 0o600
+
+    claude = json.loads(paths["claude"].read_text())
+    assert claude["env"]["ANTHROPIC_BASE_URL"] == f"{spec.daemon_url}/anthropic"
+    assert claude["env"]["ANTHROPIC_MODEL"] == spec.model_id
+    assert claude["env"]["ANTHROPIC_API_KEY"] == "test-tok-0123456789abcdef"
+    assert "ANTHROPIC_AUTH_TOKEN" not in claude["env"]
+    assert paths["claude"].stat().st_mode & 0o777 == 0o600
+
+    dsh = yaml.safe_load(paths["dsh"].read_text())
+    assert dsh["agent-default-model"] == {"provider": "tokirecur", "model": spec.model_id}
+    dsh_provider = dsh["llm-pi-ai"]["providers"]["tokirecur"]
+    assert dsh_provider["baseURL"] == f"{spec.daemon_url}/v1"
+    assert dsh_provider["models"][0]["reasoningEfforts"] == {
+        "off": None,
+        "minimal": "minimal",
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": "max",
+    }
+
+    with paths["grok"].open("rb") as fh:
+        grok = toml_load(fh)
+    alias = f"tokirecur-{spec.name}"
+    assert grok["models"]["default"] == alias
+    assert grok["model"][alias]["base_url"] == f"{spec.daemon_url}/v1"
+
+    kilo = json.loads(paths["kilo"].read_text())
+    assert kilo["model"] == f"openai-compatible/{spec.model_id}"
+    assert kilo["provider"]["openai-compatible"]["options"]["baseURL"] == f"{spec.daemon_url}/v1"
+
+    pi = json.loads(paths["pi"].read_text())
+    assert pi["providers"]["tokirecur"]["baseUrl"] == f"{spec.daemon_url}/v1"
+    settings = json.loads((paths["pi"].parent / "settings.json").read_text())
+    assert settings["defaultModel"] == spec.model_id
+
+    with paths["kimi"].open("rb") as fh:
+        kimi = toml_load(fh)
+    alias = f"tokirecur/{spec.model_id}"
+    assert kimi["default_model"] == alias
+    assert kimi["providers"]["tokirecur"]["base_url"] == f"{spec.daemon_url}/v1"
+
+    omp = yaml.safe_load(paths["omp"].read_text())
+    assert omp["providers"]["tokirecur"]["baseUrl"] == f"{spec.daemon_url}/v1"
+
+
+def test_omp_writer_prefers_pi_agent_directory(env, with_pulled_model, monkeypatch):
+    spec = with_pulled_model["9b"]
+    pi_dir = env / "pi-wins"
+    monkeypatch.setenv("PI_CODING_AGENT_DIR", str(pi_dir))
+    monkeypatch.setenv("OMP_CONFIG_DIR", str(env / "omp-loses"))
+    out = ctl.write_omp_config(spec, [spec])
+    assert out == pi_dir / "models.yml"
+
+
+def test_qwen_writer_honors_qwen_home(env, with_pulled_model, monkeypatch):
+    spec = with_pulled_model["9b"]
+    home = env / "qwen-home"
+    monkeypatch.delenv("QWEN_CONFIG", raising=False)
+    monkeypatch.setenv("QWEN_HOME", str(home))
+    out = ctl.write_qwen_config(spec, [spec])
+    assert out == home / "settings.json"
+
+
+def test_kilo_writer_honors_config_dir(env, with_pulled_model, monkeypatch):
+    spec = with_pulled_model["9b"]
+    config_dir = env / "kilo-config-dir"
+    config_dir.mkdir()
+    monkeypatch.delenv("KILO_CONFIG", raising=False)
+    monkeypatch.setenv("KILO_CONFIG_DIR", str(config_dir))
+    out = ctl.write_kilo_config(spec, [spec])
+    assert out == config_dir / "kilo.jsonc"
+
+
+def test_hermes_writer_honors_hermes_home(env, with_pulled_model, monkeypatch):
+    spec = with_pulled_model["9b"]
+    home = env / "hermes-home"
+    monkeypatch.delenv("HERMES_CONFIG", raising=False)
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    out = ctl.write_hermes_config(spec, [spec])
+    assert out == home / "config.yaml"
+
+
+def test_omp_writer_updates_existing_yaml_config(env, with_pulled_model, monkeypatch):
+    spec = with_pulled_model["9b"]
+    config_dir = env / "omp-existing"
+    config_dir.mkdir()
+    (config_dir / "models.yaml").write_text(
+        yaml.safe_dump({"providers": {"keep": {"name": "Keep"}}})
+    )
+    monkeypatch.setenv("PI_CODING_AGENT_DIR", str(config_dir))
+    out = ctl.write_omp_config(spec, [spec])
+    assert out == config_dir / "models.yaml"
+    data = yaml.safe_load(out.read_text())
+    assert data["providers"]["keep"]["name"] == "Keep"
+    assert "tokirecur" in data["providers"]
+
+
+def test_omp_writer_updates_legacy_json_config(env, with_pulled_model, monkeypatch):
+    spec = with_pulled_model["9b"]
+    config_dir = env / "omp-legacy"
+    config_dir.mkdir()
+    (config_dir / "models.json").write_text(
+        json.dumps({"providers": {"keep": {"name": "Keep"}}})
+    )
+    monkeypatch.setenv("PI_CODING_AGENT_DIR", str(config_dir))
+    out = ctl.write_omp_config(spec, [spec])
+    assert out == config_dir / "models.json"
+    data = json.loads(out.read_text())
+    assert data["providers"]["keep"]["name"] == "Keep"
+    assert "tokirecur" in data["providers"]
+
+
+def test_omp_default_profile_uses_root_agent_directory(env, with_pulled_model, monkeypatch):
+    spec = with_pulled_model["9b"]
+    root = env / "omp-default-root"
+    monkeypatch.setenv("PI_CONFIG_DIR", str(root))
+    monkeypatch.delenv("PI_CODING_AGENT_DIR", raising=False)
+    monkeypatch.setenv("OMP_PROFILE", "default")
+    out = ctl.write_omp_config(spec, [spec])
+    assert out == root / "agent" / "models.yml"
+
+
+def test_omp_writer_uses_named_profile_directory(env, with_pulled_model, monkeypatch):
+    spec = with_pulled_model["9b"]
+    root = env / "omp-root"
+    monkeypatch.setenv("PI_CONFIG_DIR", str(root))
+    monkeypatch.setenv("OMP_PROFILE", "work")
+    monkeypatch.setenv("PI_CODING_AGENT_DIR", str(env / "ignored-agent-dir"))
+    out = ctl.write_omp_config(spec, [spec])
+    assert out == root / "profiles" / "work" / "agent" / "models.yml"
 
 
 def test_hermes_models_dict_carries_context_length(env, with_pulled_model):
@@ -394,6 +664,13 @@ def test_hermes_purges_stale_context_cache(env, with_pulled_model, tmp_path):
         monkeypatch.undo()
 
 
+def test_copilot_is_selectable_in_cli_mode():
+    from tokirecur.cli import cli
+
+    choices = cli.commands["model"].commands["mode"].params[0].type.choices
+    assert "copilot" in choices
+
+
 def test_mode_persisted_and_threaded(env, with_pulled_model, monkeypatch):
     """Per-client raw/managed modes: persisted, then honored by sync."""
     spec = with_pulled_model["9b"]
@@ -409,6 +686,11 @@ def test_mode_persisted_and_threaded(env, with_pulled_model, monkeypatch):
     paths = ctl.sync_cli_configs(spec)
     oc = json.loads(paths["opencode"].read_text())
     assert oc["provider"]["tokirecur-9b"]["options"]["baseURL"] == \
+        f"{spec.llama_url}/v1"
+    ctl.write_client_mode("mimo", "raw")
+    paths = ctl.sync_cli_configs(spec)
+    mimo = json.loads(paths["mimo"].read_text())
+    assert mimo["provider"]["tokirecur-9b"]["options"]["baseURL"] == \
         f"{spec.llama_url}/v1"
     # The others stayed managed (their mode was never changed).
     cla = json.loads(paths["openclaw"].read_text())
@@ -521,7 +803,13 @@ def test_next_free_ports(env):
         ctl.ModelSpec(raw=raw_a, **raw_a),
         ctl.ModelSpec(raw=raw_b, **raw_b),
     ]
-    assert ctl.next_free_ports(specs) == (8091, 8790)
+    # next_free_ports probes the OS, so this only holds when 8091/8790 are
+    # actually free. A model left running on that pair makes the function
+    # correctly skip to the next one, and the test fail for a reason that has
+    # nothing to do with the port arithmetic.
+    assert ctl.next_free_ports(specs) >= (8091, 8790)
+    if ctl._port_free(8091) and ctl._port_free(8790):
+        assert ctl.next_free_ports(specs) == (8091, 8790)
 
 
 def test_save_registry_roundtrip_preserves_raw(seeded_env):
@@ -1530,7 +1818,7 @@ def test_repair_heals_legacy_entry_without_source_field(env, monkeypatch):
 
 def test_use_model_syncs_cli_configs(env, hf, monkeypatch):
     """`toki model pull --use` and `toki model use <name>` must end
-    with the opencode/openclaw/hermes configs rewritten so every
+    with the opencode/mimo/openclaw/hermes configs rewritten so every
     registry spec (defaults + pulled) has a provider entry — otherwise
     the clients can't see the pulled stack."""
     import json as _json
@@ -2479,7 +2767,7 @@ def test_llama_args_aliases_cover_every_stack_name(env, tmp_path):
 
 
 def test_model_use_sync_only_cli(env, monkeypatch):
-    """`toki model use <name> --sync-only` rewires the four agent
+    """`toki model use <name> --sync-only` rewires the five agent
     configs and prints 'configs synced' without starting any stack —
     the installer/daemon-startup repair path, end to end."""
     from click.testing import CliRunner

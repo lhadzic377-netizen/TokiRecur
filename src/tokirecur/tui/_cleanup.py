@@ -49,13 +49,24 @@ _original_windows_mode: tuple[int, int] | None = None
 
 
 def _stdout_fileno() -> int | None:
-    """Best-effort stdout file descriptor. Returns None when stdout
-    has been redirected (pytest capture, pipes) so cleanup becomes a
-    no-op rather than crashing on a missing tty."""
+    """Best-effort stdout file descriptor.
+
+    Textual replaces ``sys.stdout`` with a stream whose ``fileno()`` is
+    ``-1`` while the original terminal is still available through
+    ``sys.__stdout__``.  Treat other negative descriptors as invalid and
+    fall back only for that explicit sentinel.
+    """
     try:
-        return sys.stdout.fileno()
+        fileno = sys.stdout.fileno()
     except (OSError, ValueError, AttributeError):
         return None
+    if fileno >= 0:
+        return fileno
+    try:
+        original = sys.__stdout__.fileno()
+    except (OSError, ValueError, AttributeError):
+        return None
+    return original if original >= 0 else None
 
 
 def _snapshot_terminal_state(fileno: int) -> None:
@@ -68,7 +79,7 @@ def _snapshot_terminal_state(fileno: int) -> None:
         try:
             import termios
             _original_termios = termios.tcgetattr(fileno)
-        except (OSError, termios.error):
+        except (OSError, ValueError, termios.error):
             _original_termios = None
         return
     if os.name == "nt":
@@ -92,11 +103,11 @@ def restore_now() -> None:
         try:
             import termios
             fileno = _stdout_fileno()
-            if fileno is not None:
+            if fileno is not None and fileno >= 0:
                 termios.tcsetattr(
                     fileno, termios.TCSANOW, _original_termios,
                 )
-        except (OSError, termios.error):
+        except (OSError, ValueError, termios.error):
             pass
 
     if os.name == "nt" and _original_windows_mode is not None:

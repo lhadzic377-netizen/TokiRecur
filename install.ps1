@@ -131,10 +131,10 @@ if ($UserPath -notmatch [regex]::Escape($Scripts)) {
 
 # ---- Agent config wiring (0.2.17: plug-and-play) ----
 #
-# Windows never wired the four agent configs at install time, so direct
+# Windows never wired the five agent configs at install time, so direct
 # agent launches hit stale/absent configs (hermes "model '<name>' not
 # found"). Toki Recur never downloads models — the user installs their
-# own. This block only re-syncs opencode/openclaw/hermes/codex configs
+# own. This block only re-syncs opencode/mimo/openclaw/hermes/codex configs
 # (--sync-only writes configs without booting a model) when a model is
 # already registered.
 

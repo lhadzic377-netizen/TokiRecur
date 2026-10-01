@@ -24,3 +24,8 @@ toki.env
 .DS_Store
 .idea/
 .vscode/
+
+# makepad_toki is a separate Rust project that lives inside the repo while it
+# is in progress. It is not part of tokirecur, and its target/ is 1.9GB of
+# build output. Untracked until it gets its own repository.
+makepad_toki/

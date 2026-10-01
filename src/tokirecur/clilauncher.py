@@ -6,8 +6,9 @@ menu instead. It keeps the Textual launcher's capabilities: pick an
 app, switch the active model, and see live stack + GPU status.
 Linux and macOS keep the Textual launcher unchanged.
 
-The app catalog mirrors ``tui.launcher.LAUNCH_APPS`` (kept as plain
-data here so this module needs no Textual import).
+The app catalog comes from ``launch_catalog`` and is kept as plain
+ data here so this module needs no Textual import.
+
 """
 
 from __future__ import annotations
@@ -17,12 +18,27 @@ import shutil
 import subprocess
 import webbrowser
 
-AGENTS: tuple[tuple[str, str, str], ...] = (
-    ("opencode", "Launch OpenCode", "Anomaly's open-source coding agent"),
-    ("hermes", "Launch Hermes Agent", "self-improving AI agent"),
-    ("openclaw", "Launch OpenClaw", "personal AI with 100+ skills"),
-    ("codex", "Launch Codex", "OpenAI CLI coding agent (Responses API)"),
+from .launch_catalog import LAUNCH_APPS, get_launch_app, unavailable_reason
+
+_AGENT_APPS = tuple(
+    app for app in LAUNCH_APPS if app.interface == "chat" and app.client != "toki"
 )
+AGENTS: tuple[tuple[str, str, str], ...] = tuple(
+    (app.client, app.title, app.description) for app in _AGENT_APPS
+)
+
+
+def _availability_reason(launch) -> str | None:
+    reason = unavailable_reason(launch)
+    command = launch.command or launch.client
+    if reason == f"{command} not installed" and _find_binary(command) is not None:
+        return None
+    return reason
+
+
+def _agent_available(app: str) -> bool:
+    launch = get_launch_app(app)
+    return launch is not None and _availability_reason(launch) is None
 
 WEB_URLS: tuple[str, ...] = (
     "http://127.0.0.1:7777",   # toki web UI
@@ -170,7 +186,8 @@ def run_cli_launcher() -> int:
     from . import diagnose
     from .clichat import run_cli_chat
 
-    agents_available = {app: _find_binary(app) for app, _, _ in AGENTS}
+    agents_available = {app: _agent_available(app) for app, _, _ in AGENTS}
+
     while True:
         print("toki launcher")
         print(_header())
@@ -199,7 +216,7 @@ def run_cli_launcher() -> int:
             continue
         if pick == "2":
             switch_model()
-            agents_available = {app: _find_binary(app) for app, _, _ in AGENTS}
+            agents_available = {app: _agent_available(app) for app, _, _ in AGENTS}
             continue
         if pick == str(len(AGENTS) + 3):
             _open_web_dashboards()
@@ -256,6 +273,7 @@ def _open_web_dashboards() -> None:
                     subprocess.Popen(
                         [binary] + argv[1:],
                         stdin=subprocess.DEVNULL,
+                        env=plan.get("env"),
                         creationflags=_NEW_CONSOLE,
                     )
                 except OSError as e:
@@ -334,30 +352,28 @@ def _find_binary(app: str) -> str | None:
 
 
 def _launch_agent(app: str) -> None:
-    """Launch an agent using the same plan as the Textual launcher.
-
-    Routes through ``selector.launch_cmd`` so the CLI launcher and the
-    Textual launcher can never drift. openclaw's TUI mode needs the
-    gateway running; when it isn't, fall back to the local TUI the
-    same way the Textual launcher does.
-    """
+    launch = get_launch_app(app)
+    if launch is None:
+        print(f"unknown launcher: {app}")
+        return
+    reason = _availability_reason(launch)
+    if reason is not None:
+        print(f"cannot launch {app}: {reason}")
+        return
     ctl = _ctl()
-    spec = _active_spec()
-    if spec is None:
-        print("no active model — pick one with 2) Switch model first.")
-        return
-    # 0.2.17: every agent launch is a repair point. If the active
-    # model's stack is down, bring it up (which also rewrites the four
-    # agent configs) so agents never talk to a dead endpoint or a
-    # stale one from an older toki.
-    try:
-        if not ctl.daemon_reachable(spec):
-            print(f"starting '{spec.name}' stack...")
-            ctl.use_model(spec.name)
-            spec = ctl.get_model(spec.name)
-    except Exception as e:
-        print(f"failed to start '{spec.name}' stack: {e}")
-        return
+    spec = _active_spec() if launch.model_binding else None
+    if launch.model_binding:
+        if spec is None:
+            print("no active model — pick one with 2) Switch model first.")
+            return
+        try:
+            if not ctl.daemon_reachable(spec):
+                print(f"starting '{spec.name}' stack...")
+                ctl.use_model(spec.name)
+                spec = ctl.get_model(spec.name)
+        except Exception as e:
+            print(f"failed to start '{spec.name}' stack: {e}")
+            return
     try:
         from .selector import launch_cmd
         plan = launch_cmd("chat", app, spec)
@@ -368,28 +384,26 @@ def _launch_agent(app: str) -> None:
     if not argv:
         print(f"no launch plan for {app}.")
         return
-    # openclaw TUI needs the gateway; fall back to local chat when it's down.
     if app == "openclaw" and argv[:2] == ["openclaw", "tui"]:
         from .selector import _gateway_up
         if not _gateway_up():
             print("OpenClaw gateway is not running; falling back to local TUI.")
             argv = ["openclaw", "chat"]
-    binary = _find_binary(app)
+    binary = _find_binary(launch.command or app)
     if not binary:
-        print(f"not found in PATH: {app} — install it, or pick another entry.")
+        print(f"not found in PATH: {launch.command or app} — install it, or pick another entry.")
         return
     args = argv[1:]
     if os.name == "nt":
         try:
             if binary.lower().endswith((".cmd", ".bat")):
-                # .cmd/.bat wrappers (npm, pipx shims) need cmd.exe;
-                # CreateProcess cannot run them directly.
                 argv = ["cmd.exe", "/c", binary] + args
             else:
                 argv = [binary] + args
             proc = subprocess.Popen(
                 argv,
                 stdin=subprocess.DEVNULL,
+                env=plan.get("env"),
                 creationflags=_NEW_CONSOLE,
             )
             print(f"launching {app} in a new console (pid {proc.pid}).")
@@ -402,6 +416,7 @@ def _launch_agent(app: str) -> None:
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            env=plan.get("env"),
             start_new_session=True,
         )
         print(f"launching {app} in the background (pid {proc.pid}).")

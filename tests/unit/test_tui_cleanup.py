@@ -102,6 +102,42 @@ def test_restore_now_safe_when_fileno_unavailable(monkeypatch):
     assert "\x1b[?1049l" in out
 
 
+def test_stdout_fileno_falls_back_for_textual_sentinel(monkeypatch):
+    from tokirecur.tui import _cleanup
+
+    class TextualStdout(io.StringIO):
+        def fileno(self):
+            return -1
+
+    class OriginalStdout(io.StringIO):
+        def fileno(self):
+            return 17
+
+    monkeypatch.setattr(sys, "stdout", TextualStdout())
+    monkeypatch.setattr(sys, "__stdout__", OriginalStdout())
+    assert _cleanup._stdout_fileno() == 17
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX termios behavior")
+def test_restore_now_ignores_negative_descriptor(monkeypatch):
+    import termios
+
+    from tokirecur.tui import _cleanup
+
+    monkeypatch.setattr(_cleanup, "_original_termios", ["snapshot"])
+    monkeypatch.setattr(_cleanup, "_stdout_fileno", lambda: -1)
+    monkeypatch.setattr(
+        termios,
+        "tcsetattr",
+        lambda *args: (_ for _ in ()).throw(AssertionError("tcsetattr called")),
+    )
+    captured = io.StringIO()
+    monkeypatch.setattr(sys, "stdout", captured)
+
+    _cleanup.restore_now()
+    assert "\x1b[?1049l" in captured.getvalue()
+
+
 def test_signal_handlers_skip_when_already_installed(monkeypatch):
     """Don't clobber SIG_IGN — pytest, IDE debuggers, and parent
     shells sometimes set it on SIGHUP and we'd be a bad citizen to

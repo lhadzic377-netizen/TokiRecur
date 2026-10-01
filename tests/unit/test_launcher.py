@@ -1,10 +1,12 @@
 """Tests for the Ollama-style Textual launcher and its UI design tokens."""
 
 import asyncio
+import sys
 
 import pytest
 
 from tokirecur import ctl
+from tokirecur.tui import launcher as launcher_mod
 from tokirecur.tui.launcher import LAUNCH_APPS, LauncherApp
 
 
@@ -22,12 +24,17 @@ def isolated_registry(tmp_path, monkeypatch):
     monkeypatch.setattr(ctl, "ACTIVE_MARKER", marker)
     monkeypatch.setenv("TOKI_MODEL_REGISTRY", str(reg))
     monkeypatch.setenv("TOKI_ACTIVE_MODEL", str(marker))
+    monkeypatch.setenv("MIMOCODE_CONFIG", str(tmp_path / "mimocode.json"))
     return reg
 
 
 def test_apps_bind_to_pinned_model():
     keys = [a.key for a in LAUNCH_APPS]
-    assert keys == ["toki", "opencode", "hermes", "openclaw", "codex", "web"]
+    assert keys == [
+        "toki", "ornithcode", "opencode", "hermes", "openclaw", "codex", "mimo",
+        "qwen", "droid", "cline", "dsh", "grok", "kilo", "pi",
+        "copilot", "claude", "kimi", "omp", "web",
+    ]
 
 
 def test_launcher_warns_when_restart_pending_marker_present(tmp_path, monkeypatch):
@@ -52,7 +59,11 @@ def test_launcher_warns_when_restart_pending_marker_present(tmp_path, monkeypatc
     # The marker is cleared on mount; subsequent launches won't nag.
     assert asyncio.run(run_app()) is False
     keys = [a.key for a in LAUNCH_APPS]
-    assert keys == ["toki", "opencode", "hermes", "openclaw", "codex", "web"]
+    assert keys == [
+        "toki", "ornithcode", "opencode", "hermes", "openclaw", "codex", "mimo",
+        "qwen", "droid", "cline", "dsh", "grok", "kilo", "pi",
+        "copilot", "claude", "kimi", "omp", "web",
+    ]
     assert all(a.interface in ("chat", "tui", "web") for a in LAUNCH_APPS)
 
 
@@ -61,7 +72,7 @@ def test_enter_launches_pinned_model():
 
     def on_launch(interface, client, model):
         calls.append((interface, client, model))
-        return 0
+        return {"interface": interface, "client": client, "model": model}
 
     async def run_app():
         app = LauncherApp(on_launch=on_launch)
@@ -75,6 +86,39 @@ def test_enter_launches_pinned_model():
 
     asyncio.run(run_app())
     assert calls
+
+
+def test_run_executes_request_after_textual_app_returns(monkeypatch):
+    events = []
+    request = {
+        "interface": "tui",
+        "client": "kimi",
+        "model": "ornith",
+        "argv": ["kimi"],
+        "detach": False,
+        "url": None,
+        "env": {},
+    }
+
+    class FakeApp:
+        def __init__(self, on_launch):
+            self.on_launch = on_launch
+
+        def run(self):
+            events.append("app-returned")
+            return request
+
+    class TTY:
+        def isatty(self):
+            return True
+
+    monkeypatch.setattr(launcher_mod, "LauncherApp", FakeApp)
+    monkeypatch.setattr(launcher_mod._tui_cleanup, "install", lambda: None)
+    monkeypatch.setattr(launcher_mod, "_execute_launch", lambda value: events.append(value) or 7)
+    monkeypatch.setattr(sys, "stdout", TTY())
+
+    assert launcher_mod.run() == 7
+    assert events == ["app-returned", request]
 
 
 def test_launcher_opens_empty_registry():
@@ -116,6 +160,7 @@ def test_renders_big_yellow_wordmark():
     # App titles must still appear below the wordmark.
     assert "Chat" in rendered
     assert "Launch OpenCode" in rendered
+    assert "Launch MiMo Code" in rendered
     # No solid-block approximation.
     assert "█████" not in rendered
 
@@ -349,7 +394,7 @@ def test_status_line_shows_pinned_model():
 
     rendered = asyncio.run(run_app())
     assert "no model pinned" not in rendered
-    assert "1-5 jump" in rendered
+    assert "1-9 jump" in rendered
 
 
 def test_footer_shows_key_hints():
