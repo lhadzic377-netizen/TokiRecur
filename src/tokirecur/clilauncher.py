@@ -125,7 +125,15 @@ def _status_row(spec) -> str:
     llama = "up" if st["llama"]["reachable"] else "down"
     daemon = "up" if st["daemon"]["reachable"] else "down"
     gpu = _gpu_label(spec, st["llama"]["reachable"])
-    return f"llama={llama} daemon={daemon} gpu={gpu}"
+    row = f"llama={llama} daemon={daemon} gpu={gpu}"
+    # A vision model without its projector answers images as though it saw
+    # nothing, so the row says which it is rather than leaving it a surprise.
+    mmproj = getattr(spec, "mmproj", "") or ""
+    if mmproj and not os.path.exists(mmproj):
+        row += " [no projector]"
+    elif mmproj:
+        row += " [vision]"
+    return row
 
 
 def switch_model() -> None:

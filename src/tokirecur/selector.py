@@ -43,7 +43,6 @@ from .ctl import (
     write_omp_config,
     write_openclaw_config,
     write_opencode_config,
-    write_ornithcode_config,
     write_pi_config,
     write_qwen_config,
 )
@@ -130,7 +129,6 @@ _CLIENT_CONFIG_WRITERS = {
     "qwen": write_qwen_config,
     "droid": write_droid_config,
     "cline": write_cline_config,
-    "ornithcode": write_ornithcode_config,
     "dsh": write_dsh_config,
     "grok": write_grok_config,
     "kilo": write_kilo_config,
@@ -173,7 +171,7 @@ def _bound_env(spec: Any, client: str) -> dict[str, str]:
     endpoint = _bound_endpoint(spec, client)
     new_clients = {
         "qwen", "droid", "cline", "dsh", "grok", "kilo", "pi",
-        "copilot", "kimi", "omp", "ornithcode",
+        "copilot", "kimi", "omp",
     }
     if client == "codex" or client in new_clients:
         token = _auth_token() or auth_token()
@@ -182,7 +180,6 @@ def _bound_env(spec: Any, client: str) -> dict[str, str]:
         token = env.get("TOKI_AUTH_TOKEN", "")
     if client in {
         "qwen", "cline", "droid", "dsh", "grok", "kilo", "pi", "kimi", "omp",
-        "ornithcode",
     }:
         env["OPENAI_API_KEY"] = token
         env["OPENAI_BASE_URL"] = endpoint
@@ -212,7 +209,7 @@ def launch_cmd(interface: str, client: str, spec: Any | None) -> dict:
     if launch is not None and launch.interface == "chat" and not launch.model_binding:
         return {
             "argv": [launch.command or launch.client, *launch.args],
-            "detach": False,
+            "detach": launch.detach,
             "url": None,
             "env": dict(os.environ),
         }
@@ -260,8 +257,6 @@ def launch_cmd(interface: str, client: str, spec: Any | None) -> dict:
         if client == "toki":
             argv = ["toki", "tui", "--raw-url", llama_url, "--daemon-url", daemon_url]
             return {"argv": argv, "detach": False, "url": None, "env": env}
-        if client == "ornithcode":
-            return {"argv": ["ornithcode"], "detach": False, "url": None, "env": env}
         if client == "opencode":
             return {"argv": ["opencode", "-m", model_ref], "detach": False,
                     "url": None, "env": env}
@@ -387,9 +382,19 @@ def menu_lines(specs: list) -> list[tuple[str, str]]:
         daemon = "up" if st["daemon"]["reachable"] else "down"
         mark = "*" if spec.name == active else " "
         ctx = st["llama"].get("slot_ctx") or spec.ctx_size
+        # Vision models are not interchangeable with text ones: without their
+        # projector they answer every image as though it were blank.
+        mmproj = getattr(spec, "mmproj", "") or ""
+        if mmproj and not Path(mmproj).exists():
+            badge = "[no projector]"
+        elif mmproj:
+            badge = "[vision]"
+        else:
+            badge = ""
         rows.append((spec.name,
                      f"{mark} {spec.label}  llama={llama} daemon={daemon} "
-                     f"ctx={ctx}  :{spec.llama_port}/:{spec.daemon_port}"))
+                     f"ctx={ctx}  :{spec.llama_port}/:{spec.daemon_port}"
+                     + (f"  {badge}" if badge else "")))
     return rows
 
 

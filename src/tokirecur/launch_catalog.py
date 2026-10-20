@@ -17,6 +17,9 @@ class LaunchApp:
     model_binding: bool = True
     command: str = ""
     args: tuple[str, ...] = ()
+    # A model-bound client runs in the foreground so the terminal stays on
+    # it; an unbound full application (the desktop app) asks to be detached.
+    detach: bool = False
     required_path: str | None = None
     # "openai" reads the bound daemon from the environment; "anthropic" is
     # Claude Code, which has its own settings file. Account-provider clients
@@ -29,12 +32,14 @@ LAUNCH_APPS: tuple[LaunchApp, ...] = (
         "toki", "Chat", "Chat with models in the Toki TUI", "chat", "toki", command="toki"
     ),
     LaunchApp(
-        "ornithcode",
-        "Launch OrnithCode",
-        "Ornith-native terminal coding agent with Flock",
+        "tokirecur",
+        "Launch TokiRecur",
+        "The TokiRecur desktop app: chat, agents, voice and video, all local",
         "chat",
-        "ornithcode",
-        command="ornithcode",
+        "tokirecur",
+        model_binding=False,
+        command="tokirecur",
+        detach=True,
     ),
     LaunchApp(
         "opencode",

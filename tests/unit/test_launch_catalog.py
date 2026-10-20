@@ -39,7 +39,7 @@ def _spec():
 
 def test_catalog_contains_all_requested_clients():
     assert [app.key for app in LAUNCH_APPS] == [
-        "toki", "ornithcode", "opencode", "hermes", "openclaw", "codex", "mimo",
+        "toki", "tokirecur", "opencode", "hermes", "openclaw", "codex", "mimo",
         "qwen", "droid", "cline", "dsh", "grok", "kilo", "pi",
         "copilot", "claude", "kimi", "omp", "web", "dsh-web",
     ]

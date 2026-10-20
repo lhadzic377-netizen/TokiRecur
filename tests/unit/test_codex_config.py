@@ -34,7 +34,6 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("PI_CODING_AGENT_DIR", str(tmp_path / "pi-agent"))
     monkeypatch.setenv("KIMI_CODE_HOME", str(tmp_path / "kimi"))
     monkeypatch.setenv("OMP_CONFIG_DIR", str(tmp_path / "omp-agent"))
-    monkeypatch.setenv("ORNITHCODE_CONFIG", str(tmp_path / "ornithcode" / "config.json"))
     return tmp_path
 
 

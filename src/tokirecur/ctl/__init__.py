@@ -310,6 +310,18 @@ class ModelSpec:
     boot: bool = False
     binary: str = "llama-server"
     extra_args: list[str] = field(default_factory=list)
+    # Path to a multimodal projector (mmproj) GGUF for vision models. Held as
+    # its own field rather than an `--mmproj <path>` entry in `extra_args`
+    # because each extra_arg is passed to llama-server as a single argv token:
+    # a space-joined "--mmproj /path/to.gguf" dies at startup with
+    # `invalid argument: --mmproj /path/to.gguf`.
+    mmproj: str = ""
+    # Image-generation stacks (binary "sd-server"): the diffusion GGUF
+    # rides in `gguf` like any model, but the pipeline needs two more
+    # weights beside it. Held as their own fields for the same reason as
+    # mmproj — paths, not argv flags.
+    vae: str = ""
+    llm: str = ""
     env: dict[str, str] = field(default_factory=dict)
     raw: dict[str, Any] = field(default_factory=dict)
     # "auto" (default): the daemon streams reasoning and reserves token
@@ -393,12 +405,25 @@ def _ensure_registry() -> Path:
 
 
 def _estimate_need(spec: ModelSpec) -> float:
-    """Rough resident footprint (GB): weights + KV + workspace headroom."""
+    """Rough resident footprint (GB): weights + KV + workspace headroom.
+
+    Image stacks count every weight they load — the denoiser plus its VAE
+    and text encoder — because the launch gate (_check_ram) must refuse
+    honestly when the full pipeline will not fit, not just the GGUF.
+    """
     try:
         weight_gb = resolve_gguf_path(spec).stat().st_size / 1e9
     except FileNotFoundError:
         weight_gb = 0.0
-    return weight_gb * 1.2 + 4.0
+    extra = 0.0
+    if _spec_is_image(spec):
+        for companion in (spec.vae, spec.llm):
+            try:
+                if companion and Path(companion).is_file():
+                    extra += Path(companion).stat().st_size / 1e9
+            except OSError:
+                pass
+    return (weight_gb + extra) * 1.2 + 4.0
 
 
 def _available_gb() -> float:
@@ -1253,7 +1278,48 @@ def _gguf_split_siblings(filename: str) -> list[str] | None:
     ]
 
 
-def _expand_gguf_patterns(filename: str) -> list[str]:
+# Preferred multimodal projector types, best first. F16 is what llama.cpp's
+# own conversion emits and it is what the vision model was trained against;
+# Q8_0 halves the projector for anyone who cares more about RAM than exactness.
+_MMPROJ_PREFERENCE = ("f16", "bf16", "f32", "q8_0")
+
+
+def _is_mmproj(filename: str) -> bool:
+    """True for a multimodal projector file, by llama.cpp's naming convention.
+
+    Repos spell it ``mmproj-F16.gguf``, ``mmproj-Qwen3VL-4B-Instruct-F16.gguf``
+    or ``mmproj-model-f16.gguf``; every variant has ``mmproj`` at the start of
+    the stem.
+    """
+    stem = Path(filename).name.lower()
+    return stem.endswith(".gguf") and stem.startswith("mmproj")
+
+
+def _pick_mmproj(files: list[str]) -> str | None:
+    """Choose which projector to fetch alongside a model GGUF.
+
+    A vision model without its projector does not fail loudly: llama-server
+    starts, accepts a chat request, and answers as if it had seen no image at
+    all. That silent blindness is why ``pull_model`` downloads the projector
+    instead of leaving it to the person who ran the command.
+    """
+    candidates = [f for f in files if _is_mmproj(f)]
+
+    def rank(name: str) -> tuple[int, str]:
+        stem = Path(name).name.lower()
+        # Compare the quant token exactly, not as a substring: "bf16" contains
+        # "f16", so a substring test hands every BF16 projector first place and
+        # the F16 file never gets picked.
+        token = stem.rsplit("-", 1)[-1].removesuffix(".gguf")
+        for i, want in enumerate(_MMPROJ_PREFERENCE):
+            if token == want:
+                return (i, name.lower())
+        return (len(_MMPROJ_PREFERENCE), name.lower())
+
+    return sorted(candidates, key=rank)[0] if candidates else None
+
+
+def _expand_gguf_patterns(filename: str, mmproj: str | None = None) -> list[str]:
     """``allow_patterns`` for huggingface_hub covering ``filename`` and, if
     it is part of a multi-file GGUF split, every sibling part as well.
 
@@ -1263,11 +1329,19 @@ def _expand_gguf_patterns(filename: str) -> list[str]:
     ``failed to open GGUF file ... (No such file or directory)`` if any
     is missing. We therefore download all siblings, not just the one the
     user picked.
+
+    ``mmproj`` is the multimodal projector for a vision model and is fetched
+    in the same pass for the reason in :func:`_pick_mmproj`.
     """
+    patterns: list[str] = []
     siblings = _gguf_split_siblings(filename)
     if siblings is None:
-        return [f"*{filename}"]
-    return [f"*{p}" for p in siblings]
+        patterns.append(f"*{filename}")
+    else:
+        patterns.extend(f"*{p}" for p in siblings)
+    if mmproj:
+        patterns.append(f"*{mmproj}")
+    return patterns
 
 
 def _auto_ctx_size(gguf: Path, *, parallel: int, kv: str) -> int:
@@ -1333,6 +1407,14 @@ def pull_model(
     if any(s.name == name for s in specs):
         raise ValueError(f"model '{name}' already exists in the registry")
 
+    # A projector is not a model. Caught before the hub round-trip so the
+    # error is the same offline as online.
+    if file is not None and _is_mmproj(file):
+        raise RuntimeError(
+            f"'{file}' is a multimodal projector, not a model — pull the "
+            "model's own GGUF and the projector comes with it automatically."
+        )
+
     try:
         from huggingface_hub import HfApi, snapshot_download
     except ImportError:
@@ -1347,6 +1429,7 @@ def pull_model(
     except Exception as e:
         raise RuntimeError(f"cannot reach '{repo_id}' on Hugging Face: {e}") from e
     ggufs = [f for f in files if f.endswith(".gguf")]
+    mmproj_file = _pick_mmproj(files)
     if file is not None:
         if file not in ggufs:
             raise RuntimeError(
@@ -1363,7 +1446,7 @@ def pull_model(
             "same model) and pull that instead."
         )
     else:
-        candidates = sorted(ggufs)
+        candidates = sorted(f for f in ggufs if not _is_mmproj(f))
         if choose_file is not None:
             sizes = _gguf_sizes(api, repo_id, candidates)
             filename = choose_file([(f, sizes.get(f)) for f in candidates])
@@ -1385,7 +1468,7 @@ def pull_model(
             os.environ["HF_ENDPOINT"] = endpoint
         snapshot_download(
             repo_id,
-            allow_patterns=_expand_gguf_patterns(filename),
+            allow_patterns=_expand_gguf_patterns(filename, mmproj_file),
             local_dir=str(local_dir),
             resume_download=True,
         )
@@ -1399,8 +1482,18 @@ def pull_model(
 
     llama_port, daemon_port = next_free_ports(specs)
     binary, env = pull_defaults(specs)
+    is_image = any(k in f"{name} {filename}".lower() for k in IMAGE_KEYS)
+    if is_image:
+        # A diffusion denoiser: no llama defaults, no ctx, no env pins.
+        binary, env = "sd-server", {}
     if ctx_size is None:
-        ctx_size = _auto_ctx_size(local_dir / filename, parallel=2, kv=kv)
+        try:
+            ctx_size = 0 if is_image else _auto_ctx_size(local_dir / filename, parallel=2, kv=kv)
+        except Exception:
+            if is_image:
+                ctx_size = 0
+            else:
+                raise
     raw = {
         "name": name,
         "label": Path(filename).stem,
@@ -1410,7 +1503,7 @@ def pull_model(
         "ctx_size": ctx_size,
         "parallel": 2,
         "kv": kv,
-        "max_tokens": ctx_size // 2,
+        "max_tokens": max(1, ctx_size // 2),
         # Use a short, stable identifier derived from the GGUF filename
         # stem (e.g. "Qwen3.5-0.8B-Q4_K_M.gguf" -> "qwen3.5-0.8b-q4_k_m").
         # The full repo id (e.g. "unsloth/Qwen3.5-0.8B-GGUF") is too long
@@ -1422,6 +1515,9 @@ def pull_model(
         "env": env,
         "reasoning": reasoning,
         "source": "pulled",
+        # Vision models only accept images when llama-server is given the
+        # projector; without this field the stack starts and answers blind.
+        "mmproj": str(local_dir / mmproj_file) if mmproj_file else "",
     }
     spec = ModelSpec(raw=raw, **raw)
     save_registry([*specs, spec], registry)
@@ -1536,7 +1632,155 @@ def _wait_for(url: str, timeout: float = 240.0) -> bool:
     return False
 
 
+#: Repo/file name fragments that mark a diffusion-model GGUF. These are
+#: denoisers (text-to-image), not captioners: a "qwen-image" GGUF cannot
+#: load in llama-server any more than a chat GGUF can paint.
+IMAGE_KEYS = ("qwen-image", "qwen_image", "flux", "sdxl", "stable-diffusion",
+              "sd-turbo", "sd3", "hidream", "wan2")
+
+
+def _spec_is_image(spec: ModelSpec) -> bool:
+    if (spec.binary or "").endswith("sd-server"):
+        return True
+    hay = f"{spec.name} {spec.model_id} {Path(spec.gguf).name.lower()}".lower()
+    return any(k in hay for k in IMAGE_KEYS)
+
+
+def _sd_binary() -> str:
+    """The sd-server this install built, mirroring llama-server's
+    state-bin convention; PATH only as a fallback."""
+    state_bin = Path.home() / ".local/state/tokirecur/bin/sd-server"
+    if state_bin.is_file():
+        return str(state_bin)
+    return "sd-server"
+
+
+def _sd_args(spec: ModelSpec) -> list[str]:
+    """sd-server invocation for an image spec.
+
+    Turbo distilled checkpoints (qwen-image-*-turbo) run 8 steps at CFG 1
+    with euler — their shipped schedule. Non-turbo image families default
+    to sd.cpp's own resolution-dependent flow (CFG 6), and any of it can
+    be overridden per request through the API.
+    """
+    args = [
+        _sd_binary(),
+        "--diffusion-model", str(resolve_gguf_path(spec)),
+        "--vae", str(_companion_path(spec, "vae")),
+        "--llm", str(_companion_path(spec, "llm")),
+        "--listen-ip", "127.0.0.1",
+        "--listen-port", str(spec.llama_port),
+        "--sampling-method", "euler",
+    ]
+    if "turbo" in spec.name.lower():
+        args += ["--cfg-scale", "1.0", "--steps", "8"]
+    else:
+        args += ["--cfg-scale", "6.0"]
+    args += spec.extra_args
+    return args
+
+
+def _companion_path(spec: ModelSpec, which: str) -> Path:
+    """On-disk location of the VAE / text encoder for this image stack."""
+    return Path(spec.gguf).parent / "companions" / (
+        "vae.safetensors" if which == "vae" else "text-encoder.gguf"
+    )
+
+
+def _ensure_image_companions(spec: ModelSpec, registry: Path | None = None) -> None:
+    """Heal an image stack's VAE + text encoder, once, like backfill_mmproj.
+
+    The denoiser GGUF alone cannot generate: sd.cpp needs the family VAE
+    and the LLM text encoder beside it. Known recipes only — an unknown
+    image family fails loudly with the two Hugging Face ids it needs,
+    rather than downloading something plausible and wrong.
+    """
+    if not _spec_is_image(spec) or (spec.vae and spec.llm):
+        return
+    if "qwen-image-2.1" in spec.name.lower() or "qwen_image_2.1" in spec.name.lower():
+        vae_file = "vae/qwen_image_2.1_vae_bf16.safetensors"
+        vae_repo = "unsloth/Qwen-Image-2.1-FP8"
+        llm_repo, llm_file = (
+            "unsloth/Qwen3-VL-8B-Instruct-GGUF",
+            "Qwen3-VL-8B-Instruct-UD-Q4_K_XL.gguf",
+        )
+    else:
+        raise RuntimeError(
+            f"unknown image model family '{spec.name}' — pull the VAE and "
+            "text-encoder companions, then set `vae:` and `llm:` in "
+            "~/.config/tokirecur/models.yaml"
+        )
+    dest = _companion_path(spec, "vae").parent
+    dest.mkdir(parents=True, exist_ok=True)
+    from huggingface_hub import hf_hub_download
+
+    vae_path = dest / "vae.safetensors"
+    llm_path = dest / "text-encoder.gguf"
+    if not vae_path.is_file():
+        got = hf_hub_download(vae_repo, vae_file, local_dir=dest)
+        if Path(got).resolve() != vae_path.resolve():
+            vae_path.write_bytes(Path(got).read_bytes())
+    if not llm_path.is_file():
+        got = hf_hub_download(llm_repo, llm_file, local_dir=dest)
+        if Path(got).resolve() != llm_path.resolve():
+            llm_path.write_bytes(Path(got).read_bytes())
+    reg = registry or DEFAULT_REGISTRY
+    with _flock(reg):
+        specs = load_registry(reg)
+        for row in specs:
+            if row.name == spec.name:
+                row.raw["binary"] = "sd-server"
+                row.raw["vae"] = str(vae_path)
+                row.raw["llm"] = str(llm_path)
+                row.vae, row.llm = str(vae_path), str(llm_path)
+        _atomic_write_text(
+            reg, yaml.safe_dump({"models": [s.raw for s in specs]}, sort_keys=False)
+        )
+        invalidate_registry_cache(reg)
+    spec.vae, spec.llm = str(vae_path), str(llm_path)
+    logger.info("attached image companions for '%s'", spec.name)
+
+
+def backfill_image_stacks(all_models, registry: Path | None = None) -> list[str]:
+    """Registry self-heal for image rows, run at every sync point.
+
+    Fixes rows registered before image support (binary still
+    llama-server, a nonsense ctx from the denoiser's metadata) and marks
+    them as sd-server stacks so `use` starts the right thing.
+    """
+    fixed: list[str] = []
+    changed = False
+    for spec in all_models:
+        if not _spec_is_image(spec) or (spec.binary or "").endswith("sd-server"):
+            if _spec_is_image(spec) and spec.ctx_size:
+                # already an image row; nothing to heal
+                pass
+            continue
+        if _spec_is_image(spec):
+            spec.binary = "sd-server"
+            spec.raw["binary"] = "sd-server"
+            if spec.ctx_size:
+                spec.ctx_size = 0
+                spec.raw["ctx_size"] = 0
+            fixed.append(spec.name)
+            changed = True
+    if changed:
+        reg = registry or DEFAULT_REGISTRY
+        _atomic_write_text(
+            reg, yaml.safe_dump({"models": [s.raw for s in all_models]}, sort_keys=False)
+        )
+        invalidate_registry_cache(reg)
+    return fixed
+
+
 def llama_reachable(spec: ModelSpec) -> bool:
+    if _spec_is_image(spec):
+        # sd-server has no /health; its OpenAI model listing is the
+        # liveliness answer.
+        try:
+            return httpx.get(f"{spec.llama_url}/v1/models", timeout=2.0).status_code == 200
+        except Exception:
+            return False
     try:
         return httpx.get(f"{spec.llama_url}/health", timeout=2.0).status_code == 200
     except Exception:
@@ -2026,6 +2270,35 @@ def _intel_igpu_only_linux() -> bool:
     return not discrete
 
 
+_BINARY_FLAGS: dict[str, set[str]] = {}
+
+def _binary_supports(binary: str, flag: str) -> bool:
+    """True if the llama-server binary knows a CLI flag. Asks the binary
+    itself (`--help`, cached per path) — scanning embedded strings fails on
+    thin wrapper binaries whose logic lives in sidecar .so files. Fails
+    closed: an unanswerable binary gets old behavior, never a fatal flag."""
+    if binary in _BINARY_FLAGS:
+        return flag in _BINARY_FLAGS[binary]
+    found: set[str] = set()
+    try:
+        import subprocess
+
+        out = subprocess.run(
+            [binary, "--help"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        text = (out.stdout or "") + (out.stderr or "")
+        for probe in ("--slot-save-path", "--alias", "--reasoning"):
+            if probe in text:
+                found.add(probe)
+    except Exception:
+        pass
+    _BINARY_FLAGS[binary] = found
+    return flag in found
+
+
 def _model_aliases(spec: ModelSpec) -> list[str]:
     """Every model name the stack can hand to a client or receive back.
 
@@ -2159,12 +2432,35 @@ def _llama_args(spec: ModelSpec, ctx_override: int | None = None,
         args += ["--reasoning", "off"]
     elif spec.reasoning == "on":
         args += ["--reasoning", "on"]
+    # A vision model needs its projector or it answers blind. Emitted as two
+    # separate argv tokens, and skipped when the registry already pins
+    # --mmproj in extra_args so the pin still wins.
+    mmproj = getattr(spec, "mmproj", "") or ""
+    if mmproj and not any(a in ("-mm", "--mmproj") for a in spec.extra_args):
+        if not Path(mmproj).exists():
+            raise FileNotFoundError(
+                f"model '{spec.name}' is a vision model but its projector is "
+                f"missing: {mmproj} — re-pull it, or drop the mmproj "
+                f"field to run it text-only"
+            )
+        args += ["--mmproj", mmproj]
     # Register every model name the stack can emit as an alias so a
     # validating (router-mode) llama-server can never 404 a client that
-    # talks to it directly with a stale/legacy name. llama.cpp
-    # accumulates repeated --alias flags (common.h: std::set).
-    for alias in _model_aliases(spec):
-        args += ["--alias", alias]
+    # talks to it directly with a stale/legacy name. One comma-separated
+    # flag: repeated --alias is deprecated upstream and warns on every boot.
+    aliases = [a for a in _model_aliases(spec) if a and "," not in a]
+    if aliases:
+        args += ["--alias", ",".join(aliases)]
+    # KV persistence needs a server-side directory (--slot-save-path),
+    # which only exists in recent llama.cpp. Gated on the binary so stacks
+    # keep booting on the old build until the new one lands.
+    if _binary_supports(binary, "--slot-save-path"):
+        slot_dir = Path.home() / ".local" / "state" / "tokirecur" / "slot-save"
+        try:
+            slot_dir.mkdir(parents=True, exist_ok=True)
+            args += ["--slot-save-path", str(slot_dir)]
+        except OSError:
+            pass
     args += spec.extra_args
     # Hard user overrides, appended LAST so llama.cpp's last-flag-wins
     # parser honours them even over registry extra_args pins.
@@ -2252,7 +2548,8 @@ def _healing_hint_for_log(log_path: Path, service: str) -> str:
 
 
 def _wait_healthy(url: str, proc: subprocess.Popen | None, log_path: Path,
-                  timeout: float, service: str) -> None:
+                  timeout: float, service: str,
+                  accept: "Callable[[httpx.Response], bool] | None" = None) -> None:
     """Wait for a service's health endpoint, failing fast if the child
     process dies instead of spinning until ``timeout``.
 
@@ -2282,6 +2579,11 @@ def _wait_healthy(url: str, proc: subprocess.Popen | None, log_path: Path,
                 # Anything else (HTML, empty, other app's schema) that
                 # persists past 5 s means a foreign service owns the
                 # port — fail fast instead of waiting out `timeout`.
+                if accept is not None and accept(r):
+                    # Caller-defined liveness (sd-server: any 2xx from the
+                    # model listing; a port conflict shows up as the child
+                    # dying on bind, which poll() catches above).
+                    return
                 body = str(getattr(r, "text", "") or "")[:512].lower()
                 looks_ours = (
                     "status" in body or "ok" in body
@@ -2409,6 +2711,33 @@ def start_model(spec: ModelSpec, wait: bool = True) -> None:
     """Bring up the model's llama-server + daemon (idempotent)."""
     state = spec.state_dir()
     state.mkdir(parents=True, exist_ok=True)
+
+    # Image stacks are one sd-server, not llama+daemon: the daemon is the
+    # text path and cannot carry image generation, and llama-server cannot
+    # load a diffusion GGUF at all. The port scheme is reused (`llama_port`
+    # is the image server's port; `daemon_port` stays unused).
+    if _spec_is_image(spec):
+        _ensure_image_companions(spec)
+        if llama_reachable(spec):
+            return
+        args = _sd_args(spec)
+        log = open(state / "llama.log", "ab")
+        proc = subprocess.Popen(
+            args,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            **_detach_kwargs(),
+        )
+        (state / "llama.pid").write_text(str(proc.pid))
+        logger.info("%s: sd-server started (pid=%d)", spec.name, proc.pid)
+        if wait:
+            _wait_healthy(
+                f"{spec.llama_url}/v1/models", proc, state / "llama.log",
+                timeout=600.0, service=f"sd-server ({spec.name})",
+                accept=lambda r: r.status_code == 200,
+            )
+        return
 
     # Keep the user's requested ctx_size in the registry even when
     # it exceeds the GGUF's declared max. The launch still clamps via
@@ -2737,6 +3066,49 @@ def backfill_binary_env(specs: list[ModelSpec] | None = None) -> list[str]:
     return updated
 
 
+def backfill_mmproj(specs: list[ModelSpec] | None = None,
+                    registry: Path | None = None) -> list[str]:
+    """Point entries at a multimodal projector they already have on disk.
+
+    Vision models pulled before ``pull_model`` learned about projectors
+    registered with no ``mmproj`` field, so llama-server started and answered
+    every image request as though it had seen nothing. When the projector is
+    sitting next to the GGUF, adopt it; this needs no network and makes the
+    repair idempotent.
+
+    Only entries that actually have a projector beside them are touched, so
+    text-only models are left exactly as they are.
+    """
+    specs = specs if specs is not None else load_registry(registry)
+    updated: list[str] = []
+    new_specs: list[ModelSpec] = []
+    for s in specs:
+        if s.mmproj and Path(s.mmproj).exists():
+            new_specs.append(s)
+            continue
+        gguf = Path(s.gguf) if s.gguf else None
+        found = ""
+        if gguf is not None and gguf.parent.is_dir():
+            nearby = sorted(
+                p for p in gguf.parent.glob("*.gguf")
+                if _is_mmproj(p.name) and p != gguf
+            )
+            if nearby:
+                # Same preference order as a fresh pull.
+                best = _pick_mmproj([p.name for p in nearby])
+                found = str(gguf.parent / best) if best else ""
+        if not found:
+            new_specs.append(s)
+            continue
+        new_raw = dict(s.raw)
+        new_raw["mmproj"] = found
+        new_specs.append(ModelSpec(raw=new_raw, **new_raw))
+        updated.append(s.name)
+    if updated:
+        save_registry(new_specs, registry)
+    return updated
+
+
 def use_model(
     name: str, *, stop_others: bool = True, registry: Path | None = None,
     sync_only: bool = False, force_restart: bool = False,
@@ -2783,14 +3155,53 @@ def use_model(
         target = get_model(name, registry)
         logger.info("repaired registry entries: %s", ", ".join(healed))
 
+    # Adopt a projector that was downloaded next to the model but never
+    # registered, so a vision model pulled before this fix stops answering
+    # blind the next time it is selected.
+    mended = backfill_mmproj(all_models, registry)
+    if mended:
+        all_models = load_registry(registry)
+        target = get_model(name, registry)
+        logger.info("attached multimodal projectors: %s", ", ".join(mended))
+
+    # Image rows registered before sd-server support (a pull from the old
+    # code path) heal here: llama-server binary and a bogus ctx become an
+    # sd-server stack with no context.
+    healed = backfill_image_stacks(all_models, registry)
+    if healed:
+        all_models = load_registry(registry)
+        target = get_model(name, registry)
+        logger.info("healed image stacks: %s", ", ".join(healed))
+
     if sync_only:
         # Config-only pass: the stack is not touched (installers and
         # daemon startup use this to heal drift without booting models).
+        # Image stacks are NOT chat models: no active marker, no client
+        # config sync — opencode must keep pointing at the chat daemon.
+        if _spec_is_image(target):
+            return target
         set_active(target.name, registry)
         try:
             sync_cli_configs(target)
         except Exception as e:
             logger.warning("could not sync CLI configs: %s", e)
+        return target
+
+    # Image stacks: start (or keep) the sd-server and stop there. No
+    # active marker, no client-config sync, no always-on companion —
+    # those are all chat-model semantics and would point hermes at a
+    # port that cannot answer completions.
+    if _spec_is_image(target):
+        if stop_others:
+            for other in all_models:
+                if other.name != target.name and not other.always_on and not _spec_is_image(other):
+                    try:
+                        if llama_reachable(other) or daemon_reachable(other):
+                            stop_model(other)
+                            logger.info("stopped '%s' (switching to '%s')", other.name, target.name)
+                    except RuntimeError as e:
+                        logger.warning("could not stop '%s': %s", other.name, e)
+        start_model(target)
         return target
 
     # Free RAM FIRST: stop competing big-model stacks before loading the
@@ -3553,60 +3964,6 @@ def write_omp_config(
     return cfg_path
 
 
-def _ornithcode_config_path() -> Path:
-    explicit = os.environ.get("ORNITHCODE_CONFIG")
-    if explicit:
-        return Path(explicit).expanduser()
-    return Path.home() / ".config" / "ornithcode" / "config.json"
-
-
-# The model card's recommended general-task sampling. Kept as a selectable
-# profile next to the stack's own anti-loop defaults, which the daemon
-# applies when a request leaves sampling unset.
-ORNITH_CARD_SAMPLING: dict[str, Any] = {
-    "temperature": 0.6,
-    "top_p": 0.95,
-    "top_k": 20,
-}
-
-
-def write_ornithcode_config(
-    spec: ModelSpec, specs: list[ModelSpec] | None = None,
-    path: Path | None = None, mode: str | None = None,
-) -> Path:
-    """Write OrnithCode's provider config from the live model spec."""
-    del specs
-    cfg_path = path or _ornithcode_config_path()
-    mode = _resolve_mode("ornithcode", mode)
-    token = _configured_auth_token() or auth_token()
-    cfg: dict[str, Any] = {
-        "$schema": "ornithcode/config/1",
-        "model": spec.name,
-        "label": spec.label,
-        "provider": {
-            "name": "tokirecur",
-            "baseUrl": _client_endpoint(spec, mode),
-            "apiKey": token,
-            "modelId": spec.model_id,
-            "contextWindow": _effective_ctx(spec),
-            "maxOutputTokens": _client_output_limit(spec),
-            "reasoning": _client_reasoning(spec),
-        },
-        "raw": {
-            "baseUrl": spec.llama_url,
-            "contextWindow": _effective_ctx(spec),
-        },
-        "sampling": {"profile": "toki"},
-        "samplingProfiles": {
-            "toki": merged_sampling(spec),
-            "ornith-card": dict(ORNITH_CARD_SAMPLING),
-        },
-        "maxSlots": spec.parallel,
-    }
-    _write_private_config(cfg_path, json.dumps(cfg, indent=2) + "\n")
-    return cfg_path
-
-
 def _client_modes_path(root: Path | None = None) -> Path:
     return (root or STATE_ROOT) / "client-modes.json"
 
@@ -3618,7 +3975,8 @@ def read_client_modes(root: Path | None = None) -> dict[str, str]:
     try:
         path = _client_modes_path(root)
         data = json.loads(path.read_text()) if path.exists() else {}
-        return {k: v for k, v in data.items() if v in ("raw", "managed")}
+        modes = {k: v for k, v in data.items() if v in ("raw", "managed")}
+        return modes
     except (OSError, ValueError):
         return {}
 
@@ -4345,7 +4703,6 @@ def sync_cli_configs(spec: ModelSpec, mode: str | None = None) -> dict[str, Path
         ("droid", write_droid_config),
         ("cline", write_cline_config),
         ("claude", write_claude_config),
-        ("ornithcode", write_ornithcode_config),
         ("dsh", write_dsh_config),
         ("grok", write_grok_config),
         ("kilo", write_kilo_config),

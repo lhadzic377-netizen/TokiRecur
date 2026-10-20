@@ -31,7 +31,7 @@ def isolated_registry(tmp_path, monkeypatch):
 def test_apps_bind_to_pinned_model():
     keys = [a.key for a in LAUNCH_APPS]
     assert keys == [
-        "toki", "ornithcode", "opencode", "hermes", "openclaw", "codex", "mimo",
+        "toki", "tokirecur", "opencode", "hermes", "openclaw", "codex", "mimo",
         "qwen", "droid", "cline", "dsh", "grok", "kilo", "pi",
         "copilot", "claude", "kimi", "omp", "web", "dsh-web",
     ]
@@ -60,7 +60,7 @@ def test_launcher_warns_when_restart_pending_marker_present(tmp_path, monkeypatc
     assert asyncio.run(run_app()) is False
     keys = [a.key for a in LAUNCH_APPS]
     assert keys == [
-        "toki", "ornithcode", "opencode", "hermes", "openclaw", "codex", "mimo",
+        "toki", "tokirecur", "opencode", "hermes", "openclaw", "codex", "mimo",
         "qwen", "droid", "cline", "dsh", "grok", "kilo", "pi",
         "copilot", "claude", "kimi", "omp", "web", "dsh-web",
     ]

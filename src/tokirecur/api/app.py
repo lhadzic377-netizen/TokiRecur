@@ -159,6 +159,161 @@ def _default_chat_template_kwargs(reasoning: str) -> dict:
     return {"enable_thinking": reasoning != "off"}
 
 
+def _active_vision_stack() -> dict | None:
+    """A vision-capable stack that can caption images right now.
+
+    The daemon serves one model, and that model is usually text-only — so an
+    image sent through it reaches a llama-server with no projector and dies
+    with ``all input arrays must have the same shape``. Images therefore go
+    through a *vision* stack instead. Returns ``{"llama_port", "model_id",
+    "name"}`` for the first registered stack whose projector file is present
+    and whose llama-server answers, or None when there is none.
+
+    ``TOKI_VISION_MODEL`` pins a registry name; otherwise registry order
+    wins, which is stable.
+    """
+    try:
+        from ..ctl import load_registry
+    except Exception:
+        return None
+    try:
+        specs = load_registry()
+    except Exception:
+        return None
+    pinned = (os.environ.get("TOKI_VISION_MODEL") or "").strip()
+    ordered = sorted(
+        specs,
+        key=lambda s: (0 if getattr(s, "name", "") == pinned else 1),
+    )
+    import httpx
+
+    for spec in ordered:
+        projector = getattr(spec, "mmproj", "") or ""
+        if not projector or not Path(projector).exists():
+            continue
+        port = getattr(spec, "llama_port", 0) or 0
+        if not port:
+            continue
+        try:
+            response = httpx.get(f"http://127.0.0.1:{port}/health", timeout=2.0)
+            if response.status_code != 200:
+                continue
+        except Exception:
+            continue
+        return {
+            "llama_port": port,
+            "model_id": getattr(spec, "model_id", "") or getattr(spec, "name", ""),
+            "name": getattr(spec, "name", ""),
+        }
+    return None
+
+
+def _active_model_sees_images() -> bool:
+    """True when the currently served model has its own projector, in which
+    case images pass through natively and need no captioning."""
+    try:
+        from ..ctl import get_model, read_active
+        name = read_active()
+        if not name:
+            return False
+        spec = get_model(name)
+        projector = getattr(spec, "mmproj", "") or ""
+        return bool(projector and Path(projector).exists())
+    except Exception:
+        return False
+
+
+async def _caption_image(data_url: str, stack: dict) -> str | None:
+    """One image to one or two sentences, via the vision stack's llama-server
+    directly (not the daemon — the daemon is the text path that cannot carry
+    images in the first place)."""
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            response = await client.post(
+                f"http://127.0.0.1:{stack['llama_port']}/v1/chat/completions",
+                json={
+                    "model": stack["model_id"],
+                    "stream": False,
+                    "temperature": 0,
+                    "max_tokens": 150,
+                    "messages": [{
+                        "role": "user",
+                        "content": [
+                            {"type": "text",
+                             "text": "Describe what is visible in one or two sentences. "
+                                     "Do not speculate about anything you cannot see."},
+                            {"type": "image_url", "image_url": {"url": data_url}},
+                        ],
+                    }],
+                },
+            )
+            if response.status_code != 200:
+                return None
+            data = response.json()
+            message = (data.get("choices") or [{}])[0].get("message") or {}
+            text = (message.get("content") or "").strip()
+            return text or None
+    except Exception as e:
+        logger.warning("vision caption failed: %s", e)
+        return None
+
+
+async def _inline_images(messages: list[dict]) -> list[dict]:
+    """Replace ``image_url`` content parts with caption text.
+
+    The active model is usually text-only, so forwarding pixels guarantees a
+    500 from a projector-less llama-server. Captioning first keeps the turn
+    alive on every model; when the active model sees natively, messages pass
+    through untouched. At most 8 images per request are captioned — beyond
+    that the turn would take minutes, so the rest are marked omitted.
+    """
+    has_image = any(
+        isinstance(m.get("content"), list)
+        and any(isinstance(p, dict) and p.get("type") == "image_url"
+                for p in m["content"])
+        for m in messages
+    )
+    if not has_image:
+        return messages
+    if _active_model_sees_images():
+        return messages
+    stack = _active_vision_stack()
+    out: list[dict] = []
+    captioned = 0
+    for message in messages:
+        content = message.get("content")
+        if not isinstance(content, list):
+            out.append(message)
+            continue
+        parts: list[dict] = []
+        for part in content:
+            if not (isinstance(part, dict) and part.get("type") == "image_url"):
+                parts.append(part)
+                continue
+            url = ((part.get("image_url") or {}).get("url") or "").strip()
+            if not url:
+                parts.append({"type": "text", "text": "[attached image omitted: empty]"})
+                continue
+            if stack is None:
+                parts.append({"type": "text",
+                              "text": "[attached image omitted: no vision model is "
+                                      "registered — the model cannot see it]"})
+                continue
+            if captioned >= 8:
+                parts.append({"type": "text",
+                              "text": "[attached image omitted: too many images in one turn]"})
+                continue
+            captioned += 1
+            caption = await _caption_image(url, stack)
+            parts.append({"type": "text",
+                          "text": f"[attached image: {caption}]" if caption
+                                 else "[attached image omitted: captioning failed]"})
+        out.append({**message, "content": parts})
+    return out
+
+
 def _max_context_ceiling() -> int | None:
     """Upper bound for max_tokens: the real slot context, passed by the
     stack as TOKI_MAX_CONTEXT_TOKENS. Keeps clients from requesting
@@ -656,6 +811,34 @@ def create_app(
 
     # ---- OpenAI model metadata (context discovery) ----
 
+    def _served_model_id() -> str | None:
+        """The id THIS daemon's llama-server actually serves, cached.
+
+        The global active marker names the stack the CLI routes chat to,
+        not this daemon. When a companion stack flips the marker, a
+        marker-derived id made this daemon advertise — and echo into chat
+        responses — a model it was not serving (an Ornith stack that
+        answered as lfm2.5 all session). The backend is the only honest
+        source, and its id is fixed for the daemon's lifetime, so probe
+        once and cache. While the backend has not answered yet, fall back
+        to the marker but retry the probe at most every 10s instead of
+        stalling every request on a 3s timeout.
+        """
+        cached, ts = getattr(app.state, "served_model_id", (None, 0.0))
+        now = time.time()
+        if cached:
+            return cached
+        if now - ts < 10.0:
+            return _active_model_id()
+        # Negative-cache first: a probe that fails must not be retried on
+        # every request; a success overwrites it immediately below.
+        app.state.served_model_id = (None, now)
+        mid = _backend_model_id(backend)
+        if mid:
+            app.state.served_model_id = (mid, now)
+            return mid
+        return _active_model_id()
+
     def _model_info_entry() -> dict:
         """OpenAI-format model entry advertising the REAL context window.
 
@@ -669,7 +852,7 @@ def create_app(
         """
         ctx = _max_context_ceiling()
         entry: dict[str, Any] = {
-            "id": _active_model_id() or "default",
+            "id": _served_model_id() or "default",
             "object": "model",
             "created": int(app.state.started_at),
             "owned_by": "tokirecur",
@@ -1140,6 +1323,7 @@ def create_app(
         deltas → function_call_arguments deltas → response.completed).
         """
         messages = _responses_messages(req)
+        messages = await _inline_images(messages)
         max_tokens = req.max_output_tokens or 256
         reasoning_mode = (
             "off"
@@ -1477,9 +1661,11 @@ def create_app(
         # the historical "unsloth/<repo>-GGUF" form vs the spec's
         # short "qwen3.5-0.8b" form). We accept any model name when
         # only one model is loaded — the daemon is single-tenant.
-        # Override `req.model` with the active spec's model_id so
-        # downstream consumers (and the response) see a consistent name.
-        active_model = _active_model_id()
+        # Override `req.model` with the id this daemon actually serves
+        # (not the global marker: a flipped marker made responses echo
+        # a model this stack was not running) so downstream consumers
+        # see a consistent, honest name.
+        active_model = _served_model_id()
         if active_model and req.model and req.model != active_model:
             logger.debug(
                 "chat_completions: client model %r != active %r; "
@@ -1490,6 +1676,9 @@ def create_app(
         # tool_call_id fields for agentic clients). llama-server applies
         # the chat template appropriate for the loaded model.
         messages = [m.model_dump(exclude_none=True) for m in req.messages]
+        # Text-only active model + attached images: caption first, or the
+        # projector-less backend 500s on pixels it cannot represent.
+        messages = await _inline_images(messages)
         temperature, sampling = _resolve_sampling(
             temperature=req.temperature,
             repeat_penalty=req.repeat_penalty,
@@ -1611,9 +1800,12 @@ def create_app(
     @app.post("/anthropic/v1/messages")
     @app.post("/v1/messages")
     async def anthropic_messages(req: AnthropicMessagesRequest) -> Response:
-        active_model = _active_model_id()
+        # Same honesty rule as chat_completions: name the model this
+        # daemon serves, not whatever the global marker currently says.
+        active_model = _served_model_id()
         model_name = active_model or req.model
         messages = to_openai_messages(req)
+        messages = await _inline_images(messages)
         tools = to_openai_tools(req.tools)
         tool_choice = to_openai_tool_choice(req.tool_choice)
         template_kwargs = chat_template_kwargs(req, default_reasoning)
@@ -1712,6 +1904,7 @@ def create_app(
                     media_type="text/event-stream",
                 )
             messages = _responses_messages(req)
+            messages = await _inline_images(messages)
             max_tokens = req.max_output_tokens or 256
             reasoning_mode = (
                 "off"

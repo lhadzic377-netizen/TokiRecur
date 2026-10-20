@@ -652,6 +652,13 @@ class LauncherApp(App[dict | None]):
             # laguna is the fallback stack — it has no chat backends, so
             # the llama/daemon health dots do not apply to it.
             show_dots = spec.name != "laguna"
+            # Vision models are otherwise indistinguishable from text ones in
+            # this list, and the difference is not cosmetic: a vision model
+            # whose projector is missing answers every image as though it were
+            # blank. Say which is which, and shout when the projector is gone.
+            mmproj = getattr(spec, "mmproj", "") or ""
+            vision_ok = bool(mmproj) and Path(mmproj).exists()
+            vision_bad = bool(mmproj) and not vision_ok
 
             row = Text(self._GUT, end="")
             if focus:
@@ -659,6 +666,10 @@ class LauncherApp(App[dict | None]):
                 row.append(f"{spec.name:<6}", style=f"bold {art.YELLOW}")
                 if pinned:
                     row.append(" <~ pinned", style=f"bold {art.AMBER}")
+                if vision_bad:
+                    row.append(" [no projector]", style=f"bold {art.RED}")
+                elif vision_ok:
+                    row.append(" [vision]", style=f"dim {art.AMBER}")
                 if show_dots:
                     row.append("  ", style="dim")
                     row.append("●", style=art.GREEN if llama else art.RED)
@@ -668,6 +679,10 @@ class LauncherApp(App[dict | None]):
                 row.append(f"{spec.name:<6}", style=art.TEXT)
                 if pinned:
                     row.append(" <~ pinned", style=f"dim {art.AMBER}")
+                if vision_bad:
+                    row.append(" [no projector]", style=f"bold {art.RED}")
+                elif vision_ok:
+                    row.append(" [vision]", style=f"dim {art.AMBER}")
                 if show_dots:
                     row.append("  ", style="dim")
                     row.append("●", style=art.GREEN if llama else art.RED)
@@ -679,6 +694,9 @@ class LauncherApp(App[dict | None]):
                     f"      :{spec.llama_port}/:{spec.daemon_port}  "
                     f"ctx={st.get('ctx', spec.ctx_size)}  {spec.label}"
                 )
+                if vision_bad:
+                    # The one warning worth spelling out rather than tagging.
+                    detail += f"  — projector missing: {mmproj}"
                 out.append(Text(detail, style="dim"))
         return out
 

@@ -130,3 +130,109 @@ def read_gguf_meta(path: Path | str) -> GgufMeta:
             return GgufMeta(n_embd, n_layer, n_head, n_head_kv, context_length)
     except (OSError, struct.error, UnicodeDecodeError, ValueError):
         return GgufMeta()
+
+
+#: GGUF architectures that are speech recognizers, not chats. whisper.cpp
+#: family files carry one of these in `general.architecture`.
+STT_ARCHITECTURES = ("whisper", "parakeet", "nemo", "canary", "moonshine")
+
+#: Diffusion image architectures, for GGUFs that name-match nothing.
+IMAGE_ARCHITECTURES = ("stable-diffusion", "flux", "sd1", "sdxl", "qwen-image")
+
+
+@dataclass(frozen=True)
+class GgufKind:
+    architecture: str | None = None
+    audio_family: str | None = None
+    audio_category: str | None = None
+    audio_tasks: tuple = ()
+
+
+_FIXED_SKIP = {0: 1, 1: 1, 2: 2, 3: 2, 4: 4, 5: 4, 6: 4, 7: 1, 10: 8, 11: 8, 12: 8}
+
+
+def _skip_value(fh, vtype: int) -> None:
+    """Seek past one GGUF value without reading its payload."""
+    if vtype in _FIXED_SKIP:
+        fh.seek(_FIXED_SKIP[vtype], 1)
+    elif vtype == 8:
+        fh.seek(_read_bytes(fh, "<Q"), 1)
+    elif vtype == 9:
+        elem = _read_bytes(fh, "<I")
+        count = _read_bytes(fh, "<Q")
+        if elem in _FIXED_SKIP:
+            fh.seek(_FIXED_SKIP[elem] * count, 1)
+        else:
+            for _ in range(count):
+                _skip_value(fh, elem)
+    else:
+        raise struct.error(f"unknown value type {vtype}")
+
+
+def read_gguf_kind(path: Path | str) -> GgufKind:
+    """What a GGUF file IS, from its own header -- never from its filename.
+
+    Reads `general.architecture` plus any `audiocpp.model_spec.*` keys
+    (audio.cpp containers describe family/category/tasks inline). Header
+    only, no tensor data; unreadable or missing files yield an empty kind
+    so callers fall back to their other signals instead of failing.
+    """
+    try:
+        with open(path, "rb") as fh:
+            if fh.read(4) != _MAGIC:
+                return GgufKind()
+            version = _read_bytes(fh, "<I")
+            tensor_fmt = "<I" if version < 3 else "<Q"
+            _read_bytes(fh, tensor_fmt)
+            kv_count = _read_bytes(fh, tensor_fmt)
+            arch = None
+            spec_json = None
+            for _ in range(kv_count):
+                key = _read_string(fh)
+                vtype = _read_bytes(fh, "<I")
+                if key == "general.architecture":
+                    value = _read_value(fh, vtype)
+                    arch = str(value).lower() if isinstance(value, str) else None
+                elif key == "audiocpp.model_spec.json":
+                    value = _read_value(fh, vtype)
+                    spec_json = str(value) if isinstance(value, str) else None
+                else:
+                    # Skip without reading: tokenizer arrays run to megabytes
+                    # and this runs per model on every `list` call.
+                    _skip_value(fh, vtype)
+    except Exception:
+        return GgufKind()
+    family = category = None
+    tasks: tuple = ()
+    if spec_json:
+        try:
+            import json as _json
+
+            spec = _json.loads(spec_json)
+            family = str(spec.get("family", "")).lower() or None
+            category = str(spec.get("category", "")).lower() or None
+            raw_tasks = spec.get("tasks", [])
+            tasks = tuple(str(x).lower() for x in raw_tasks if isinstance(x, str))
+        except Exception:
+            pass
+    return GgufKind(arch, family, category, tasks)
+
+
+def classify_kind(architecture: str | None, audio_category: str | None = None) -> str | None:
+    """Map GGUF metadata to a registry kind, or None when it says nothing.
+
+    Audio containers win outright: an audiocpp/fish file is TTS or STT no
+    matter what its filename claims. Diffusion architectures read as image.
+    Everything else returns None so the caller keeps its name/binary/mmproj
+    signals -- this function only ever ADDS information, never overrules a
+    stack that already knows what it is (sd-server stays image, mmproj
+    stays vision).
+    """
+    arch = (architecture or "").lower()
+    if arch == "audiocpp" or (audio_category in ("tts", "stt")):
+        return audio_category if audio_category in ("tts", "stt") else "tts"
+    if arch in STT_ARCHITECTURES:
+        return "stt"
+    if arch in IMAGE_ARCHITECTURES:
+        return "image"
+    return None

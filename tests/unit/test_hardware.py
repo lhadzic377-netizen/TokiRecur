@@ -1088,9 +1088,11 @@ def test_from_dict_v2_profile_loads_tolerantly():
     assert prof.cpu.name == "old"
 
 
-def test_profile_box_migrates_v2_to_v3_on_next_load(tmp_path, monkeypatch):
-    """A cached v2 profile is re-profiled (and re-saved as v3) on the
-    next profile_box() call — the migration path."""
+def test_profile_box_migrates_v2_to_current_on_next_load(tmp_path, monkeypatch):
+    """A cached v2 profile is re-profiled (and re-saved at the current
+    schema version) on the next profile_box() call — the migration path.
+    The target is PROFILE_VERSION, never a literal: schema bumps must
+    not turn this test red."""
     monkeypatch.setattr(hardware, "profile_path", lambda: tmp_path / "hw.json")
     v2 = {
         "schema_version": 2,
@@ -1120,9 +1122,9 @@ def test_profile_box_migrates_v2_to_v3_on_next_load(tmp_path, monkeypatch):
 
     prof = hardware.profile_box()
     assert prof.cpu.name == "fresh"          # re-profiled, not the cached v2
-    assert prof.schema_version == hardware.PROFILE_VERSION  # == 3
+    assert prof.schema_version == hardware.PROFILE_VERSION
     re_saved = json.loads((tmp_path / "hw.json").read_text())
-    assert re_saved["schema_version"] == 3
+    assert re_saved["schema_version"] == hardware.PROFILE_VERSION
     assert re_saved["cpu"]["core_max_freqs_mhz"] == [4000.0] * 8
 
 

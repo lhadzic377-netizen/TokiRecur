@@ -343,6 +343,90 @@ def diff(raw_url: str, daemon_url: str, system: str | None, max_tokens: int,
 
 
 @cli.command()
+@click.option("--json", "as_json", is_flag=True,
+              help="Machine output for the desktop selection panel: RAM, GPU, and per-model fit.")
+def hardware(as_json: bool) -> None:
+    """Show what this box can hold: RAM, GPU, and every registered model's footprint."""
+    import json
+    import socket
+    from ..ctl import _available_gb, _estimate_need, _spec_is_image, load_registry
+    from ..hardware import profile_box
+    try:
+        prof = profile_box(force=False)
+    except Exception:
+        prof = None
+    total_gb, avail_gb = 0.0, _available_gb()
+    try:
+        import psutil
+        mem = psutil.virtual_memory()
+        total_gb, avail_gb = mem.total / 1e9, mem.available / 1e9
+    except Exception:
+        try:
+            with open("/proc/meminfo") as fh:
+                for line in fh:
+                    if line.startswith("MemTotal:"):
+                        total_gb = int(line.split()[1]) / 1048576.0
+                        break
+        except OSError:
+            pass
+    gpus = (prof.gpus if prof else []) or []
+    gpu = gpus[0] if gpus else None
+    def _up(port: int) -> bool:
+        if not port:
+            return False
+        try:
+            s = socket.create_connection(("127.0.0.1", port), timeout=0.2)
+            s.close()
+            return True
+        except OSError:
+            return False
+    try:
+        specs = load_registry()
+    except Exception:
+        specs = []
+    rows = []
+    for spec in specs:
+        need = round(_estimate_need(spec), 1)
+        up = _up(spec.llama_port)
+        rows.append({
+            "name": spec.name,
+            "kind": "image" if _spec_is_image(spec) else ("decider" if any(
+                k in f"{spec.name} {spec.model_id}".lower()
+                for k in ("clef", "decision", "decider", "laya")) else (
+                "vision" if spec.mmproj else "chat")),
+            "need_gb": need,
+            "up": up,
+            # Running stacks already hold their memory: they always "fit".
+            "fits": True if up else (need <= avail_gb if avail_gb != float("inf") else True),
+        })
+    doc = {
+        "ram_total_gb": round(total_gb, 1),
+        "ram_avail_gb": round(avail_gb, 1) if avail_gb != float("inf") else None,
+        "gpu": None if gpu is None else {
+            "name": gpu.name,
+            "vendor": gpu.vendor,
+            "vram_gb": gpu.vram_gb,
+            "shared_ram": bool(gpu.shared_ram),
+            "note": gpu.reason,
+        },
+        "models": rows,
+    }
+    if as_json:
+        click.echo(json.dumps(doc))
+        return
+    avail = f"{doc['ram_avail_gb']:.0f}" if doc['ram_avail_gb'] is not None else "?"
+    click.echo(f"RAM {doc['ram_total_gb']:.0f} GB total, {avail} GB available")
+    if doc["gpu"]:
+        g = doc["gpu"]
+        click.echo(f"GPU {g['name']} — {g['note']}")
+        if g["shared_ram"]:
+            click.echo("  shared memory: fit is judged on system RAM, not the VRAM carve")
+    for m in rows:
+        state = "up" if m["up"] else ("fits" if m["fits"] else "won't fit")
+        click.echo(f"  {m['name']:<38} ~{m['need_gb']:>5} GB  {state}")
+
+
+@cli.command()
 @click.option("--fix", is_flag=True,
               help="Auto-repair detected issues: install the CUDA "
                    "llama-server build when the bin dir is CPU but an "
@@ -856,16 +940,94 @@ def model() -> None:
     """
 
 
+def _model_kind(s) -> str:
+    """chat | vision | decider | image | tts | stt. The GGUF's own header
+    speaks first: an audiocpp container or whisper architecture is TTS/STT
+    no matter what its filename claims (a Fish Drama TTS quant pulled as a
+    chat stack is how this was learned). sd-server stays image and mmproj
+    stays vision without consulting the file — a stack that knows what it
+    is keeps its answer. Names are the last resort, then chat. Metadata
+    reads are header-only and never raise: a missing file just falls
+    through to the older signals."""
+    if (getattr(s, "binary", "") or "").endswith("sd-server"):
+        return "image"
+    try:
+        from ..ggufmeta import classify_kind, read_gguf_kind
+
+        gguf = getattr(s, "gguf", "") or ""
+        if gguf:
+            meta = read_gguf_kind(gguf)
+            kind = classify_kind(meta.architecture, meta.audio_category)
+            if kind:
+                return kind
+    except Exception:
+        pass
+    hay = f"{s.name} {s.model_id}".lower()
+    from ..ctl import IMAGE_KEYS
+    if any(k in hay for k in IMAGE_KEYS):
+        return "image"
+    if any(k in hay for k in ("clef", "decision", "decider", "laya")):
+        return "decider"
+    if bool(getattr(s, "mmproj", "")):
+        return "vision"
+    return "chat"
+
+
+def _model_json_row(s, active_name: str | None) -> dict:
+    """One registry row for machine clients (desktop selection panel)."""
+    size_gb: float | None = None
+    try:
+        from ..ctl import resolve_gguf_path
+        size_gb = round(resolve_gguf_path(s).stat().st_size / 1e9, 1)
+    except Exception:
+        pass
+    return {
+        "name": s.name,
+        "label": s.label,
+        "llama_port": s.llama_port,
+        "daemon_port": s.daemon_port,
+        "model_id": s.model_id,
+        "ctx_size": s.ctx_size,
+        "kv": s.kv,
+        "kind": _model_kind(s),
+        "size_gb": size_gb,
+        "vision": bool(getattr(s, "mmproj", "")),
+        "mmproj_present": bool(
+            getattr(s, "mmproj", "") and Path(s.mmproj).exists()
+        ),
+        "active": s.name == active_name,
+    }
+
+
 @model.command("list")
-def list_models() -> None:
+@click.option("--json", "as_json", is_flag=True,
+              help="Machine-readable output for tools that need to discover "
+                   "stacks (e.g. a desktop client finding its vision model).")
+def list_models(as_json: bool) -> None:
     """List the models in the registry."""
-    from ..ctl import load_registry
+    import json as _json
+
+    from ..ctl import load_registry, read_active
+    if as_json:
+        # A flat, stable shape: enough to find a stack and talk to it, and
+        # deliberately no secrets (the auth token is read from the auth file
+        # by the caller, never printed here).
+        active_name = read_active()
+        click.echo(_json.dumps([
+            _model_json_row(s, active_name)
+            for s in load_registry()
+        ], indent=2))
+        return
     for spec in load_registry():
         flags = []
         if spec.always_on:
             flags.append("always on")
         if spec.boot:
             flags.append("boot")
+        if spec.mmproj:
+            # Loud, because the failure without it is silence: a vision model
+            # with no projector answers every image as though it were blank.
+            flags.append("vision" if Path(spec.mmproj).exists() else "VISION, projector missing")
         extra = f" ({', '.join(flags)})" if flags else ""
         click.echo(f"  {spec.name.ljust(8)} {spec.label}{extra}")
         click.echo(f"            llama :{spec.llama_port}  daemon :{spec.daemon_port}  "
@@ -951,6 +1113,9 @@ def use(name: str, keep_others: bool, wait: bool, sync_only: bool,
     effective = _effective_ctx(spec)
     if not sync_only:
         try:
+            if (spec.binary or "").endswith("sd-server"):
+                click.echo(f"image stack on :{spec.llama_port} (sd-server)")
+                return
             live_slot = model_status(spec)["llama"].get("slot_ctx")
         except Exception:
             live_slot = None
@@ -1012,7 +1177,6 @@ def use(name: str, keep_others: bool, wait: bool, sync_only: bool,
 @click.argument("client", type=click.Choice([
     "opencode", "mimo", "openclaw", "hermes", "codex", "qwen", "droid",
     "cline", "dsh", "grok", "kilo", "pi", "copilot", "kimi", "omp",
-    "ornithcode",
 ]))
 @click.argument("mode", type=click.Choice(["raw", "managed"]))
 def model_mode(client: str, mode: str) -> None:
@@ -1040,6 +1204,48 @@ def stop(name: str, force: bool) -> None:
         click.echo(f"error: {e}", err=True)
         raise SystemExit(1) from None
     click.echo(f"model '{name}' stopped.")
+
+@model.command()
+@click.argument("name")
+def load(name: str) -> None:
+    """Load a model's stack beside the running ones (no switch, no config churn).
+
+    Starts llama-server + daemon (or sd-server for image models) with
+    --keep-others semantics: nothing already running is touched. The RAM
+    gate still applies, so a stack that will not fit is refused with the
+    numbers instead of dying mid-load.
+    """
+    from ..ctl import get_model, start_model
+    try:
+        spec = get_model(name)
+        start_model(spec)
+    except (KeyError, FileNotFoundError, RuntimeError) as e:
+        click.echo(f"error: {e}", err=True)
+        raise SystemExit(1) from None
+    click.echo(f"model '{name}' loaded (running beside the others).")
+
+
+@model.command()
+@click.argument("name")
+def unload(name: str) -> None:
+    """Unload a model's stack to free its memory.
+
+    Stops the model's servers and releases its weights + KV. The row stays
+    registered with its ports, so `toki model load` brings it straight back.
+    (Single-model llama-server builds expose no in-place weight unload —
+    upstream removed POST /unload and /models/unload needs router mode —
+    so freeing memory means stopping the stack. The separate verb keeps the
+    intent — manual memory management — distinct from lifecycle `stop`.)
+    """
+    from ..ctl import _estimate_need, get_model, stop_model
+    try:
+        spec = get_model(name)
+        freed = _estimate_need(spec)
+        stop_model(spec)
+    except (KeyError, RuntimeError) as e:
+        click.echo(f"error: {e}", err=True)
+        raise SystemExit(1) from None
+    click.echo(f"model '{name}' unloaded (~{freed:.0f} GB freed).")
 
 
 @model.command()
@@ -2387,7 +2593,7 @@ def main() -> int:
 
 
 _SUBCOMMANDS = {
-    "bench", "doctor", "down", "evict", "interactive",
+    "bench", "doctor", "down", "evict", "hardware", "interactive",
     "serve", "stats", "status", "up", "shell",
     "diff", "web", "dashboard", "tui", "model", "service",
 }

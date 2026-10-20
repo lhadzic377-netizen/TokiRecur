@@ -41,7 +41,9 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-PROFILE_VERSION = 3
+# Bumped to 4 for the AMD iGPU carve fix: sub-2 GB ROCm carves now
+# report shared_ram=True so fit is judged on system RAM, not the carve.
+PROFILE_VERSION = 4
 # Cache the profile for 30 days; after that, re-profile.
 # How long a cached hardware profile is trusted before re-profiling.
 # TOKI_PROFILE_TTL (seconds) overrides. 30 days is long because the
@@ -527,15 +529,30 @@ def _enumerate_gpus_linux() -> list[GPUProfile]:
                     if len(parts) >= 2:
                         vram_gb = _amd_rocm_vram_gb()
                         use = vram_gb >= 4 if vram_gb > 0 else True
+                        # A sub-2 GB carve on an AMD ROCm device is the
+                        # reserved slice of an integrated GPU (Strix Halo,
+                        # Phoenix, Strix Point), not the usable budget:
+                        # the weights live in shared system RAM behind
+                        # GGML_HIP_UMA, so fit is judged on MemAvailable,
+                        # never on this number. Marking shared_ram keeps
+                        # every VRAM-based gate downstream honest — without
+                        # it a 0.5 GB carve reads as "no usable GPU" on a
+                        # box that runs 35B models on the iGPU.
+                        uma = 0 < vram_gb < 2
                         reason = (
-                            f"{vram_gb:.1f} GB VRAM"
-                            if 0 < vram_gb < 4
-                            else "AMD discrete ROCm device"
+                            f"iGPU carve ({vram_gb:.1f} GB reserved) — weights live in "
+                            "shared system RAM; fit judged on system RAM"
+                            if uma
+                            else (
+                                f"{vram_gb:.1f} GB VRAM"
+                                if 0 < vram_gb < 4
+                                else "AMD discrete ROCm device"
+                            )
                         )
                         out.append(GPUProfile(
                             vendor="AMD", name=parts[1],
                             vram_gb=vram_gb, driver=None,
-                            vulkan_score=0.9, shared_ram=False,
+                            vulkan_score=0.9, shared_ram=uma,
                             use_for_llm=use,
                             reason=reason,
                         ))
@@ -580,8 +597,8 @@ def _scan_pci_gpus(drm_root: Path, already: list[GPUProfile]) -> list[GPUProfile
         }.get(vendor_id, "unknown")
         if vendor == "NVIDIA" and any(g.vendor == "NVIDIA" for g in already):
             continue   # already covered by nvidia-smi
-        if vendor == "AMD" and any(g.vendor == "AMD" and not g.shared_ram for g in already):
-            continue   # discrete already covered by rocm-smi
+        if vendor == "AMD" and any(g.vendor == "AMD" for g in already):
+            continue   # PCI scan already found this card; rocm-smi adds nothing
         shared = vendor == "Intel" and device_id.startswith(_INTEL_IGPU_PREFIXES)
         # Discrete GPU vendors (NVIDIA, AMD, Intel Arc) report
         # VRAM from sysfs. UMA/integrated parts report 0.
@@ -607,15 +624,29 @@ def _scan_pci_gpus(drm_root: Path, already: list[GPUProfile]) -> list[GPUProfile
             total_ram = _total_ram_gb()
             if total_ram >= 4:
                 vram = total_ram
+        # A sub-2 GB sysfs figure on AMD is the reserved carve of an
+        # integrated GPU, not a discrete card's budget (no 1 GB dGPU
+        # ships on a box big enough to run this profiler for LLMs).
+        # Mark it shared so every VRAM-based gate downstream judges fit
+        # on system RAM — the pool the weights actually live in behind
+        # GGML_HIP_UMA. Without this a 0.5 GB carve reads as "no usable
+        # GPU" on a box that runs 35B models on the iGPU.
+        uma_carve = vendor == "AMD" and 0.0 < vram < 2.0
+        if uma_carve:
+            shared = True
         score = 0.3 if shared else 0.8 if vram >= 4 else 0.5
         use = (
-            not shared
-            and (vram >= 4 or vendor != "Intel")
+            (vendor == "AMD" and uma_carve)
+            or (not shared and (vram >= 4 or vendor != "Intel"))
         )
         reason_bits = []
-        if shared:
+        if uma_carve:
+            reason_bits.append(
+                f"AMD iGPU carve ({vram:.1f} GB reserved) — unified memory"
+            )
+        elif shared:
             reason_bits.append("shared system RAM")
-        if vram and vram < 4:
+        if vram and vram < 4 and not uma_carve:
             reason_bits.append(f"only {vram:.1f} GB VRAM")
         if vendor == "Intel" and shared:
             reason_bits.append("Intel iGPU — CPU is faster for LLM matmul")

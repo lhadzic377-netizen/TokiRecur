@@ -149,12 +149,21 @@ class BruteForceIndex(Index):
         with self._lock:
             if not self._embeddings:
                 return None
-            ids = list(self._embeddings.keys())
-            matrix = np.stack([self._embeddings[i] for i in ids])
             q = np.asarray(embedding, dtype=np.float32)
             q_norm = float(np.linalg.norm(q))
             if q_norm == 0.0:
                 return None
+            # Only entries whose width matches the live model are comparable.
+            # Switching models changes the embedding width (2048 vs 4096 on
+            # this box), and np.stack refuses mixed shapes — which turned a
+            # model switch into a hard 500 on EVERY request, because two
+            # legacy rows of the old width were still on disk. Skip them
+            # instead: they are simply not searchable by this model.
+            dim = int(q.shape[0])
+            ids = [k for k, v in self._embeddings.items() if v.shape[0] == dim]
+            if not ids:
+                return None
+            matrix = np.stack([self._embeddings[i] for i in ids])
             norms = np.linalg.norm(matrix, axis=1)
             norms[norms == 0.0] = 1.0
             sims = (matrix @ q) / (norms * q_norm)

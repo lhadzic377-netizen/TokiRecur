@@ -38,7 +38,6 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("KIMI_CODE_HOME", str(tmp_path / "kimi"))
     monkeypatch.setenv("OMP_CONFIG_DIR", str(tmp_path / "omp-agent"))
     monkeypatch.setenv("TOKI_CLAUDE_SETTINGS", str(tmp_path / "claude" / "settings.json"))
-    monkeypatch.setenv("ORNITHCODE_CONFIG", str(tmp_path / "ornithcode" / "config.json"))
     monkeypatch.setenv("TOKI_AUTH_TOKEN", "test-tok-0123456789abcdef")
     return tmp_path
 
@@ -429,8 +428,7 @@ def test_sync_cli_configs_writes_all(env, with_pulled_model, monkeypatch):
     spec = with_pulled_model["laguna"]
     monkeypatch.setenv("CODEX_HOME", str(env / "codex-home"))
     paths = ctl.sync_cli_configs(spec)
-    assert len(paths) == 16
-    assert "ornithcode" in paths
+    assert len(paths) == 15
     for p in paths.values():
         assert Path(p).exists()
         assert Path(p).stat().st_mode & 0o777 == 0o600
@@ -2756,7 +2754,11 @@ def test_llama_args_aliases_cover_every_stack_name(env, tmp_path):
         reasoning="off", extra_args=[], binary="llama-server",
     )
     args = ctl._llama_args(spec)
-    aliases = {args[i + 1] for i in range(len(args)) if args[i] == "--alias"}
+    # One comma-joined --alias token: repeated --alias is deprecated
+    # upstream and warns on every boot. Parse the joined form.
+    joined = [args[i + 1] for i in range(len(args)) if args[i] == "--alias"]
+    assert len(joined) == 1, "expected exactly one --alias flag"
+    aliases = set(joined[0].split(","))
     assert aliases == {
         "qwen3.5-0.8b",                          # model_id
         "Qwen3.5-0.8B-Q4_K_M",                   # GGUF stem
@@ -3283,3 +3285,243 @@ def test_dsh_settings_use_the_daemon_token(monkeypatch, tmp_path):
     # matters is that the env var we hand it is the daemon's token.
     assert settings["llm-pi-ai"]["providers"]["tokirecur"]["apiKeyEnv"] == "TOKI_AUTH_TOKEN"
     assert ctl.auth_token() == "shared-secret"
+
+
+# --- multimodal projectors -------------------------------------------------
+#
+# A vision GGUF is useless without its projector, and the failure is silence:
+# llama-server starts happily and answers every image request as though it had
+# seen nothing. These pin the whole path — pick, fetch, register, launch, heal.
+
+
+def test_mmproj_is_recognised_by_llama_cpp_naming():
+    for name in (
+        "mmproj-F16.gguf",
+        "mmproj-BF16.gguf",
+        "mmproj-Qwen3VL-4B-Instruct-F16.gguf",
+        "MMPROJ-model-f32.gguf",
+    ):
+        assert ctl._is_mmproj(name), name
+    for name in (
+        "Qwen3-VL-2B-Instruct-Q4_K_M.gguf",
+        "mmproj.txt",
+        "Q4_K_M.gguf",
+    ):
+        assert not ctl._is_mmproj(name), name
+
+
+def test_best_projector_is_preferred_over_smaller_quants():
+    files = [
+        "Qwen3-VL-2B-Instruct-Q4_K_M.gguf",
+        "mmproj-F32.gguf",
+        "mmproj-F16.gguf",
+        "mmproj-Q8_0.gguf",
+    ]
+    assert ctl._pick_mmproj(files) == "mmproj-F16.gguf"
+    assert ctl._pick_mmproj(["model.gguf", "mmproj-Q8_0.gguf"]) == "mmproj-Q8_0.gguf"
+    assert ctl._pick_mmproj(["model.gguf"]) is None
+
+
+def test_pull_downloads_the_projector_with_the_model():
+    # The bug this pins: only the chosen GGUF was allow-listed, so a pulled
+    # vision model registered with no projector and answered blind.
+    patterns = ctl._expand_gguf_patterns("Qwen3-VL-2B-Instruct-Q4_K_M.gguf", "mmproj-F16.gguf")
+    assert "*mmproj-F16.gguf" in patterns
+    assert "*Qwen3-VL-2B-Instruct-Q4_K_M.gguf" in patterns
+    # Without a projector nothing extra is fetched.
+    assert ctl._expand_gguf_patterns("model.gguf") == ["*model.gguf"]
+    # Split models still pull every sibling plus the projector.
+    split = ctl._expand_gguf_patterns(
+        "Q4_K_M/M-00001-of-00003.gguf", "mmproj-F16.gguf"
+    )
+    assert len(split) == 4
+
+
+def test_pull_rejects_a_projector_as_the_model_file():
+    with pytest.raises(RuntimeError, match="multimodal projector"):
+        ctl.pull_model("org/repo", file="mmproj-F16.gguf")
+
+
+def test_llama_args_emits_mmproj_as_two_tokens(env, tmp_path, monkeypatch):
+    monkeypatch.setattr(ctl, "_default_ngl", lambda: 0)
+    proj = tmp_path / "mmproj-F16.gguf"
+    proj.write_bytes(b"x")
+    (tmp_path / "m.gguf").write_bytes(b"x")
+    raw = {
+        "name": "vl", "label": "VL", "gguf": str(tmp_path / "m.gguf"),
+        "llama_port": 9999, "daemon_port": 9998, "ctx_size": 4096,
+        "parallel": 1, "kv": "f16", "max_tokens": 2048, "model_id": "vl",
+        "binary": "llama-server", "extra_args": [], "env": {},
+        "mmproj": str(proj),
+    }
+    spec = ctl.ModelSpec(raw=raw, **raw)
+    args = ctl._llama_args(spec)
+    # Two separate argv entries: a single "--mmproj <path>" token is rejected
+    # by llama-server at startup.
+    i = args.index("--mmproj")
+    assert args[i + 1] == str(proj)
+    assert not any(a.startswith("--mmproj ") for a in args)
+
+
+def test_llama_args_reports_a_missing_projector(env, tmp_path, monkeypatch):
+    monkeypatch.setattr(ctl, "_default_ngl", lambda: 0)
+    (tmp_path / "m.gguf").write_bytes(b"x")
+    raw = {
+        "name": "vl", "label": "VL", "gguf": str(tmp_path / "m.gguf"),
+        "llama_port": 9999, "daemon_port": 9998, "ctx_size": 4096,
+        "parallel": 1, "kv": "f16", "max_tokens": 2048, "model_id": "vl",
+        "binary": "llama-server", "extra_args": [], "env": {},
+        "mmproj": str(tmp_path / "gone.gguf"),
+    }
+    spec = ctl.ModelSpec(raw=raw, **raw)
+    with pytest.raises(FileNotFoundError, match="projector is missing"):
+        ctl._llama_args(spec)
+
+
+def test_registry_pin_of_mmproj_wins(env):
+    """A registry `extra_args` pin must not be duplicated."""
+    proj = Path(ctl.DEFAULT_REGISTRY).parent / "mmproj-F16.gguf"
+    proj.write_bytes(b"x")
+    proj.with_name("m.gguf").write_bytes(b"x")
+    raw = {
+        "name": "vl", "label": "VL", "gguf": str(proj.with_name("m.gguf")),
+        "llama_port": 9999, "daemon_port": 9998, "ctx_size": 4096,
+        "parallel": 1, "kv": "f16", "max_tokens": 2048, "model_id": "vl",
+        "binary": "llama-server", "extra_args": ["--mmproj", "/pinned.gguf"],
+        "env": {}, "mmproj": "/field.gguf",
+    }
+    spec = ctl.ModelSpec(raw=raw, **raw)
+    args = ctl._llama_args(spec)
+    assert args.count("--mmproj") == 1
+    assert args[args.index("--mmproj") + 1] == "/pinned.gguf"
+
+
+def test_backfill_adopts_a_projector_already_on_disk(env, tmp_path):
+    model_dir = tmp_path / "models" / "vl"
+    model_dir.mkdir(parents=True)
+    gguf = model_dir / "Qwen3-VL-2B-Instruct-Q4_K_M.gguf"
+    gguf.write_bytes(b"x")
+    (model_dir / "mmproj-F16.gguf").write_bytes(b"x")
+
+    raw = {
+        "name": "vl", "label": "VL", "gguf": str(gguf),
+        "llama_port": 9999, "daemon_port": 9998, "ctx_size": 4096,
+        "parallel": 1, "kv": "f16", "max_tokens": 2048, "model_id": "vl",
+        "binary": "llama-server", "extra_args": [], "env": {},
+    }
+    ctl.save_registry([ctl.ModelSpec(raw=raw, **raw)], ctl.DEFAULT_REGISTRY)
+
+    healed = ctl.backfill_mmproj(registry=ctl.DEFAULT_REGISTRY)
+    assert healed == ["vl"]
+    assert ctl.get_model("vl", ctl.DEFAULT_REGISTRY).mmproj == str(model_dir / "mmproj-F16.gguf")
+    # Idempotent: a second pass reports nothing.
+    assert ctl.backfill_mmproj(registry=ctl.DEFAULT_REGISTRY) == []
+
+
+def test_backfill_leaves_text_models_alone(env, tmp_path):
+    model_dir = tmp_path / "models" / "text"
+    model_dir.mkdir(parents=True)
+    gguf = model_dir / "Qwen3.5-0.8B-Q4_K_M.gguf"
+    gguf.write_bytes(b"x")
+    raw = {
+        "name": "text", "label": "Text", "gguf": str(gguf),
+        "llama_port": 9999, "daemon_port": 9998, "ctx_size": 4096,
+        "parallel": 1, "kv": "f16", "max_tokens": 2048, "model_id": "text",
+        "binary": "llama-server", "extra_args": [], "env": {},
+    }
+    ctl.save_registry([ctl.ModelSpec(raw=raw, **raw)], ctl.DEFAULT_REGISTRY)
+    assert ctl.backfill_mmproj(registry=ctl.DEFAULT_REGISTRY) == []
+    assert ctl.get_model("text", ctl.DEFAULT_REGISTRY).mmproj == ""
+
+
+def test_bf16_does_not_win_the_f16_preference():
+    # "bf16" contains "f16" as a substring, so a naive `in` test ranked every
+    # BF16 projector first and the F16 file was never picked.
+    files = ["m.gguf", "mmproj-BF16.gguf", "mmproj-F16.gguf", "mmproj-F32.gguf"]
+    assert ctl._pick_mmproj(files) == "mmproj-F16.gguf"
+    # A repo shipping only BF16 must still work.
+    assert ctl._pick_mmproj(["m.gguf", "mmproj-BF16.gguf"]) == "mmproj-BF16.gguf"
+    # Long repo-style names keep their exact quant match.
+    named = ["m.gguf", "mmproj-Qwen3VL-4B-Instruct-BF16.gguf",
+             "mmproj-Qwen3VL-4B-Instruct-F16.gguf"]
+    assert ctl._pick_mmproj(named) == "mmproj-Qwen3VL-4B-Instruct-F16.gguf"
+
+
+def test_launcher_marks_vision_models(env, tmp_path, monkeypatch):
+    """The launcher list must distinguish vision from text models."""
+    from types import SimpleNamespace
+
+    from tokirecur import selector
+
+    proj = tmp_path / "mmproj-F16.gguf"
+    proj.write_bytes(b"x")
+    model = tmp_path / "m.gguf"
+    model.write_bytes(b"x")
+
+    def spec(name, mmproj):
+        return SimpleNamespace(
+            name=name, label=name.upper(), mmproj=mmproj,
+            llama_port=1, daemon_port=2, ctx_size=4096,
+        )
+
+    monkeypatch.setattr(ctl, "model_status", lambda s: {
+        "llama": {"reachable": True, "slot_ctx": 4096},
+        "daemon": {"reachable": True},
+    })
+    monkeypatch.setattr(selector, "model_status", lambda s: {
+        "llama": {"reachable": True, "slot_ctx": 4096},
+        "daemon": {"reachable": True},
+    })
+    monkeypatch.setattr(selector, "read_active", lambda: "text")
+
+    rows = dict((k, v) for k, v in selector.menu_lines([
+        spec("text", ""),
+        spec("vl", str(proj)),
+        spec("blind", str(tmp_path / "gone.gguf")),
+    ]))
+    assert "[vision]" not in rows["text"]
+    assert "[vision]" in rows["vl"]
+    assert "[no projector]" in rows["blind"]
+
+
+def test_textual_launcher_marks_vision_models(env, tmp_path):
+    """The Textual launcher row must say so, in both focused and idle styles."""
+    from types import SimpleNamespace
+
+    from tokirecur.tui import art
+    from tokirecur.tui.launcher import LauncherApp
+
+    proj = tmp_path / "mmproj-F16.gguf"
+    proj.write_bytes(b"x")
+
+    def spec(name, mmproj, label):
+        return SimpleNamespace(
+            name=name, label=label, mmproj=mmproj,
+            llama_port=1, daemon_port=2, ctx_size=4096,
+        )
+
+    self = SimpleNamespace(
+        specs=[
+            spec("vl", str(proj), "VL 2B"),
+            spec("blind", str(tmp_path / "gone.gguf"), "VL 4B"),
+            spec("text", "", "Text"),
+        ],
+        statuses={}, _statuses={}, model_idx=0, pinned=None,
+        _GUT="  ",
+        _render_models=LauncherApp._render_models,
+    )
+    lines = LauncherApp._render_models(self, 100)
+    rendered = "\n".join(line.plain for line in lines)
+    assert "[vision]" in rendered
+    assert "[no projector]" in rendered
+    # A text model gets no badge at all.
+    text_row = [ln.plain for ln in lines if "text" in ln.plain.lower()]
+    assert text_row and not any("[vision]" in r or "[no projector]" in r for r in text_row)
+
+    # The detail line belongs to the focused row, so focusing the model with
+    # the missing projector is what proves the warning is spelled out.
+    self.model_idx = 1
+    focused = "\n".join(line.plain for line in LauncherApp._render_models(self, 100))
+    assert "projector missing" in focused
+    assert str(tmp_path / "gone.gguf") in focused
+    assert art.AMBER  # badge colour is wired up

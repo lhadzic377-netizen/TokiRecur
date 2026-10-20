@@ -38,7 +38,7 @@ from tokirecur.selector import launch_cmd
 # Clients that must end up configured and pointing at the live stack.
 CONFIG_CLIENTS = (
     "opencode", "mimo", "openclaw", "hermes", "codex", "qwen", "droid",
-    "cline", "claude", "ornithcode", "dsh", "grok", "kilo", "pi", "kimi", "omp",
+    "cline", "claude", "dsh", "grok", "kilo", "pi", "kimi", "omp",
 )
 
 
