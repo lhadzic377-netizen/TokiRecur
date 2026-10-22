@@ -373,6 +373,18 @@ def _context_overflow_status(e: Exception) -> int | None:
     return None
 
 
+def _tool_call_parse_failure(e: Exception) -> bool:
+    """True when the model wrote a tool call the app could not read.
+
+    A small model can emit a call whose arguments are one quote short. The
+    engine then refuses the whole turn, and the raw error is a JSON blob
+    with a column number in it — which tells whoever is reading it
+    nothing they can act on. It is the model's mistake, not the reader's.
+    """
+    msg = str(e).lower()
+    return "failed to parse tool call" in msg or "tool call arguments" in msg
+
+
 def _overflow_detail() -> str:
     """Human + machine-parseable explanation for a context overflow."""
     ceiling = _max_context_ceiling()
@@ -1094,6 +1106,14 @@ def create_app(
                 logger.exception("streaming chat completion failed")
                 if _context_overflow_status(e):
                     err_msg = f"[context overflow: {_overflow_detail()}]"
+                elif _tool_call_parse_failure(e):
+                    # The model wrote a call the app could not read. Say so
+                    # in words a person can use, instead of quoting a JSON
+                    # parse error with a column number in it.
+                    err_msg = (
+                        "[malformed tool call: the model wrote a call the app "
+                        "could not read — asking again usually gets it right]"
+                    )
                 else:
                     err_msg = f"[daemon error: {e}]"
                 yield chunk_with(
