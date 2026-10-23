@@ -3295,6 +3295,24 @@ def _repo_of(spec: ModelSpec) -> str:
     return ""
 
 
+def active_spec() -> ModelSpec | None:
+    """The active model from the registry, or None.
+
+    The one answer to "which model is this machine running". The
+    launcher, `toki up` and the interactive shell all asked for it
+    separately and got it differently: two of them had a hard-coded
+    path to a starter download, and the third looked at a fixed port
+    that nothing was on.
+    """
+    try:
+        active = read_active()
+        if not active:
+            return None
+        return get_model(active)
+    except Exception:
+        return None
+
+
 def _gguf_architecture(path: Path) -> str | None:
     """The architecture a GGUF declares, e.g. ``qwen35moe``.
 

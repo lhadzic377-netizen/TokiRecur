@@ -47,24 +47,107 @@ from rich.table import Table
 console = Console()
 
 
+
+
+def _auth_headers() -> dict[str, str]:
+    """The daemon's bearer token.
+
+    The daemon refuses an unauthenticated request, so every command in
+    this shell that talks to it needs the token: without it, `run` and
+    `stats` answered 401 and the shell blamed the daemon for not being
+    running.
+    """
+    token = os.environ.get("TOKI_AUTH_TOKEN")
+    if not token:
+        for path in (
+            Path.home() / ".config" / "tokirecur" / "auth",
+            Path("/etc/toki-recur/auth"),
+        ):
+            try:
+                if path.is_file():
+                    token = path.read_text().strip()
+                    if token:
+                        break
+            except OSError:
+                continue
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
+
+def _why_it_failed(error: Exception, port: int) -> str:
+    """The hint under an error: what is actually wrong."""
+    text = str(error)
+    if "401" in text or "Unauthorized" in text:
+        return (
+            "the daemon on :%d wants a token — set TOKI_AUTH_TOKEN or put one "
+            "in ~/.config/tokirecur/auth" % port
+        )
+    if "Connection refused" in text or "ConnectError" in text:
+        return "is the daemon running on :%d?" % port
+    return "is the daemon running on :%d?" % port
+
+
+def _active():
+    """The active registry model, or None."""
+    try:
+        from . import ctl
+
+        return ctl.active_spec()
+    except Exception:
+        return None
+
+
+def _default_model() -> Path:
+    """The active model's weights.
+
+    It used to be a hard-coded path to a starter download, so the shell
+    pointed at a file most machines no longer have and at ports nothing
+    was on — and every command that talked to the model failed with
+    "connection refused" while the daemon was plainly running.
+    """
+    env = os.environ.get("TOKI_MODEL")
+    if env:
+        return Path(env)
+    spec = _active()
+    if spec is not None:
+        try:
+            from . import ctl
+
+            return ctl.resolve_gguf_path(spec)
+        except Exception:
+            pass
+    return Path.home() / "Downloads" / "Qwen3.5-9B-Q4_K_M.gguf"
+
+
+def _default_llama_port() -> int:
+    spec = _active()
+    return spec.llama_port if spec is not None else 8088
+
+
+def _default_daemon_port() -> int:
+    spec = _active()
+    return spec.daemon_port if spec is not None else 8787
+
+
+def _default_ctx_size() -> int:
+    spec = _active()
+    return spec.ctx_size if spec is not None else 8192
+
+
+def _default_backend_url() -> str:
+    return f"http://127.0.0.1:{_default_llama_port()}"
+
+
 @dataclass
 class ReplConfig:
     """User-tunable values that survive REPL commands."""
 
-    model: Path = field(
-        default_factory=lambda: Path(
-            os.environ.get(
-                "TOKI_MODEL",
-                str(Path.home() / "Downloads/Qwen3.5-9B-Q4_K_M.gguf"),
-            )
-        )
-    )
-    llama_port: int = 8088
-    daemon_port: int = 8787
-    ctx_size: int = 8192
+    model: Path = field(default_factory=_default_model)
+    llama_port: int = field(default_factory=_default_llama_port)
+    daemon_port: int = field(default_factory=_default_daemon_port)
+    ctx_size: int = field(default_factory=_default_ctx_size)
     n_gpu_layers: int = 99
     extra_llama_args: str = ""
-    backend_url: str = "http://127.0.0.1:8088"
+    backend_url: str = field(default_factory=_default_backend_url)
 
     def summary(self) -> str:
         return (
@@ -261,29 +344,57 @@ def cmd_bench(args: list[str], cfg: ReplConfig) -> None:
 
 
 def cmd_run(args: list[str], cfg: ReplConfig) -> None:
+    import json
+
     import httpx
     if not args:
         console.print("[red]usage: run \"prompt text\"[/red]")
         return
     prompt = " ".join(args)
     url = f"http://127.0.0.1:{cfg.daemon_port}/v1/completions"
-    payload = {"prompt": prompt, "max_tokens": 64, "temperature": 0.0}
+    # Ask for the stream the code below reads. It used to ask for a
+    # single JSON object and then parse it as server-sent events, so the
+    # text never arrived and the whole envelope was printed instead.
+    payload = {
+        "prompt": prompt,
+        "max_tokens": 64,
+        "temperature": 0.0,
+        "stream": True,
+    }
     try:
-        with httpx.stream("POST", url, json=payload, timeout=600.0) as r:
+        with httpx.stream("POST", url, json=payload, timeout=600.0,
+                           headers=_auth_headers()) as r:
             r.raise_for_status()
             for line in r.iter_lines():
-                if line:
-                    console.print(line)
+                if not line:
+                    continue
+                # The daemon streams server-sent events. The useful part is
+                # the text; the envelope around it — ids, cache counters,
+                # token usage — was what the shell printed, so `run` showed
+                # a wall of JSON instead of the answer.
+                data = line[5:].strip() if line.startswith("data:") else line.strip()
+                if not data or data == "[DONE]":
+                    continue
+                try:
+                    chunk = json.loads(data)
+                except ValueError:
+                    continue
+                for choice in chunk.get("choices") or []:
+                    delta = choice.get("delta") or {}
+                    piece = delta.get("content")
+                    if piece:
+                        console.print(piece, end="")
+            console.print()
     except Exception as e:
         console.print(f"[red]error:[/red] {e}")
-        console.print(f"[dim]hint: is the daemon running on :{cfg.daemon_port}?[/dim]")
+        console.print(f"[dim]hint: {_why_it_failed(e, cfg.daemon_port)}[/dim]")
 
 
 def cmd_stats(args: list[str], cfg: ReplConfig) -> None:
     import httpx
     url = f"http://127.0.0.1:{cfg.daemon_port}/cache/stats"
     try:
-        r = httpx.get(url, timeout=5.0)
+        r = httpx.get(url, timeout=5.0, headers=_auth_headers())
         r.raise_for_status()
         console.print(json.dumps(r.json(), indent=2))
     except Exception as e:
@@ -295,7 +406,7 @@ def cmd_list(args: list[str], cfg: ReplConfig) -> None:
     n = int(args[0]) if args and args[0].isdigit() else 20
     url = f"http://127.0.0.1:{cfg.daemon_port}/cache/list?n={n}"
     try:
-        r = httpx.get(url, timeout=5.0)
+        r = httpx.get(url, timeout=5.0, headers=_auth_headers())
         if r.status_code == 404:
             console.print("[yellow]/cache/list endpoint not implemented yet (Phase 2)[/yellow]")
             return
@@ -327,7 +438,7 @@ def cmd_show(args: list[str], cfg: ReplConfig) -> None:
     import httpx
     url = f"http://127.0.0.1:{cfg.daemon_port}/cache/{cache_id}"
     try:
-        r = httpx.get(url, timeout=5.0)
+        r = httpx.get(url, timeout=5.0, headers=_auth_headers())
         if r.status_code == 404:
             console.print(f"[yellow]no cache entry with id {cache_id!r}[/yellow]")
             return
