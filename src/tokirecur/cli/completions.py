@@ -9,11 +9,40 @@ web UI.
 from __future__ import annotations
 
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any
 
 import httpx
+
+#: The reasoning a model writes when the prompt did not give it a chat
+#: template with a reasoning channel. llama-server splits this out for the
+#: chat endpoints; on the native completion endpoint it arrives as part of
+#: the text.
+#:
+#: It matters for `toki diff`: the raw side is a native completion and the
+#: cached side is a chat turn through the daemon, so the raw side carried
+#: the model's thinking and the cached side did not. The diff then reported
+#: that the two outputs diverged — at character zero — when the answers
+#: were the same.
+_THINK_BLOCK = re.compile(r"<think>(.*?)</think>", re.DOTALL | re.IGNORECASE)
+
+
+def split_thinking(text: str) -> tuple[str, str]:
+    """The answer and the reasoning, separated.
+
+    Returns ``(answer, reasoning)``. The answer is what the model said
+    after it stopped thinking; the reasoning is what it thought while
+    doing so.
+    """
+    if "<think>" not in text.lower():
+        return text, ""
+    reasoning = "\n".join(
+        m.group(1).strip() for m in _THINK_BLOCK.finditer(text) if m.group(1).strip()
+    )
+    answer = _THINK_BLOCK.sub("", text).strip()
+    return answer, reasoning
 
 
 def _auth_headers() -> dict[str, str]:
@@ -86,7 +115,10 @@ def completion_once(
             body = r.json()
             cache = body.get("cache") or {}
             usage = body.get("usage") or {}
-            return body.get("choices", [{}])[0].get("message", {}).get("content", ""), {
+            message = (body.get("choices") or [{}])[0].get("message", {}) or {}
+            answer, reasoning = split_thinking(message.get("content", "") or "")
+            return answer, {
+                "reasoning": reasoning or (message.get("reasoning_content") or ""),
                 "ttft_ms": float(cache.get("ttft_ms", 0.0)),
                 "total_ms": (time.perf_counter() - started) * 1000.0,
                 "tokens_generated": int(usage.get("completion_tokens", 0)),
@@ -97,24 +129,36 @@ def completion_once(
             }
         except httpx.HTTPError as e:
             return f"[error: {e}]", {}
+    # The same chat endpoint the daemon serves, with the cache bypassed.
+    # It used to be the native /completion endpoint, which is a different
+    # request in a different format: no chat template, no reasoning
+    # channel, a different prompt shape. The two sides of the diff were
+    # not the same question, so the "speedup" was measuring two different
+    # requests and the outputs were reported as different whenever the
+    # model thought.
+    messages: list[dict[str, str]] = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
     payload: dict[str, Any] = {
-        "prompt": prompt,
-        "n_predict": max_tokens,
+        "model": "default",
+        "messages": messages,
+        "max_tokens": max_tokens,
         "temperature": temperature,
         "stream": False,
     }
-    if system:
-        payload["system_prompt"] = system
     started = time.perf_counter()
     try:
-        r = httpx.post(f"{base_url}/completion", json=payload, timeout=timeout,
-                       headers=_auth_headers())
+        r = httpx.post(f"{base_url}/v1/chat/completions", json=payload,
+                       timeout=timeout, headers=_auth_headers())
         r.raise_for_status()
         body = r.json()
         elapsed_ms = (time.perf_counter() - started) * 1000.0
-        timings = body.get("timings", {}) or {}
-        return body.get("content", ""), {
-            "ttft_ms": float(timings.get("prompt_ms", 0.0)),
+        message = (body.get("choices") or [{}])[0].get("message", {}) or {}
+        answer, reasoning = split_thinking(message.get("content", "") or "")
+        return answer, {
+            "reasoning": reasoning or (message.get("reasoning_content") or ""),
+            "ttft_ms": float((body.get("timings") or {}).get("prompt_ms", 0.0)),
             "total_ms": elapsed_ms,
             "prefill_tokens": int(body.get("tokens_evaluated", 0)),
             "tokens_generated": int(body.get("tokens_predicted", 0)),

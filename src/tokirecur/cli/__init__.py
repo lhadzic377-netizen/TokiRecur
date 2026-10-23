@@ -314,14 +314,29 @@ def diff(raw_url: str, daemon_url: str, system: str | None, max_tokens: int,
             daemon_url, full_prompt, max_tokens=max_tokens,
             temperature=temperature, system=system, api="openai",
         )
+    # The raw side has no time-to-first-token: the chat endpoint does not
+    # report one. Saying "0ms" would be a measurement, and a wrong one.
+    raw_ttft = raw_m.get("ttft_ms")
+    raw_ttft_text = f"{raw_ttft:.0f}ms" if raw_ttft else "ttft n/a"
     con.print(Panel(
-        raw_text, title=f"[bold red]raw[/bold red]  ttft={raw_m.get('ttft_ms', 0):.0f}ms  total={raw_m.get('total_ms', 0):.0f}ms",
+        raw_text,
+        title=f"[bold red]raw[/bold red]  {raw_ttft_text}  total={raw_m.get('total_ms', 0):.0f}ms",
         border_style="red",
     ))
     con.print(Panel(
         cached_text, title=f"[bold green]cached[/bold green] ttft={cached_m.get('ttft_ms', 0):.0f}ms  total={cached_m.get('total_ms', 0):.0f}ms",
         border_style="green",
     ))
+    if raw_m.get("reasoning"):
+        # The raw side is a native completion, so the model's thinking
+        # arrives as text. It is shown apart from the answer so the two
+        # panels can be compared, and so the difference in the timings is
+        # explained: the raw side spent time thinking.
+        con.print(Panel(
+            raw_m["reasoning"],
+            title="[dim]raw · reasoning[/dim]",
+            border_style="red",
+        ))
     speedup = raw_m.get("total_ms", 1) / max(cached_m.get("total_ms", 1), 1e-9)
     identical = raw_text == cached_text
     skipped = max(0, raw_m.get("prefill_tokens", 0) - cached_m.get("prefill_tokens", 0))
