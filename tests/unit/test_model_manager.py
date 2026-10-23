@@ -3579,6 +3579,37 @@ def test_backfill_leaves_text_models_alone(env, tmp_path):
     assert ctl.get_model("text", ctl.DEFAULT_REGISTRY).mmproj == ""
 
 
+def test_a_projector_named_after_its_model_is_still_a_projector():
+    """llama.cpp's naming has the model first as well as the projector first.
+
+    ``gemma-4-E2B.mmproj-Q8_0.gguf`` is a projector. A rule that only
+    looked at the start of the name missed it, and the model it belonged
+    to stayed blind with nothing to say why.
+    """
+    assert ctl._is_mmproj("mmproj-F16.gguf")
+    assert ctl._is_mmproj("mmproj-Qwen3VL-4B-Instruct-F16.gguf")
+    assert ctl._is_mmproj("gemma-4-E2B.mmproj-Q8_0.gguf")
+    assert ctl._is_mmproj("model-mmproj-f16.gguf")
+    # Not projectors.
+    assert not ctl._is_mmproj("model-Q4_K_M.gguf")
+    assert not ctl._is_mmproj("mmproj.txt")
+    assert not ctl._is_mmproj("mmproj")
+
+
+def test_a_pull_remembers_where_the_model_came_from():
+    """A projector that was never downloaded can only be found again if the
+    repository is still known."""
+    raw = {
+        "name": "m", "label": "M", "gguf": "/models/m/m.gguf",
+        "llama_port": 9999, "daemon_port": 9998, "ctx_size": 4096,
+        "parallel": 1, "kv": "f16", "max_tokens": 2048, "model_id": "m",
+        "binary": "llama-server", "extra_args": [], "env": {},
+        "repo": "someone/m-GGUF", "mmproj": "",
+    }
+    spec = ctl.ModelSpec(raw=raw, **raw)
+    assert spec.repo == "someone/m-GGUF"
+
+
 def test_bf16_does_not_win_the_f16_preference():
     # "bf16" contains "f16" as a substring, so a naive `in` test ranked every
     # BF16 projector first and the F16 file was never picked.

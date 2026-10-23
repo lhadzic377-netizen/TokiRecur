@@ -310,6 +310,10 @@ class ModelSpec:
     boot: bool = False
     binary: str = "llama-server"
     extra_args: list[str] = field(default_factory=list)
+    # Where the model was pulled from, so a projector that was never
+    # downloaded can still be found: the repository has it, and a blind
+    # model answers every picture as though it had been shown none.
+    repo: str = ""
     # Path to a multimodal projector (mmproj) GGUF for vision models. Held as
     # its own field rather than an `--mmproj <path>` entry in `extra_args`
     # because each extra_arg is passed to llama-server as a single argv token:
@@ -1362,11 +1366,16 @@ def _is_mmproj(filename: str) -> bool:
     """True for a multimodal projector file, by llama.cpp's naming convention.
 
     Repos spell it ``mmproj-F16.gguf``, ``mmproj-Qwen3VL-4B-Instruct-F16.gguf``
-    or ``mmproj-model-f16.gguf``; every variant has ``mmproj`` at the start of
-    the stem.
+    or ``mmproj-model-f16.gguf`` - but they also spell it after the model it
+    belongs to, as ``gemma-4-E2B.mmproj-Q8_0.gguf`` or
+    ``model-mmproj-f16.gguf``. A rule that only looked at the start of the
+    name found every projector except those, and the models they belonged
+    to stayed blind with no sign of why.
     """
     stem = Path(filename).name.lower()
-    return stem.endswith(".gguf") and stem.startswith("mmproj")
+    if not stem.endswith(".gguf"):
+        return False
+    return stem.startswith("mmproj") or ".mmproj" in stem or "-mmproj" in stem
 
 
 def _pick_mmproj(files: list[str]) -> str | None:
@@ -1589,6 +1598,11 @@ def pull_model(
         "env": env,
         "reasoning": reasoning,
         "source": "pulled",
+        # Where it came from. A projector that was not downloaded can be
+        # fetched again later only if the repository is still known - and
+        # "the model is blind" is not a state anybody should have to
+        # discover by hand.
+        "repo": repo_id,
         # Vision models only accept images when llama-server is given the
         # projector; without this field the stack starts and answers blind.
         "mmproj": str(local_dir / mmproj_file) if mmproj_file else "",
@@ -3151,6 +3165,31 @@ def backfill_binary_env(specs: list[ModelSpec] | None = None) -> list[str]:
     return updated
 
 
+def _repo_of(spec: ModelSpec) -> str:
+    """Where a model came from, if that is still knowable.
+
+    A pull records it. A model pulled before it was recorded does not
+    have it, but the download cache remembers: the repository is named
+    after the folder the model was pulled into, so the cache can be
+    matched to it.
+    """
+    recorded = getattr(spec, "repo", "") or ""
+    if recorded:
+        return str(recorded)
+    gguf = Path(spec.gguf) if spec.gguf else None
+    if gguf is None:
+        return ""
+    folder = gguf.parent.name.lower()
+    cache = Path.home() / ".cache" / "huggingface" / "hub"
+    if not cache.is_dir():
+        return ""
+    for entry in cache.glob("models--*"):
+        repo = entry.name[len("models--"):].replace("--", "/")
+        if repo.split("/")[-1].lower() == folder:
+            return repo
+    return ""
+
+
 def _gguf_architecture(path: Path) -> str | None:
     """The architecture a GGUF declares, e.g. ``qwen35moe``."""
     try:
@@ -3198,6 +3237,44 @@ def _family_projector(spec: ModelSpec, specs: list[ModelSpec]) -> str:
     return ""
 
 
+def _fetch_projector(spec: ModelSpec, repo_id: str) -> str:
+    """Download the projector a model's repository ships, and wire it up.
+
+    A model pulled before the puller knew about projectors has no tower on
+    disk and never had one, so looking for it beside the model finds
+    nothing. The repository still has it. A model that is blind answers
+    every picture as though it had been shown none, and that is the kind
+    of failure nobody notices until something depends on it.
+
+    Returns the path to the projector, or an empty string when the
+    repository has none, cannot be reached, or the download fails.
+    """
+    if not repo_id or not spec.gguf:
+        return ""
+    gguf = Path(spec.gguf)
+    try:
+        from huggingface_hub import HfApi, hf_hub_download
+
+        files = HfApi().list_repo_files(repo_id)
+        mmproj = _pick_mmproj(files)
+        if not mmproj:
+            return ""
+        local_dir = gguf.parent
+        local_dir.mkdir(parents=True, exist_ok=True)
+        path = hf_hub_download(
+            repo_id,
+            filename=mmproj,
+            local_dir=str(local_dir),
+        )
+        return str(path)
+    except Exception as error:
+        logger.warning(
+            "could not fetch the projector for %s from %s: %s",
+            spec.name, repo_id, error,
+        )
+        return ""
+
+
 def backfill_mmproj(specs: list[ModelSpec] | None = None,
                     registry: Path | None = None) -> list[str]:
     """Point entries at a multimodal projector they already have on disk.
@@ -3221,6 +3298,7 @@ def backfill_mmproj(specs: list[ModelSpec] | None = None,
             continue
         gguf = Path(s.gguf) if s.gguf else None
         found = ""
+        spec_repo = _repo_of(s)
         if gguf is not None and gguf.parent.is_dir():
             nearby = sorted(
                 p for p in gguf.parent.glob("*.gguf")
@@ -3233,6 +3311,12 @@ def backfill_mmproj(specs: list[ModelSpec] | None = None,
         if not found:
             # No tower of its own: its family's, if the machine has one.
             found = _family_projector(s, specs)
+        if not found:
+            # Not on the machine at all. If we know where the model came
+            # from, the repository still has the tower, and a blind model
+            # is one that answers every picture as though it had seen
+            # none. So fetch it.
+            found = _fetch_projector(s, spec_repo)
         if not found:
             new_specs.append(s)
             continue

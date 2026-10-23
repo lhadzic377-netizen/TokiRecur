@@ -218,6 +218,58 @@ def read_gguf_kind(path: Path | str) -> GgufKind:
     return GgufKind(arch, family, category, tasks)
 
 
+def read_gguf_tensors(path: Path | str) -> list[str]:
+    """The names of a GGUF's tensors, read from the header's directory.
+
+    The directory is in the header, so this costs a few kilobytes of
+    reading however large the model is.
+    """
+    names: list[str] = []
+    try:
+        with open(path, "rb") as fh:
+            if fh.read(4) != _MAGIC:
+                return names
+            version = _read_bytes(fh, "<I")
+            count_fmt = "<I" if version < 3 else "<Q"
+            tensor_count = _read_bytes(fh, count_fmt)
+            kv_count = _read_bytes(fh, count_fmt)
+            for _ in range(kv_count):
+                _read_string(fh)
+                vtype = _read_bytes(fh, "<I")
+                _read_value(fh, vtype)
+            # tensor info: name, n_dims, dimensions, type, offset
+            dim_fmt = "<I" if version < 2 else "<Q"
+            for _ in range(tensor_count):
+                name = _read_string(fh)
+                n_dims = _read_bytes(fh, "<I")
+                for _ in range(n_dims):
+                    _read_bytes(fh, dim_fmt)
+                _read_bytes(fh, "<I")   # ggml type
+                _read_bytes(fh, "<Q")   # offset
+                names.append(name)
+    except (OSError, struct.error, UnicodeDecodeError, ValueError):
+        return names
+    return names
+
+
+def has_vision_encoder(path: Path | str) -> bool:
+    """True when the model carries its own vision tower.
+
+    Some models ship the vision encoder inside the weights; llama.cpp
+    finds it there and needs no separate projector file. A model like that
+    is a vision model even though the registry has no ``mmproj`` to point
+    at - and a registry that only ever asks "is there a projector file?"
+    calls it blind.
+
+    The encoder's tensors are the ones llama.cpp names with a ``v.``
+    prefix - the vision tower, as opposed to the language model.
+    """
+    return any(
+        name.startswith("v.") or name.startswith("vision.") or ".v_proj." in name
+        for name in read_gguf_tensors(path)
+    )
+
+
 def classify_kind(architecture: str | None, audio_category: str | None = None) -> str | None:
     """Map GGUF metadata to a registry kind, or None when it says nothing.
 
