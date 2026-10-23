@@ -2499,7 +2499,7 @@ def _binary_supports(binary: str, flag: str) -> bool:
     return flag in found
 
 
-def _model_aliases(spec: ModelSpec) -> list[str]:
+def model_aliases(spec: ModelSpec) -> list[str]:
     """Every model name the stack can hand to a client or receive back.
 
     The union covers: the registry model id, the GGUF filename stem
@@ -2517,6 +2517,10 @@ def _model_aliases(spec: ModelSpec) -> list[str]:
     if spec.model_id:
         aliases.add(f"tokirecur-{spec.name}/{spec.model_id}")
     return sorted(a for a in aliases if a)
+
+
+#: The private name, for callers inside the package.
+_model_aliases = model_aliases
 
 
 def _llama_spawn_env(spec: ModelSpec) -> dict[str, str] | None:

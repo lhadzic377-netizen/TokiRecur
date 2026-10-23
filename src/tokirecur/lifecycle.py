@@ -94,12 +94,18 @@ def find_llama_server() -> str | None:
     return which("llama-server") or which("/usr/local/bin/llama-server")
 
 
-def llama_default_args(model: str, port: int, ctx_size: int, n_gpu_layers: int) -> list[str]:
+def llama_default_args(
+    model: str,
+    port: int,
+    ctx_size: int,
+    n_gpu_layers: int,
+    alias: str | None = None,
+) -> list[str]:
     # Ensure required dirs exist before llama-server validates them.
     slot_save_dir = STATE_DIR / "slot-save"
     slot_save_dir.mkdir(parents=True, exist_ok=True)
     binary = find_llama_server() or "llama-server"
-    return [
+    args = [
         binary,
         "-m", model,
         "--host", "127.0.0.1",
@@ -110,6 +116,12 @@ def llama_default_args(model: str, port: int, ctx_size: int, n_gpu_layers: int) 
         "--slot-save-path", str(slot_save_dir),
         "--embedding",
     ]
+    # The names a client may ask for. Without them the stack answers to
+    # the model's file path, and a client that lists models — or matches on
+    # the id it was configured with — is told the model does not exist.
+    if alias:
+        args += ["--alias", alias]
+    return args
 
 
 def llama_reachable(port: int = 8088) -> bool:
@@ -128,6 +140,7 @@ def start_llama_server(
     n_gpu_layers: int = 99,
     extra_args: list[str] | None = None,
     wait: bool = True,
+    alias: str | None = None,
 ) -> int:
     """Start llama-server. Returns the PID. If already running, returns
     the existing PID without restarting."""
@@ -140,7 +153,7 @@ def start_llama_server(
             logger.info("llama-server already running on :%d (pid=%d)", port, existing)
             return existing
 
-    args = llama_default_args(model, port, ctx_size, n_gpu_layers)
+    args = llama_default_args(model, port, ctx_size, n_gpu_layers, alias=alias)
     if extra_args:
         args.extend(extra_args)
     logger.info("starting: %s", " ".join(args))

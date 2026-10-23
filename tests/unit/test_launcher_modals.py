@@ -110,3 +110,37 @@ async def test_the_main_pane_still_navigates_and_launches(one_model):
         await pilot.press("up")
         await pilot.pause()
         assert app.launch_idx == before, "the up key did not move back"
+
+
+@pytest.mark.asyncio
+async def test_the_text_editor_takes_typing_and_enter(one_model, monkeypatch):
+    """The same keys, in the other modal.
+
+    An Input consumes printable keys, so the typing was never the problem —
+    but Enter behind the modal was starting a client instead of saving,
+    because the launcher's Enter was a priority binding.
+    """
+    app = LauncherApp()
+    committed: list = []
+    monkeypatch.setattr(
+        "tokirecur.ctl.update_spec_field",
+        lambda name, field, value, apply=False: committed.append((field, value)),
+    )
+    async with app.run_test(size=(100, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("s")
+        await pilot.pause()
+        await pilot.press("enter")          # the first field is a text field
+        await pilot.pause()
+        assert type(app.screen).__name__ == "SettingsEditScreen"
+        await pilot.press("ctrl+u")          # clear the Input
+        await pilot.pause()
+        await pilot.press(*"hello")
+        await pilot.pause()
+        assert app.focused.__class__.__name__ == "Input"
+        await pilot.press("enter")
+        await pilot.pause()
+        # gguf is a model-swap field, so a confirmation comes next.
+        assert type(app.screen).__name__ == "ConfirmRestartScreen", (
+            f"Enter did not reach the text field: {type(app.screen).__name__}"
+        )

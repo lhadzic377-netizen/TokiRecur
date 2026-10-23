@@ -730,16 +730,13 @@ def web(host: str, port: int, raw_url: str, daemon_url: str,
 @cli.command()
 @click.option(
     "--model",
-    default=lambda: os.environ.get(
-        "TOKI_MODEL",
-        str(Path.home() / "Downloads/Qwen3.5-9B-Q4_K_M.gguf"),
-    ),
+    default=None,
     type=click.Path(path_type=Path),
-    help="Path to GGUF model (default: $TOKI_MODEL or ~/Downloads/Qwen3.5-9B-Q4_K_M.gguf)",
+    help="Path to GGUF model (default: the active model's in the registry)",
 )
-@click.option("--llama-port", default=8088, type=int)
-@click.option("--daemon-port", default=8787, type=int)
-@click.option("--ctx-size", default=8192, type=int)
+@click.option("--llama-port", default=None, type=int)
+@click.option("--daemon-port", default=None, type=int)
+@click.option("--ctx-size", default=None, type=int)
 @click.option("--n-gpu-layers", default=99, type=int)
 @click.option("--detach/--foreground", default=False, help="Run in background (default: foreground)")
 @click.option(
@@ -753,10 +750,10 @@ def web(host: str, port: int, raw_url: str, daemon_url: str,
     help="Extra args to pass to llama-server (space-separated).",
 )
 def up(
-    model: Path,
-    llama_port: int,
-    daemon_port: int,
-    ctx_size: int,
+    model: Path | None,
+    llama_port: int | None,
+    daemon_port: int | None,
+    ctx_size: int | None,
     n_gpu_layers: int,
     detach: bool,
     skip_llama: bool,
@@ -764,14 +761,73 @@ def up(
 ) -> None:
     """Start the full Toki Recur stack: llama-server + daemon.
 
-    Foreground by default (Ctrl+C stops both). Pass --detach to run in
-    the background; use `toki down` to stop."""
+    With no arguments it starts the active model from the registry, on the
+    ports the registry gave it, with the names the clients ask for. The old
+    default was a hard-coded path to a starter download that most machines
+    no longer have, so the command failed for everyone who had not kept it.
+    """
     from .. import lifecycle
 
-    if not model.exists() and not skip_llama:
-        click.echo(f"error: model not found: {model}", err=True)
-        click.echo("hint: set TOKI_MODEL or pass --model", err=True)
-        raise SystemExit(2)
+    # No --model, no --ports: take the active model from the registry, the
+    # way the launcher and `toki model use` do. The old default was a
+    # hard-coded path to a starter download that most machines no longer
+    # have, so the command failed for everyone who had not kept it.
+    from .. import ctl as ctl_mod
+
+    spec = None
+    if model is None:
+        active = ctl_mod.read_active()
+        if active:
+            try:
+                spec = ctl_mod.get_model(active)
+            except Exception:
+                spec = None
+        if spec is None:
+            click.echo(
+                "error: no active model — run `toki model use <name>` first, "
+                "or pass --model",
+                err=True,
+            )
+            raise SystemExit(2)
+        model = Path(ctl_mod.resolve_gguf_path(spec))
+        if llama_port is None:
+            llama_port = spec.llama_port
+        if daemon_port is None:
+            daemon_port = spec.daemon_port
+        if ctx_size is None:
+            ctx_size = spec.ctx_size
+        click.echo(f"active model: {spec.name}")
+
+    if model is None or not model.exists():
+        if not skip_llama:
+            click.echo(f"error: model not found: {model}", err=True)
+            click.echo("hint: pass --model, or set TOKI_MODEL", err=True)
+            raise SystemExit(2)
+        model = Path(model) if model else Path("")
+
+    if llama_port is None:
+        llama_port = 8088
+    if daemon_port is None:
+        daemon_port = 8787
+    if ctx_size is None:
+        ctx_size = 8192
+
+    if spec is None and model is not None:
+        # The model was named by path. If it is in the registry, use that
+        # entry's names, so the stack answers to the same identifiers the
+        # clients are configured with — a stack that answers only to a file
+        # path is a stack the clients cannot see.
+        try:
+            for candidate in ctl_mod.load_registry():
+                try:
+                    same = ctl_mod.resolve_gguf_path(candidate) == model
+                except FileNotFoundError:
+                    same = False
+                if same:
+                    spec = candidate
+                    break
+        except Exception:
+            spec = None
 
     # `toki up` is a repair point — heal model-capable CLI configs
     # for the active registry model before the stack comes up.
@@ -788,6 +844,12 @@ def up(
                 ctx_size=ctx_size,
                 n_gpu_layers=n_gpu_layers,
                 extra_args=extra_llama_args.split() if extra_llama_args else None,
+                # The names a client asks for. Without them the stack
+                # answers to the file's path, and a client that lists
+                # models or matches on the id is told it does not exist.
+                alias=(
+                    ",".join(ctl_mod.model_aliases(spec)) if spec is not None else None
+                ),
             )
             click.echo(f"llama-server started (pid={pid})  http://127.0.0.1:{llama_port}")
         except Exception as e:
