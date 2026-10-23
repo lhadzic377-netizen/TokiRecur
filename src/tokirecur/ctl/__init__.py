@@ -539,8 +539,8 @@ def _kv_bytes_per_token(spec: ModelSpec, kv_type: str | None = None,
     return per_layer * meta.n_layer
 
 
-def _model_max_ctx(spec: ModelSpec) -> int | None:
-    """The model's own max context (from GGUF metadata), or ``None``."""
+def _gguf_context_length(spec: ModelSpec) -> int | None:
+    """The model's trained context window (GGUF ``context_length``)."""
     gguf = getattr(spec, "gguf", None)
     if not gguf:
         return None
@@ -548,6 +548,80 @@ def _model_max_ctx(spec: ModelSpec) -> int | None:
     if meta and meta.context_length:
         return meta.context_length
     return None
+
+
+def _rope_arg_value(extra_args: list[str], flag: str) -> str | None:
+    """Value of ``flag`` inside an ``extra_args`` list.
+
+    Accepts both ``--flag value`` and ``--flag=value`` — llama.cpp's parser
+    takes either, so the registry may use whichever reads better.
+    """
+    for i, arg in enumerate(extra_args):
+        if arg == flag:
+            return extra_args[i + 1] if i + 1 < len(extra_args) else None
+        if arg.startswith(flag + "="):
+            return arg.split("=", 1)[1]
+    return None
+
+
+def _rope_scaled_max_ctx(spec: ModelSpec, trained_ctx: int | None = None) -> int | None:
+    """Context ceiling implied by a YaRN rope-scaling config, else ``None``.
+
+    YaRN exists to run a model *past* its trained window. llama.cpp
+    re-derives the model's train context as
+    ``n_ctx_train = n_ctx_orig_yarn / rope_freq_scale``
+    (``src/llama-context.cpp``), and ``--rope-scale N`` sets
+    ``rope_freq_scale = 1/N`` (``common/arg.cpp``) — so a registry entry
+    with ``--rope-scaling yarn --rope-scale 4 --yarn-orig-ctx 262144``
+    raises the ceiling to 262144 * 4 = 1048576.
+
+    Without this the fit planner caps the launch at the GGUF's own
+    ``context_length`` and the YaRN flags buy nothing: the registry would
+    ask for 1M, llama-server would be told 262144, and both the daemon
+    and the harness would advertise a window the model never had.
+    """
+    extra = list(getattr(spec, "extra_args", None) or [])
+    if not extra:
+        return None
+    scaling = (_rope_arg_value(extra, "--rope-scaling") or "").strip().lower()
+    if scaling != "yarn":
+        return None
+    factor_raw = _rope_arg_value(extra, "--rope-scale")
+    if not factor_raw:
+        return None
+    try:
+        factor = float(factor_raw)
+    except ValueError:
+        return None
+    if factor <= 0:
+        return None
+    orig_raw = _rope_arg_value(extra, "--yarn-orig-ctx")
+    if orig_raw:
+        try:
+            orig = int(orig_raw)
+        except ValueError:
+            return None
+    else:
+        # llama.cpp falls back to the model's training context when the
+        # flag is absent — mirror that so the ceiling matches the server.
+        orig = trained_ctx if trained_ctx is not None else _gguf_context_length(spec)
+    if not orig or orig <= 0:
+        return None
+    return int(orig * factor)
+
+
+def _model_max_ctx(spec: ModelSpec) -> int | None:
+    """The model's own max context, or ``None``.
+
+    A YaRN rope-scaling config raises the ceiling past the GGUF's trained
+    window — that is the whole point of the flag — so it wins over the
+    metadata. Without it, the cap is the GGUF's ``context_length``.
+    """
+    trained = _gguf_context_length(spec)
+    scaled = _rope_scaled_max_ctx(spec, trained)
+    if scaled:
+        return scaled
+    return trained
 
 
 def _clamp_ctx(spec: ModelSpec, avail_gb: float | None = None,
@@ -1521,6 +1595,17 @@ def pull_model(
     }
     spec = ModelSpec(raw=raw, **raw)
     save_registry([*specs, spec], registry)
+    if not mmproj_file:
+        # The repo did not carry a tower. It may still be on this machine,
+        # belonging to another model of the same architecture - and a model
+        # that is blind is a model that answers as though it had seen
+        # nothing, which is the worst kind of wrong. So the family tower
+        # is adopted now, while the person is still here to hear about it.
+        healed = backfill_mmproj(registry=registry)
+        if healed:
+            logger.info(
+                "attached a projector already on this machine: %s", ", ".join(healed)
+            )
     return spec
 
 
@@ -2747,7 +2832,7 @@ def start_model(spec: ModelSpec, wait: bool = True) -> None:
     max_ctx = _model_max_ctx(spec)
     if max_ctx and spec.ctx_size > max_ctx:
         logger.warning(
-            "%s: ctx %d > GGUF max %d — keeping requested %d, "
+            "%s: ctx %d > model max %d — keeping requested %d, "
             "launch will clamp to %d (reg · live will show the clamp)",
             spec.name, spec.ctx_size, max_ctx, spec.ctx_size, max_ctx,
         )
@@ -3066,6 +3151,53 @@ def backfill_binary_env(specs: list[ModelSpec] | None = None) -> list[str]:
     return updated
 
 
+def _gguf_architecture(path: Path) -> str | None:
+    """The architecture a GGUF declares, e.g. ``qwen35moe``."""
+    try:
+        from ..ggufmeta import read_gguf_kind
+
+        return read_gguf_kind(path).architecture
+    except Exception:
+        return None
+
+
+def _family_projector(spec: ModelSpec, specs: list[ModelSpec]) -> str:
+    """A projector belonging to the same family, if the machine has one.
+
+    A fine-tune is published without its vision tower. The tower is not in
+    the weights at all - llama.cpp loads it from a separate file - so a
+    fine-tune of a vision model sees with its family's projector, exactly
+    as the base model does. The two usually live in different directories,
+    because they were downloaded from different repositories, and nothing
+    connects them: the fine-tune's own folder has no projector, so the
+    model answers every image as though it had seen nothing, and the only
+    sign is that it is quietly blind.
+
+    So when a model has no projector of its own, look for one that belongs
+    to a model of the same architecture. The architecture is what decides
+    the tower: two models of the same arch share a vision encoder, and two
+    models of different arches never do.
+    """
+    gguf = Path(spec.gguf) if spec.gguf else None
+    if gguf is None or not gguf.exists():
+        return ""
+    arch = _gguf_architecture(gguf)
+    if not arch:
+        return ""
+    for other in specs:
+        if other.name == spec.name:
+            continue
+        if not other.mmproj or not Path(other.mmproj).exists():
+            continue
+        other_gguf = Path(other.gguf) if other.gguf else None
+        if other_gguf is None or not other_gguf.exists():
+            continue
+        if _gguf_architecture(other_gguf) != arch:
+            continue
+        return str(other.mmproj)
+    return ""
+
+
 def backfill_mmproj(specs: list[ModelSpec] | None = None,
                     registry: Path | None = None) -> list[str]:
     """Point entries at a multimodal projector they already have on disk.
@@ -3076,7 +3208,8 @@ def backfill_mmproj(specs: list[ModelSpec] | None = None,
     sitting next to the GGUF, adopt it; this needs no network and makes the
     repair idempotent.
 
-    Only entries that actually have a projector beside them are touched, so
+    Only entries that actually have a projector are touched - beside the
+    model, or belonging to another model of the same architecture - so
     text-only models are left exactly as they are.
     """
     specs = specs if specs is not None else load_registry(registry)
@@ -3097,6 +3230,9 @@ def backfill_mmproj(specs: list[ModelSpec] | None = None,
                 # Same preference order as a fresh pull.
                 best = _pick_mmproj([p.name for p in nearby])
                 found = str(gguf.parent / best) if best else ""
+        if not found:
+            # No tower of its own: its family's, if the machine has one.
+            found = _family_projector(s, specs)
         if not found:
             new_specs.append(s)
             continue

@@ -937,6 +937,66 @@ def test_model_max_ctx_reads_metadata(env, monkeypatch):
     assert ctl._model_max_ctx(spec) is None
 
 
+def test_model_max_ctx_follows_yarn_rope_scaling(env, monkeypatch):
+    """A YaRN entry may exceed the GGUF's trained window.
+
+    llama.cpp re-derives the model's train context as
+    ``n_ctx_orig_yarn / rope_freq_scale`` and ``--rope-scale N`` sets
+    ``rope_freq_scale = 1/N`` — so 262144 * 4 = 1048576 becomes the
+    ceiling. Without this the fit planner pins the launch at the GGUF's
+    262144 and the YaRN flags buy nothing.
+    """
+    from tokirecur.ggufmeta import GgufMeta
+    gguf = env / "m.gguf"
+    gguf.write_bytes(b"")
+    spec = ctl.ModelSpec(
+        name="m", label="m", gguf=str(gguf), llama_port=1, daemon_port=2,
+        ctx_size=1000000, parallel=2, kv="f16", max_tokens=1, model_id="m",
+        extra_args=["--rope-scaling", "yarn", "--rope-scale", "4",
+                    "--yarn-orig-ctx", "262144"])
+    monkeypatch.setattr(ctl, "read_gguf_meta", lambda p: GgufMeta(
+        n_embd=1024, n_layer=16, n_head=16, n_head_kv=8,
+        context_length=262144))
+    assert ctl._model_max_ctx(spec) == 1048576
+    # The requested 1M now survives the clamp (unlimited RAM).
+    assert ctl._clamp_ctx(spec, avail_gb=float("inf"), weight_gb=0.0) == 1000000
+
+
+def test_model_max_ctx_ignores_non_yarn_rope_scaling(env, monkeypatch):
+    """Only YaRN re-derives n_ctx_train in llama.cpp.
+
+    Linear scaling leaves the GGUF's context_length as the ceiling, so the
+    cap must not move for it.
+    """
+    from tokirecur.ggufmeta import GgufMeta
+    gguf = env / "m.gguf"
+    gguf.write_bytes(b"")
+    spec = ctl.ModelSpec(
+        name="m", label="m", gguf=str(gguf), llama_port=1, daemon_port=2,
+        ctx_size=1000000, parallel=2, kv="f16", max_tokens=1, model_id="m",
+        extra_args=["--rope-scaling", "linear", "--rope-scale", "4"])
+    monkeypatch.setattr(ctl, "read_gguf_meta", lambda p: GgufMeta(
+        n_embd=1024, n_layer=16, n_head=16, n_head_kv=8,
+        context_length=262144))
+    assert ctl._model_max_ctx(spec) == 262144
+
+
+def test_model_max_ctx_yarn_without_orig_ctx_falls_back_to_trained(env, monkeypatch):
+    """llama.cpp falls back to the training context when --yarn-orig-ctx is
+    absent, so the ceiling must follow the same fallback."""
+    from tokirecur.ggufmeta import GgufMeta
+    gguf = env / "m.gguf"
+    gguf.write_bytes(b"")
+    spec = ctl.ModelSpec(
+        name="m", label="m", gguf=str(gguf), llama_port=1, daemon_port=2,
+        ctx_size=1000000, parallel=2, kv="f16", max_tokens=1, model_id="m",
+        extra_args=["--rope-scaling", "yarn", "--rope-scale", "2"])
+    monkeypatch.setattr(ctl, "read_gguf_meta", lambda p: GgufMeta(
+        n_embd=1024, n_layer=16, n_head=16, n_head_kv=8,
+        context_length=262144))
+    assert ctl._model_max_ctx(spec) == 524288
+
+
 def test_pull_model_endpoint_sets_hf_env(env, hf):
     ctl.pull_model("acme/My-Model-GGUF", "mirrored",
                    endpoint="http://localhost:8090")
@@ -3416,6 +3476,91 @@ def test_backfill_adopts_a_projector_already_on_disk(env, tmp_path):
     assert ctl.get_model("vl", ctl.DEFAULT_REGISTRY).mmproj == str(model_dir / "mmproj-F16.gguf")
     # Idempotent: a second pass reports nothing.
     assert ctl.backfill_mmproj(registry=ctl.DEFAULT_REGISTRY) == []
+
+
+def test_backfill_adopts_a_projector_from_the_same_family(env, tmp_path, monkeypatch):
+    """A fine-tune sees with its family's tower.
+
+    The tower is not in the weights - llama.cpp loads it from a separate
+    file - and a fine-tune is published without it. So the fine-tune's own
+    folder has no projector, and it answers every image as though it had
+    seen nothing, while the base model of the same architecture sits
+    right there with a working projector.
+    """
+    base_dir = tmp_path / "models" / "base"
+    base_dir.mkdir(parents=True)
+    base_gguf = base_dir / "base-Q4_K_M.gguf"
+    base_gguf.write_bytes(b"x")
+    projector = base_dir / "mmproj-F16.gguf"
+    projector.write_bytes(b"x")
+
+    tune_dir = tmp_path / "models" / "tune"
+    tune_dir.mkdir(parents=True)
+    tune_gguf = tune_dir / "tune-Q4_K_M.gguf"
+    tune_gguf.write_bytes(b"x")
+
+    def raw_for(name, gguf):
+        return {
+            "name": name, "label": name.upper(), "gguf": str(gguf),
+            "llama_port": 9999, "daemon_port": 9998, "ctx_size": 4096,
+            "parallel": 1, "kv": "f16", "max_tokens": 2048, "model_id": name,
+            "binary": "llama-server", "extra_args": [], "env": {},
+        }
+
+    base_raw = raw_for("base", base_gguf)
+    base_raw["mmproj"] = str(projector)
+    tune_raw = raw_for("tune", tune_gguf)
+    ctl.save_registry(
+        [ctl.ModelSpec(raw=base_raw, **base_raw), ctl.ModelSpec(raw=tune_raw, **tune_raw)],
+        ctl.DEFAULT_REGISTRY,
+    )
+
+    # The two GGUFs are not real files, so the architecture is stubbed: the
+    # rule under test is the family one, not the GGUF reader.
+    monkeypatch.setattr(ctl, "_gguf_architecture", lambda path: "qwen35moe")
+
+    healed = ctl.backfill_mmproj(registry=ctl.DEFAULT_REGISTRY)
+    assert healed == ["tune"], healed
+    assert ctl.get_model("tune", ctl.DEFAULT_REGISTRY).mmproj == str(projector)
+
+
+def test_backfill_will_not_borrow_a_projector_from_another_family(env, tmp_path, monkeypatch):
+    """Two models of different architectures do not share a tower."""
+    base_dir = tmp_path / "models" / "base"
+    base_dir.mkdir(parents=True)
+    base_gguf = base_dir / "base-Q4_K_M.gguf"
+    base_gguf.write_bytes(b"x")
+    projector = base_dir / "mmproj-F16.gguf"
+    projector.write_bytes(b"x")
+
+    other_dir = tmp_path / "models" / "other"
+    other_dir.mkdir(parents=True)
+    other_gguf = other_dir / "other-Q4_K_M.gguf"
+    other_gguf.write_bytes(b"x")
+
+    def raw_for(name, gguf):
+        return {
+            "name": name, "label": name.upper(), "gguf": str(gguf),
+            "llama_port": 9999, "daemon_port": 9998, "ctx_size": 4096,
+            "parallel": 1, "kv": "f16", "max_tokens": 2048, "model_id": name,
+            "binary": "llama-server", "extra_args": [], "env": {},
+        }
+
+    base_raw = raw_for("base", base_gguf)
+    base_raw["mmproj"] = str(projector)
+    other_raw = raw_for("other", other_gguf)
+    ctl.save_registry(
+        [ctl.ModelSpec(raw=base_raw, **base_raw), ctl.ModelSpec(raw=other_raw, **other_raw)],
+        ctl.DEFAULT_REGISTRY,
+    )
+
+    def arch(path):
+        return "qwen35moe" if Path(path).name.startswith("base") else "llama"
+
+    monkeypatch.setattr(ctl, "_gguf_architecture", arch)
+
+    assert ctl.backfill_mmproj(registry=ctl.DEFAULT_REGISTRY) == []
+    assert ctl.get_model("other", ctl.DEFAULT_REGISTRY).mmproj == ""
 
 
 def test_backfill_leaves_text_models_alone(env, tmp_path):
