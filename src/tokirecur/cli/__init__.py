@@ -999,7 +999,7 @@ def status() -> None:
     """Show the state of the Toki Recur stack (all registered models)."""
     from rich.console import Console
 
-    from ..ctl import load_registry, model_status, read_active
+    from ..ctl import load_registry, model_file_missing, model_status, read_active
     from ..tui import art
 
     specs = load_registry()
@@ -1020,6 +1020,7 @@ def status() -> None:
     con.print("")
     con.print("Toki Recur stack:")
     up = 0
+    gone = 0
     for spec in specs:
         s = model_status(spec)
         lstate, lpid = state(s["llama"])
@@ -1027,9 +1028,27 @@ def status() -> None:
         if s["llama"]["reachable"] or s["daemon"]["reachable"]:
             up += 1
         marker = "  (active)" if spec.name == active else ""
+        # A model whose weights are not on disk cannot be started, and
+        # "stopped" is not the same as "gone" — the registry keeps the row
+        # because the file may come back, but a person reading the list
+        # would otherwise think they could switch to it.
+        if model_file_missing(spec):
+            gone += 1
+            # The file's name, not its path: a full path wraps and turns
+            # one row into three, and the list is already long.
+            con.print(
+                f"  {spec.name:<22} [red]no weights on disk[/red]{marker}  "
+                f"[dim]{Path(str(spec.gguf or '')).name}[/dim]",
+            )
+            continue
         con.print(
             f"  {spec.name:<22} llama :{spec.llama_port:5d} {lstate}  "
             f"daemon :{spec.daemon_port:5d} {dstate}{marker}",
+        )
+    if gone:
+        con.print(
+            f"{gone} model(s) have no weights on disk; pull them again "
+            f"(`toki model pull <owner>/<repo>`).",
         )
     if up:
         con.print(f"{up} model stack(s) running; `toki model use <name>` to switch, "
@@ -1153,10 +1172,14 @@ def list_models(as_json: bool) -> None:
                    f"ctx {spec.ctx_size}  kv {spec.kv}  -> {spec.gguf}")
 
 
-@model.command()
-def status() -> None:  # noqa: F811
+@model.command("status")
+def model_status() -> None:
+    """Show per-model stack status.
 
-    """Show per-model stack status."""
+    Named apart from the top-level ``status`` for the same reason as the
+    service one: two functions with one name in one module means the
+    second one wins the name.
+    """
     from ..ctl import gpu_state, load_registry, model_status, read_active
     active = read_active()
     click.echo(f"active model: {active or 'none'}")
@@ -2634,10 +2657,17 @@ def uninstall() -> None:
     raise SystemExit(svc_uninstall())
 
 
-@service.command()
-def status() -> None:  # noqa: F811
+@service.command("status")
+def service_status() -> None:
+    """Show linger state and per-model boot unit status.
 
-    """Show linger state and per-model boot unit status."""
+    Named apart from the top-level ``status`` on purpose: two functions
+    with one name in one module means the second one wins, and
+    ``from tokirecur.cli import status`` then hands back the service
+    status instead of the stack status. It was called ``status`` here and
+    carried a ``noqa`` for the redefinition, which is a comment admitting
+    the collision rather than fixing it.
+    """
     from ..service import status as svc_status
     raise SystemExit(svc_status())
 

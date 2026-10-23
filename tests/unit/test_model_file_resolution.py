@@ -86,3 +86,41 @@ def test_the_resolver_never_hands_back_a_projector(tmp_path, monkeypatch):
     with pytest.raises(FileNotFoundError):
         ctl.resolve_gguf_path(spec)
     assert ctl.model_file_missing(spec) is True
+
+
+def test_the_status_says_a_model_has_no_weights(tmp_path, monkeypatch):
+    """A model that cannot be started is not "stopped".
+
+    The registry keeps the row — the file may come back, and the port
+    assignment is still its own — but a person reading the list would
+    otherwise think they could switch to it.
+    """
+    from tokirecur.cli import status
+    from click.testing import CliRunner
+
+    import yaml
+
+    reg = tmp_path / "models.yaml"
+    marker = tmp_path / "active"
+    here = tmp_path / "here.gguf"
+    here.write_bytes(b"x")
+    gone = tmp_path / "gone.gguf"
+    reg.write_text(yaml.safe_dump({"models": [
+        {"name": "here", "label": "Here", "gguf": str(here),
+         "llama_port": 9100, "daemon_port": 9101, "ctx_size": 4096,
+         "max_tokens": 1000, "model_id": "here", "parallel": 1, "kv": "f16"},
+        {"name": "gone", "label": "Gone", "gguf": str(gone),
+         "llama_port": 9102, "daemon_port": 9103, "ctx_size": 4096,
+         "max_tokens": 1000, "model_id": "gone", "parallel": 1, "kv": "f16"},
+    ]}))
+    marker.write_text("here")
+    monkeypatch.setattr(ctl, "DEFAULT_REGISTRY", reg)
+    monkeypatch.setattr(ctl, "ACTIVE_MARKER", marker)
+    monkeypatch.setenv("TOKI_MODEL_REGISTRY", str(reg))
+    monkeypatch.setenv("TOKI_ACTIVE_MODEL", str(marker))
+
+    result = CliRunner().invoke(status, [])
+    out = result.output
+    assert "no weights on disk" in out
+    assert "gone.gguf" in out
+    assert "1 model(s) have no weights on disk" in out
