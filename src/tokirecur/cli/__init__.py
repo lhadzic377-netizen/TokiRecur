@@ -439,16 +439,20 @@ def doctor(fix: bool) -> None:
     # Stack health (existing checks, unchanged in spirit).
 
     rows = []
+    # The ACTIVE model's ports, not the install defaults: every model in
+    # the registry gets its own pair, and probing 8080/8787 reported a
+    # stack that was up as down.
+    llama_port, daemon_port = diagnose.active_stack_ports()
     try:
-        r = httpx.get("http://127.0.0.1:8080/health", timeout=2.0)
-        rows.append(("llama-server :8080", "ok" if r.status_code == 200 else "down"))
+        r = httpx.get(f"http://127.0.0.1:{llama_port}/health", timeout=2.0)
+        rows.append((f"llama-server :{llama_port}", "ok" if r.status_code == 200 else "down"))
     except Exception:
-        rows.append(("llama-server :8080", "not reachable"))
+        rows.append((f"llama-server :{llama_port}", "not reachable"))
     try:
-        r = httpx.get("http://127.0.0.1:8787/healthz", timeout=2.0)
-        rows.append(("toki daemon :8787", "ok" if r.status_code == 200 else "down"))
+        r = httpx.get(f"http://127.0.0.1:{daemon_port}/healthz", timeout=2.0)
+        rows.append((f"toki daemon :{daemon_port}", "ok" if r.status_code == 200 else "down"))
     except Exception:
-        rows.append(("toki daemon :8787", "not running"))
+        rows.append((f"toki daemon :{daemon_port}", "not running"))
     for k, v in rows:
         click.echo(f"{k.ljust(24)}{v}")
 

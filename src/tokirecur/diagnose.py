@@ -256,6 +256,7 @@ def hint(hw: dict[str, str | None] | None = None) -> list[str]:
         f"note: a GPU ({hw['backend']}) is present but '{spec.name}' shows no "
         "GPU offload in llama.log.",
     ]
+    reason = gpu_fallback_reason(spec)
     if build_kind in (None, "CPU"):
         lines.append(
             f"  its llama-server ({build}) is a CPU build (or unknown)."
@@ -267,12 +268,59 @@ def hint(hw: dict[str, str | None] | None = None) -> list[str]:
         )
         lines.append(f"  then: toki model use {spec.name}")
     else:
-        lines.append(
-            f"  its build is {build_kind} but no offload is visible — the log "
-            "may just be terse, or -ngl was forced to 0."
-        )
-        lines.append(
-            f"  check: TOKI_NGL={os.environ.get('TOKI_NGL', 'unset -> auto')}; "
-            "registry extra_args must not pin -ngl 0"
-        )
+        if reason:
+            # The log knows why. A person reading "the build is ROCm but no
+            # offload is visible" would go looking for a wrong build; the
+            # actual answer is usually in the log, and it is a different
+            # fix every time.
+            lines.append(f"  {reason}.")
+            lines.append(
+                f"  fix: free the card (another model may be on it), then "
+                f"toki model use {spec.name}"
+            )
+        else:
+            lines.append(
+                f"  its build is {build_kind} but no offload is visible — the log "
+                "may just be terse, or -ngl was forced to 0."
+            )
+            lines.append(
+                f"  check: TOKI_NGL={os.environ.get('TOKI_NGL', 'unset -> auto')}; "
+                "registry extra_args must not pin -ngl 0"
+            )
     return lines
+
+
+def gpu_fallback_reason(spec) -> str | None:
+    """Why the model came up without the GPU, when the log says.
+
+    The log is appended to across restarts, and the reason is usually
+    in it: the card was full, or the layers were pinned. Without this the
+    doctor says "no offload is visible" and the person goes looking for a
+    wrong build, when the build is right and the card is busy.
+    """
+    log = spec.state_dir() / "llama.log"
+    try:
+        text = log.read_text(errors="replace")
+    except OSError:
+        return None
+    for line in reversed(text.splitlines()):
+        low = line.lower()
+        if "out of memory" in low and ("alloc" in low or "buffer" in low):
+            return "the GPU could not hold the model (out of memory)"
+        if "n_gpu_layers already set by user" in low:
+            return "the model was pinned to a GPU layer count the card could not hold"
+    return None
+
+
+def active_stack_ports() -> tuple[int, int]:
+    """The (llama, daemon) ports the active model is served on.
+
+    The defaults — 8080 and 8787 — are for a fresh install. Every model
+    in the registry gets its own pair, so probing the defaults reported a
+    stack that was up as down, on any machine whose models had been
+    given their own ports.
+    """
+    spec = _active_spec()
+    if spec is None:
+        return 8080, 8787
+    return spec.llama_port, spec.daemon_port
