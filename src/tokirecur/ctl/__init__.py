@@ -132,18 +132,63 @@ except Exception:  # noqa: BLE001 — never let path resolution crash import
 
 def _configured_auth_token() -> str | None:
     """Read the daemon token without manufacturing a fallback value."""
-    token = os.environ.get("TOKI_AUTH_TOKEN")
-    if token:
-        return token
+    return configured_auth_token()
+
+
+#: Values that are not secrets.
+#:
+#: The README used to show ``"apiKey": "demo-token"`` in a copy-and-paste
+#: config, and a machine that followed it ended up with a daemon whose
+#: "token" was written down in this project's own documentation — so
+#: anything that could reach the port could use the model. A placeholder is
+#: treated as no token at all, and replaced with a real one.
+_KNOWN_PLACEHOLDERS = frozenset({
+    "demo-token", "demo_token", "changeme", "change-me", "your-token-here",
+    "your_token_here", "token", "placeholder", "sk-demo", "none", "null",
+    "todo", "replace-me",
+})
+
+
+def _is_placeholder(value: str) -> bool:
+    return value.strip().lower() in _KNOWN_PLACEHOLDERS
+
+
+def _new_auth_token(path: Path) -> str:
+    """Write a real token to the auth file and return it."""
+    token = secrets.token_urlsafe(32)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(token + "\n")
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+    return token
+
+
+def configured_auth_token() -> str | None:
+    """The token configured on this machine, or None.
+
+    The env var wins, then the auth file. A file holding a well-known
+    placeholder is replaced with a real token: a placeholder protects
+    nothing, and leaving it in place is how a machine ends up serving the
+    model to anything that can reach the port.
+    """
+    env = os.environ.get("TOKI_AUTH_TOKEN")
+    if env and env.strip() and not _is_placeholder(env):
+        return env.strip()
     for path in (
         Path.home() / ".config" / "tokirecur" / "auth",
         Path("/etc/toki-recur/auth"),
     ):
         try:
-            if path.is_file():
-                value = path.read_text().strip()
-                if value:
-                    return value
+            if not path.is_file():
+                continue
+            content = path.read_text().strip()
+            if not content:
+                continue
+            if _is_placeholder(content):
+                return _new_auth_token(path)
+            return content
         except OSError:
             pass
     return None
@@ -164,23 +209,7 @@ def auth_token() -> str:
     failed its first turn with "API key is invalid". Symmetry with the daemon
     is the whole fix; do not reorder one side without the other.
     """
-    env = os.environ.get("TOKI_AUTH_TOKEN")
-    if env:
-        return env
-    for path in (
-        Path.home() / ".config" / "tokirecur" / "auth",
-        Path("/etc/toki-recur/auth"),
-    ):
-        try:
-            if path.is_file():
-                content = path.read_text().strip()
-                if content:
-                    return content
-        except OSError:
-            pass
-    # No token configured anywhere. The daemon accepts anything on loopback,
-    # but never hand out a well-known value.
-    return secrets.token_urlsafe(32)
+    return configured_auth_token() or secrets.token_urlsafe(32)
 
 
 # Back-compat alias: historically a module-level constant frozen at
@@ -5014,6 +5043,14 @@ def write_codex_config(
             # child environment; it is never persisted in this config.
             "env_key": "TOKI_AUTH_TOKEN",
         }
+    # A provider for a model that is not advertised points at a port
+    # nothing is serving. The purge above only drops ports the registry
+    # no longer knows about, so a model that is still registered but
+    # whose stack is down kept its section — and codex was left offering
+    # models whose every request goes nowhere.
+    keep = {f"tokirecur-{s.name}" for s in advertised}
+    for key in [k for k in providers if k.startswith("tokirecur-") and k not in keep]:
+        providers.pop(key, None)
 
     top["model_provider"] = f"tokirecur-{spec.name}"
     top["model"] = spec.model_id

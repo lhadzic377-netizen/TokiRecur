@@ -571,22 +571,17 @@ class PrecisionRequest(BaseModel):
 
 
 def _get_auth_token() -> str | None:
-    # Read order: env var → ~/.config/tokirecur/auth → /etc/toki-recur/auth.
-    tok = os.environ.get("TOKI_AUTH_TOKEN")
-    if tok:
-        return tok
-    for path in (
-        Path.home() / ".config" / "tokirecur" / "auth",
-        Path("/etc/toki-recur/auth"),
-    ):
-        try:
-            if path.is_file():
-                content = path.read_text().strip()
-                if content:
-                    return content
-        except OSError:
-            pass
-    return None
+    """The token this daemon accepts, or None when none is configured.
+
+    One implementation, shared with the control plane: the clients and the
+    daemon have to agree on the token or every request is a 401, and they
+    used to be two separate copies of the same lookup. A token file that
+    holds a well-known placeholder is replaced with a real one on the way
+    past — a placeholder protects nothing.
+    """
+    from ..ctl import configured_auth_token
+
+    return configured_auth_token()
 
 
 def _backend_model_id(backend) -> str | None:

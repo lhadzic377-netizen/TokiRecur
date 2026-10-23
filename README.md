@@ -324,7 +324,10 @@ metrics.
       "npm": "@ai-sdk/openai-compatible",
       "options": {
         "baseURL": "http://127.0.0.1:8787/v1",
-        "apiKey": "demo-token"
+        // The token the daemon runs with: `cat ~/.config/tokirecur/auth`.
+        // Do not put a placeholder here — a well-known "token" protects
+        // nothing, and anything that can reach the port can use the model.
+        "apiKey": "<the token in ~/.config/tokirecur/auth>"
       },
       "models": {
         "qwen3.5-9b": {
@@ -339,7 +342,9 @@ metrics.
 }
 ```
 
-- Set `apiKey` to whatever `TOKI_AUTH_TOKEN` the daemon runs with.
+- Set `apiKey` to whatever `TOKI_AUTH_TOKEN` the daemon runs with —
+  `cat ~/.config/tokirecur/auth`. A placeholder is not a secret: the
+  daemon replaces a well-known one with a real token when it finds it.
 - The model id is a label; the actual weights are whatever llama-server has
   loaded. `contextWindow` should stay under `TOKI_MAX_CONTEXT_TOKENS`.
 - Tool calls stream through verbatim (`delta.tool_calls`), finish with
