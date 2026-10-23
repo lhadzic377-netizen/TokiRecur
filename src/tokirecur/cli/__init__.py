@@ -216,18 +216,36 @@ def dashboard(reports: Path, host: str, port: int) -> None:
     raise SystemExit(dash_main(["--reports", str(reports), "--host", host, "--port", str(port)]))
 
 
+
+def _active_urls() -> tuple[str, str]:
+    """The active model's llama-server and daemon URLs.
+
+    The install defaults — 8088 and 8787 — are for a fresh install. Every
+    model in the registry gets its own pair, so a command that used them
+    talked to a port nothing was on, and said so.
+    """
+    try:
+        from ..ctl import active_spec
+
+        spec = active_spec()
+    except Exception:
+        spec = None
+    if spec is None:
+        return ("http://127.0.0.1:8088", "http://127.0.0.1:8787")
+    return (spec.llama_url, spec.daemon_url)
+
+
 @cli.command("tui")
 @click.option(
     "--daemon-url",
-    default=lambda: os.environ.get("TOKI_DAEMON_URL", "http://127.0.0.1:8787"),
-    show_default=True,
-    help="Toki daemon URL.",
+    default=lambda: os.environ.get("TOKI_DAEMON_URL") or _active_urls()[1],
+    help="Toki daemon URL (default: the active model's).",
 )
 @click.option(
     "--raw-url",
-    default=lambda: os.environ.get("TOKI_LLAMA_URL", "http://127.0.0.1:8088"),
-    show_default=True,
-    help="llama-server URL (used for raw mode and precision check).",
+    default=lambda: os.environ.get("TOKI_LLAMA_URL") or _active_urls()[0],
+    help="llama-server URL (used for raw mode and precision check). "
+         "Defaults to the active model's.",
 )
 @click.option(
     "--auth-token",
@@ -286,8 +304,8 @@ def tui(daemon_url: str, raw_url: str, auth_token: str | None) -> None:
         click.echo("hint: install textual with `pip install textual`.", err=True)
         raise SystemExit(1) from None
 @cli.command("diff")
-@click.option("--raw-url", default="http://127.0.0.1:8088")
-@click.option("--daemon-url", default="http://127.0.0.1:8787")
+@click.option("--raw-url", default=None)
+@click.option("--daemon-url", default=None)
 @click.option("--system", default=None, help="System prompt")
 @click.option("--max-tokens", "-m", default=256, type=int)
 @click.option("--temperature", "-t", default=0.0, type=float)
@@ -300,6 +318,10 @@ def diff(raw_url: str, daemon_url: str, system: str | None, max_tokens: int,
     """
     from .completions import completion_once
     con = Console()
+    if not raw_url or not daemon_url:
+        default_raw, default_daemon = _active_urls()
+        raw_url = raw_url or default_raw
+        daemon_url = daemon_url or default_daemon
     if not prompt:
         con.print("[red]usage: toki diff [OPTIONS] PROMPT[/red]")
         raise SystemExit(2)
@@ -651,10 +673,10 @@ def _find_repo_dir() -> Path | None:
 @click.option("--host", default="127.0.0.1", show_default=True)
 @click.option("--port", default=7777, type=int, show_default=True,
               help="Unused localhost port (default: 7777)")
-@click.option("--raw-url", default="http://127.0.0.1:8088", show_default=True,
-              help="Backend llama-server URL")
-@click.option("--daemon-url", default="http://127.0.0.1:8787", show_default=True,
-              help="Toki daemon URL")
+@click.option("--raw-url", default=None,
+              help="Backend llama-server URL (default: the active model's)")
+@click.option("--daemon-url", default=None,
+              help="Toki daemon URL (default: the active model's)")
 @click.option("--tls-cert", type=click.Path(path_type=Path), default=None,
               help="Path to a TLS certificate (PEM). Enables HTTPS + wss.")
 @click.option("--tls-key", type=click.Path(path_type=Path), default=None,
@@ -680,6 +702,22 @@ def web(host: str, port: int, raw_url: str, daemon_url: str,
     """
     if bool(tls_cert) != bool(tls_key):
         raise click.UsageError("--tls-cert and --tls-key must be given together")
+    # The active model's own ports, not the install defaults: the defaults
+    # are for a fresh install, and on a machine whose models have their own
+    # ports the web UI was a page that could not reach the model.
+    if raw_url is None or daemon_url is None:
+        from ..ctl import active_spec
+
+        spec = active_spec()
+        if spec is not None:
+            if raw_url is None:
+                raw_url = spec.llama_url
+            if daemon_url is None:
+                daemon_url = spec.daemon_url
+    if raw_url is None:
+        raw_url = "http://127.0.0.1:8088"
+    if daemon_url is None:
+        daemon_url = "http://127.0.0.1:8787"
     if tls_cert is None and tls_key is None:
         # Honor env-file settings (used by the systemd unit, which
         # can't pass flags). Explicit flags take precedence.
