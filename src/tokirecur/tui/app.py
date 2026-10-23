@@ -281,6 +281,29 @@ class TokiApp(App):
         elif cmd == "/metrics":
             m = await self.client.metrics_live()
             self.info.update_metrics(m)
+            # Say what the numbers are. Every other command answers, and
+            # this one used to clear the input and say nothing: the panel
+            # it refreshed was already refreshing itself, so the person
+            # could not tell a working command from a broken one.
+            state = m.get("daemon", "ok")
+            if state != "ok":
+                self.chat.write_system(
+                    f"metrics unavailable — the daemon is {state} "
+                    f"({self.client.daemon_url})",
+                    style="red",
+                )
+            else:
+                hits = int(m.get("cache_hits", 0))
+                misses = int(m.get("cache_misses", 0))
+                total = hits + misses
+                rate = f"{hits / total * 100:.0f}%" if total else "—"
+                self.chat.write_system(
+                    f"metrics: {int(m.get('requests_total', 0))} requests · "
+                    f"cache {rate} ({hits} hit / {misses} miss) · "
+                    f"{int(m.get('tokens_skipped', 0))} tokens skipped · "
+                    f"{int(m.get('active_slots', 0))} active slots",
+                    style="cyan",
+                )
         elif cmd == "/slots":
             state = await self.client.cache_state()
             self.sidebar.slots = state.get("slots", [])

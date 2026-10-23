@@ -100,10 +100,18 @@ class LauncherApp(App[dict | None]):
     TITLE = "Toki Recur launcher"
 
     BINDINGS = [
-        Binding("up", "move(-1)", "Up", show=False, priority=True),
-        Binding("down", "move(1)", "Down", show=False, priority=True),
-        Binding("k", "move(-1)", "", show=False, priority=True),
-        Binding("j", "move(1)", "", show=False, priority=True),
+        # The keys a modal needs are not priority bindings. A priority
+        # binding is checked before the focused widget, so "down" and
+        # "enter" were being taken by the launcher while a dropdown was
+        # open: the option list never moved, the pick never committed, and
+        # Enter behind the modal started a client instead. The modal's
+        # chain is cut at the modal, so without priority the focused
+        # widget wins inside one — and the main pane has nothing that
+        # consumes these keys, so it still navigates and launches.
+        Binding("up", "move(-1)", "Up", show=False),
+        Binding("down", "move(1)", "Down", show=False),
+        Binding("k", "move(-1)", "", show=False),
+        Binding("j", "move(1)", "", show=False),
         Binding("1", "jump(0)", "1", show=False, priority=True),
         Binding("2", "jump(1)", "2", show=False, priority=True),
         Binding("3", "jump(2)", "3", show=False, priority=True),
@@ -113,11 +121,11 @@ class LauncherApp(App[dict | None]):
         Binding("7", "jump(6)", "7", show=False, priority=True),
         Binding("8", "jump(7)", "8", show=False, priority=True),
         Binding("9", "jump(8)", "9", show=False, priority=True),
-        Binding("enter", "launch", "Launch", priority=True),
+        Binding("enter", "launch", "Launch"),
         Binding("right", "switch", "Configure", show=False, priority=True),
         Binding("left", "back", "Back", show=False, priority=True),
         Binding("tab", "switch", "Tab", priority=True),
-        Binding("space", "pin", "Pin", priority=True),
+        Binding("space", "pin", "Pin"),
         Binding("escape", "quit_app", "Quit", priority=True),
         Binding("ctrl+c", "quit_app", "Quit", show=False, priority=True),
         Binding("q", "quit_app", "quit", show=False, priority=True),

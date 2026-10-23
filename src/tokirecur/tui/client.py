@@ -127,15 +127,23 @@ class DaemonClient:
                 "max_context_tokens": 0, "daemon_status": "unreachable"}
 
     async def metrics_live(self) -> dict[str, Any]:
-        """Parse the daemon's Prometheus /metrics into a small dict."""
+        """Parse the daemon's Prometheus /metrics into a small dict.
+
+        ``daemon`` says where the numbers came from: "ok", or why there are
+        none. Without it, a daemon that is down and a daemon that has never
+        served a request look identical — all zeros — and a command that
+        reports zeros reads as "no traffic" when it means "no answer".
+        """
         empty = {
             "requests_total": 0, "cache_hits": 0, "cache_misses": 0,
             "tokens_skipped": 0, "active_slots": 0, "auth_failures": 0,
+            "daemon": "unreachable",
         }
         try:
             async with _make_client(self.daemon_url, self._auth_token) as c:
                 r = await c.get("/metrics")
                 if r.status_code != 200:
+                    empty["daemon"] = "auth_required" if r.status_code == 401 else "error"
                     return empty
                 text = r.text
         except Exception:
@@ -147,16 +155,22 @@ class DaemonClient:
             parts = line.split()
             if len(parts) < 2:
                 continue
-            name, value = parts[0], parts[1]
+            token, value = parts[0], parts[1]
+            # Prometheus labels its counters — toki_requests_total{route=…,
+            # status=…} — and the label block is part of the token. The
+            # name has to be cut off before it is compared, or the request
+            # counter never matches anything and always reads zero.
+            name = token.split("{", 1)[0]
+            labels = token[len(name):]
             try:
                 v = float(value)
             except ValueError:
                 continue
             if name == "toki_requests_total":
                 empty["requests_total"] += v
-            elif name.startswith("toki_cache_hits_total") and 'kind="hit"' in name:
+            elif name == "toki_cache_hits_total" and 'kind="hit"' in labels:
                 empty["cache_hits"] += v
-            elif name.startswith("toki_cache_hits_total") and 'kind="miss"' in name:
+            elif name == "toki_cache_hits_total" and 'kind="miss"' in labels:
                 empty["cache_misses"] += v
             elif name == "toki_tokens_skipped_total":
                 empty["tokens_skipped"] = int(v)
@@ -164,6 +178,7 @@ class DaemonClient:
                 empty["active_slots"] = int(v)
             elif name == "toki_auth_failures_total":
                 empty["auth_failures"] = int(v)
+        empty["daemon"] = "ok"
         return empty
 
     async def precision_check(self, *, max_tokens: int = 32) -> dict[str, Any]:
