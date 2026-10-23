@@ -1872,7 +1872,64 @@ def backfill_image_stacks(all_models, registry: Path | None = None) -> list[str]
     return fixed
 
 
+def _normalised_model_name(name: str) -> str:
+    """A model name reduced to one shape, for comparing a file to a server.
+
+    llama-server reports the name of the model it loaded: no path, no
+    extension. `Path(...).stem` cannot be used on it - a name with a dot
+    in it ("Qwen3.5-122B-A10B") is treated as a file with an extension,
+    and the stem comes out as "Qwen3". So the extension is taken off by
+    hand, and only when it is one.
+
+    Sharded models are named `...-00001-of-00003` on disk and reported
+    without the shard suffix, and the registry and the server can differ
+    in case and separators, so both sides are folded to one shape.
+    """
+    stem = name.strip().rsplit("/", 1)[-1]
+    if stem.lower().endswith(".gguf"):
+        stem = stem[: -len(".gguf")]
+    stem = stem.lower().replace("_", "-").replace(".", "-")
+    shard = stem.rfind("-00001-of-")
+    if shard > 0:
+        stem = stem[:shard]
+    return stem
+
+
+def _served_model_ids(base: str) -> set[str]:
+    """The model ids a server on ``base`` says it is serving."""
+    try:
+        data = httpx.get(f"{base}/v1/models", timeout=2.0).json()
+    except Exception:
+        return set()
+    ids: set[str] = set()
+    if not isinstance(data, dict):
+        return ids
+    for row in data.get("data") or []:
+        if isinstance(row, dict) and row.get("id"):
+            ids.add(_normalised_model_name(str(row["id"])))
+    for row in data.get("models") or []:
+        if isinstance(row, dict):
+            for key in ("id", "name", "model"):
+                if row.get(key):
+                    ids.add(_normalised_model_name(str(row[key])))
+    return ids
+
+
 def llama_reachable(spec: ModelSpec) -> bool:
+    """Is THIS model's llama-server on its port?
+
+    A server answering /health is not enough. Something else on the machine
+    can hold the port - the desktop app's voice server sat on one of the
+    registry's llama ports and answered /health with 200 - and a model that
+    is not running then reads as running. The consequences are real: the
+    status line lies, and `use_model` tries to free the RAM of a stack that
+    was never up, fails to, and warns about a port it cannot stop.
+
+    So the server is asked what it is serving, and the answer has to be
+    this model. A server that will not say is given the benefit of the
+    doubt: the point is to catch the impostor, not to start a second copy
+    of a model that is genuinely up.
+    """
     if _spec_is_image(spec):
         # sd-server has no /health; its OpenAI model listing is the
         # liveliness answer.
@@ -1881,9 +1938,19 @@ def llama_reachable(spec: ModelSpec) -> bool:
         except Exception:
             return False
     try:
-        return httpx.get(f"{spec.llama_url}/health", timeout=2.0).status_code == 200
+        if httpx.get(f"{spec.llama_url}/health", timeout=2.0).status_code != 200:
+            return False
     except Exception:
         return False
+    served = _served_model_ids(spec.llama_url)
+    if not served:
+        return True
+    gguf = getattr(spec, "gguf", "") or ""
+    if not gguf:
+        # Nothing to compare against: a model with no file cannot be the
+        # thing on the port.
+        return False
+    return _normalised_model_name(gguf) in served
 
 
 def daemon_reachable(spec: ModelSpec) -> bool:
@@ -3191,13 +3258,37 @@ def _repo_of(spec: ModelSpec) -> str:
 
 
 def _gguf_architecture(path: Path) -> str | None:
-    """The architecture a GGUF declares, e.g. ``qwen35moe``."""
+    """The architecture a GGUF declares, e.g. ``qwen35moe``.
+
+    Memoised on (path, size, mtime): the architecture of a file on disk
+    does not change, and the same file used to be asked about once per
+    model in the registry. Finding a model's family projector asks about
+    every other model, so a registry of thirty-odd models was reading the
+    same header a thousand times over - and `toki model use` (and so the
+    launcher, and so every harness it starts) waited for all of it.
+    """
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return None
+    key = (str(path), stat.st_size, stat.st_mtime_ns)
+    if key in _ARCH_CACHE:
+        return _ARCH_CACHE[key]
+    arch: str | None = None
     try:
         from ..ggufmeta import read_gguf_kind
 
-        return read_gguf_kind(path).architecture
+        arch = read_gguf_kind(path).architecture
     except Exception:
-        return None
+        arch = None
+    _ARCH_CACHE[key] = arch
+    return arch
+
+
+#: Architecture lookups, keyed by (path, size, mtime). A file on disk does
+#: not change its architecture, and the registry asks about the same file
+#: once per model in it.
+_ARCH_CACHE: dict[tuple[str, int, int], str | None] = {}
 
 
 def _family_projector(spec: ModelSpec, specs: list[ModelSpec]) -> str:

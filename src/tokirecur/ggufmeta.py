@@ -11,6 +11,7 @@ unreadable so callers can fall back gracefully.
 
 from __future__ import annotations
 
+import os
 import struct
 from dataclasses import dataclass
 from pathlib import Path
@@ -82,8 +83,57 @@ def _read_value(fh, vtype: int):
     raise struct.error(f"unknown value type {vtype}")
 
 
+def _cache_key(path: Path | str) -> tuple[str, int, int] | None:
+    """A key for a file's contents that changes when the file does.
+
+    A GGUF's header is read over and over: the fit planner reads it for
+    every model to work out the KV cache, the kind reader reads it to
+    find the architecture, and the config writers ask for the fit of
+    every model in the registry, once per client. None of that changes
+    while the file does not.
+    """
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (str(path), st.st_size, st.st_mtime_ns)
+
+
+#: Parsed header metadata, keyed by (path, size, mtime).
+_META_CACHE: dict[tuple[str, int, int], GgufMeta] = {}
+_KIND_CACHE: dict[tuple[str, int, int], GgufKind] = {}
+_TENSOR_CACHE: dict[tuple[str, int, int], list[str]] = {}
+
+
 def read_gguf_meta(path: Path | str) -> GgufMeta:
     """Read the metadata we need from a GGUF header, or all-``None``."""
+    key = _cache_key(path)
+    if key is not None:
+        cached = _META_CACHE.get(key)
+        if cached is not None:
+            return cached
+    result = _read_gguf_meta(path)
+    if key is not None:
+        _META_CACHE[key] = result
+    return result
+
+
+#: The metadata this module actually needs, matched on the tail of the
+#: key so the architecture prefix need not be known in advance. Every
+#: other key is skipped rather than read: the tokenizer alone is a
+#: hundred thousand strings, and building them all to look at six
+#: numbers is what made the first read of a model take half a second.
+_META_SUFFIXES = (
+    ".embedding_length",
+    ".block_count",
+    ".attention.head_count",
+    ".attention.head_count_kv",
+    ".context_length",
+    ".max_position_embeddings",
+)
+
+
+def _read_gguf_meta(path: Path | str) -> GgufMeta:
     try:
         with open(path, "rb") as fh:
             if fh.read(4) != _MAGIC:
@@ -94,13 +144,18 @@ def read_gguf_meta(path: Path | str) -> GgufMeta:
             kv_count = _read_bytes(fh, tensor_fmt)
             arch: str | None = None
             meta: dict[str, object] = {}
+            size = os.fstat(fh.fileno()).st_size
             for _ in range(kv_count):
                 key = _read_string(fh)
                 vtype = _read_bytes(fh, "<I")
-                value = _read_value(fh, vtype)
                 if key == "general.architecture":
+                    value = _read_value(fh, vtype)
                     arch = str(value) if isinstance(value, str) else None
-                meta[key] = value
+                elif key.endswith(_META_SUFFIXES):
+                    value = _read_value(fh, vtype)
+                    meta[key] = value
+                else:
+                    _skip_value(fh, vtype, size)
             # Metadata keys are architecture-prefixed (e.g. `qwen2.*`,
             # `llama.*`, `qwen35.*`); fall back to `llama.*` when the
             # architecture key is missing.
@@ -151,8 +206,14 @@ class GgufKind:
 _FIXED_SKIP = {0: 1, 1: 1, 2: 2, 3: 2, 4: 4, 5: 4, 6: 4, 7: 1, 10: 8, 11: 8, 12: 8}
 
 
-def _skip_value(fh, vtype: int) -> None:
-    """Seek past one GGUF value without reading its payload."""
+def _skip_value(fh, vtype: int, size: int | None = None) -> None:
+    """Seek past one GGUF value without reading its payload.
+
+    ``size`` is the real length of the file. A value that claims to
+    extend past the end of it is a header this parser has lost its place
+    in, and the walk stops there rather than running a count of
+    billions against a file that has no more bytes.
+    """
     if vtype in _FIXED_SKIP:
         fh.seek(_FIXED_SKIP[vtype], 1)
     elif vtype == 8:
@@ -164,9 +225,11 @@ def _skip_value(fh, vtype: int) -> None:
             fh.seek(_FIXED_SKIP[elem] * count, 1)
         else:
             for _ in range(count):
-                _skip_value(fh, elem)
+                _skip_value(fh, elem, size)
     else:
         raise struct.error(f"unknown value type {vtype}")
+    if size is not None and fh.tell() > size:
+        raise struct.error("value extends past the end of the file")
 
 
 def read_gguf_kind(path: Path | str) -> GgufKind:
@@ -177,6 +240,18 @@ def read_gguf_kind(path: Path | str) -> GgufKind:
     only, no tensor data; unreadable or missing files yield an empty kind
     so callers fall back to their other signals instead of failing.
     """
+    key = _cache_key(path)
+    if key is not None:
+        cached = _KIND_CACHE.get(key)
+        if cached is not None:
+            return cached
+    result = _read_gguf_kind(path)
+    if key is not None:
+        _KIND_CACHE[key] = result
+    return result
+
+
+def _read_gguf_kind(path: Path | str) -> GgufKind:
     try:
         with open(path, "rb") as fh:
             if fh.read(4) != _MAGIC:
@@ -187,6 +262,7 @@ def read_gguf_kind(path: Path | str) -> GgufKind:
             kv_count = _read_bytes(fh, tensor_fmt)
             arch = None
             spec_json = None
+            size = os.fstat(fh.fileno()).st_size
             for _ in range(kv_count):
                 key = _read_string(fh)
                 vtype = _read_bytes(fh, "<I")
@@ -199,7 +275,15 @@ def read_gguf_kind(path: Path | str) -> GgufKind:
                 else:
                     # Skip without reading: tokenizer arrays run to megabytes
                     # and this runs per model on every `list` call.
-                    _skip_value(fh, vtype)
+                    _skip_value(fh, vtype, size)
+                # The only other key worth having is the audiocpp spec, and
+                # only an audiocpp file can carry one. Everything else in a
+                # header is a tokenizer array running to millions of
+                # entries, and walking to the end of one to look for a key
+                # that cannot be there is what made `toki model use` take
+                # minutes instead of milliseconds.
+                if arch is not None and arch != "audiocpp":
+                    break
     except Exception:
         return GgufKind()
     family = category = None
@@ -224,6 +308,18 @@ def read_gguf_tensors(path: Path | str) -> list[str]:
     The directory is in the header, so this costs a few kilobytes of
     reading however large the model is.
     """
+    key = _cache_key(path)
+    if key is not None:
+        cached = _TENSOR_CACHE.get(key)
+        if cached is not None:
+            return list(cached)
+    result = _read_gguf_tensors(path)
+    if key is not None:
+        _TENSOR_CACHE[key] = result
+    return list(result)
+
+
+def _read_gguf_tensors(path: Path | str) -> list[str]:
     names: list[str] = []
     try:
         with open(path, "rb") as fh:

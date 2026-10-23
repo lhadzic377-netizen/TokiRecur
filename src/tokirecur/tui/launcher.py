@@ -72,6 +72,22 @@ Screen {{
 """
 
 
+def _visible_rows(app: Any, reserve: int) -> int:
+    """How many rows a pane may use, when the app is on a screen.
+
+    The panes window their lists so the highlighted row is always visible.
+    That needs to know how tall the screen is - and a render that happens
+    before the first layout (the first frame, or a unit test driving the
+    renderer directly) has no screen yet, so it is given room for
+    everything rather than a window of nothing.
+    """
+    size = getattr(app, "size", None)
+    height = getattr(size, "height", 0) or 0
+    if height <= 0:
+        return 10_000
+    return max(3, height - reserve)
+
+
 class LauncherApp(App[dict | None]):
     """Keyboard-driven launcher: pick an app, pin a model, Enter to run."""
 
@@ -483,9 +499,19 @@ class LauncherApp(App[dict | None]):
             if self.specs:
                 self.focus_pane = "models"
         else:
-            name = self.specs[self.model_idx].name
+            if not self.specs:
+                return
+            name = self.specs[max(0, min(self.model_idx, len(self.specs) - 1))].name
             fallback = self.specs[0].name if self.specs else None
             self.pinned = name if self.pinned != name else fallback
+            missing = self._missing_file_reason(self.pinned)
+            if missing:
+                # Pinning a model whose weights are gone would leave the
+                # launcher pointing at something that cannot start.
+                self.pinned = fallback if fallback != name else None
+                self.notify(missing, timeout=5, severity="warning")
+                self._refresh += 1
+                return
             from ..ctl import set_active
 
             try:
@@ -493,6 +519,25 @@ class LauncherApp(App[dict | None]):
             except Exception as e:
                 self.notify(f"pin failed (not persisted): {e}", timeout=6, severity="warning")
         self._refresh += 1
+
+    def _missing_file_reason(self, name: str | None) -> str | None:
+        """Why this model cannot be used, or ``None`` when it can.
+
+        The registry keeps a row for a model whose weights have been
+        deleted - the file may come back, and the port assignment is
+        still its own. But the launcher must not offer it as if it were
+        there: the person pins it, launches it, and the failure they get
+        is about a port.
+        """
+        if not name:
+            return None
+        spec = next((s for s in self.specs if s.name == name), None)
+        if spec is None:
+            return None
+        gguf = getattr(spec, "gguf", "") or ""
+        if gguf and not Path(gguf).exists():
+            return f"{name}: the model file is gone ({gguf})"
+        return None
 
     async def action_launch(self) -> None:
         if self.focus_pane == "settings":
@@ -514,6 +559,10 @@ class LauncherApp(App[dict | None]):
             self.notify(f"{app.title}: {reason}", timeout=4, severity="warning")
             return
         model = self.pinned if needs_model else None
+        missing = self._missing_file_reason(model)
+        if missing:
+            self.notify(missing, timeout=6, severity="error")
+            return
         if self._on_launch is not None:
             self._launching = app.title
             self._refresh += 1
@@ -576,6 +625,12 @@ class LauncherApp(App[dict | None]):
     def _render_status(self, width: int) -> Text:
         """One-line footer: pinned model + backend dots + key hint."""
         line = Text(self._GUT, end="")
+        if self._error:
+            # The error was being computed and shown to nobody: a person
+            # with an empty registry got a launcher with no models and no
+            # explanation of why.
+            line.append(self._error, style=f"bold {art.RED}")
+            return line
         if self.pinned:
             line.append(f"● {self.pinned}", style=f"bold {art.YELLOW}")
             st = self._statuses.get(self.pinned, {})
@@ -642,8 +697,22 @@ class LauncherApp(App[dict | None]):
     def _render_models(self, width: int) -> list[Text]:
         out: list[Text] = []
         out.append(Text(self._GUT + "Select model", style=f"bold {art.YELLOW}"))
+        if not self.specs:
+            out.append(Text(self._GUT + "(no models in registry)", style="dim"))
+            return out
 
-        for i, spec in enumerate(self.specs):
+        # The picker has to fit on the screen. A registry of thirty-odd
+        # models does not - and the launcher list already windows itself
+        # for exactly this reason. A list that runs off the bottom takes
+        # the highlight with it: the person arrows down, the cursor leaves
+        # the screen, and there is nothing left to see or aim at.
+        visible = max(3, min(len(self.specs), _visible_rows(self, 5)))
+        start = max(0, min(self.model_idx - visible // 2, len(self.specs) - visible))
+        end = start + visible
+        if start:
+            out.append(Text(self._GUT + "↑ more", style="dim"))
+        for i in range(start, end):
+            spec = self.specs[i]
             st = self._statuses.get(spec.name, {})
             llama = st.get("llama", False)
             daemon = st.get("daemon", False)
@@ -659,6 +728,12 @@ class LauncherApp(App[dict | None]):
             mmproj = getattr(spec, "mmproj", "") or ""
             vision_ok = bool(mmproj) and Path(mmproj).exists()
             vision_bad = bool(mmproj) and not vision_ok
+            # A model whose file has gone is not a model. The registry
+            # keeps the row - the weights may come back - but the person
+            # has to be told, or they pin it and watch a launch fail with
+            # a message about a port.
+            gguf = getattr(spec, "gguf", "") or ""
+            gone = bool(gguf) and not Path(gguf).exists()
 
             row = Text(self._GUT, end="")
             if focus:
@@ -666,7 +741,9 @@ class LauncherApp(App[dict | None]):
                 row.append(f"{spec.name:<6}", style=f"bold {art.YELLOW}")
                 if pinned:
                     row.append(" <~ pinned", style=f"bold {art.AMBER}")
-                if vision_bad:
+                if gone:
+                    row.append(" [file missing]", style=f"bold {art.RED}")
+                elif vision_bad:
                     row.append(" [no projector]", style=f"bold {art.RED}")
                 elif vision_ok:
                     row.append(" [vision]", style=f"dim {art.AMBER}")
@@ -679,7 +756,9 @@ class LauncherApp(App[dict | None]):
                 row.append(f"{spec.name:<6}", style=art.TEXT)
                 if pinned:
                     row.append(" <~ pinned", style=f"dim {art.AMBER}")
-                if vision_bad:
+                if gone:
+                    row.append(" [file missing]", style=f"bold {art.RED}")
+                elif vision_bad:
                     row.append(" [no projector]", style=f"bold {art.RED}")
                 elif vision_ok:
                     row.append(" [vision]", style=f"dim {art.AMBER}")
@@ -694,10 +773,14 @@ class LauncherApp(App[dict | None]):
                     f"      :{spec.llama_port}/:{spec.daemon_port}  "
                     f"ctx={st.get('ctx', spec.ctx_size)}  {spec.label}"
                 )
-                if vision_bad:
+                if gone:
+                    detail += f"  — the file is gone: {gguf}"
+                elif vision_bad:
                     # The one warning worth spelling out rather than tagging.
                     detail += f"  — projector missing: {mmproj}"
                 out.append(Text(detail, style="dim"))
+        if end < len(self.specs):
+            out.append(Text(self._GUT + "↓ more", style="dim"))
         return out
 
     def _render_settings(self, width: int) -> list[Text]:
@@ -707,19 +790,27 @@ class LauncherApp(App[dict | None]):
         out.append(Text(self._GUT + "Settings", style=f"bold {art.YELLOW}"))
         rows = _settings_rows(self.specs, app=self)
         if not rows:
-            out.append(Text(self._GUT + "(no models in registry)",
-                            style="dim"))
+            out.append(Text(self._GUT + "(no models in registry)", style="dim"))
             return out
-
         last_name: str | None = None
         idx = max(0, min(self.settings_idx, len(rows) - 1))
+
+        # Every line is built first, tagged with the settings row it
+        # belongs to (or None for a model header and the blank between
+        # sections). The list is a dozen fields per model and a registry
+        # of thirty models is hundreds of lines - so the window is cut
+        # around the highlighted row afterwards, and the section header
+        # is kept in view with it. Otherwise the highlight walks off the
+        # bottom of the screen and takes the name of the model it belongs
+        # to with it.
+        lines: list[tuple[int | None, Text]] = []
         for i, (name, field, value) in enumerate(rows):
             # Insert a blank separator + name header when a new model
             # starts — keeps the list readable.
             if name != last_name:
                 if last_name is not None:
-                    out.append(Text(""))
-                out.append(Text(self._GUT + name, style=f"bold {art.YELLOW}"))
+                    lines.append((None, Text("")))
+                lines.append((None, Text(self._GUT + name, style=f"bold {art.YELLOW}")))
                 last_name = name
             indent = self._GUT + "    "
             line = Text(indent, end="")
@@ -738,7 +829,37 @@ class LauncherApp(App[dict | None]):
                 # llama-server hasn't caught up yet. Cleared by the
                 # next poll (live==reg) or the 8 s hard ceiling.
                 line.append("  ⟳ restarting", style=f"bold {art.YELLOW}")
+            lines.append((i, line))
+
+        # The window: the highlighted row, its section header, and as
+        # much around it as fits.
+        highlight = next(
+            (k for k, (row_idx, _) in enumerate(lines) if row_idx == idx), 0
+        )
+        visible = max(4, min(len(lines), _visible_rows(self, 4)))
+        start = max(0, min(highlight - visible // 2, len(lines) - visible))
+        end = min(len(lines), start + visible)
+        # Never start on a blank separator: it reads as a gap in
+        # nothing, and it pushes the section header out of view.
+        while start < highlight and lines[start][0] is None and start + 1 < len(lines):
+            start += 1
+            end = min(len(lines), end + 1)
+        # Keep the header of the section the highlight is in, when there
+        # is one just above the window.
+        if start > 0 and lines[start - 1][0] is None:
+            start -= 1
+            end = min(len(lines), end + 1)
+
+        if start:
+            out.append(Text(self._GUT + "↑ more", style="dim"))
+        # A section header whose fields are all below the fold reads as a
+        # model with no settings. Drop it: the window moves up instead.
+        while end > start + 1 and lines[end - 1][0] is None:
+            end -= 1
+        for _, line in lines[start:end]:
             out.append(line)
+        if end < len(lines):
+            out.append(Text(self._GUT + "↓ more", style="dim"))
         return out
 
     def _render_help(self) -> Text:
