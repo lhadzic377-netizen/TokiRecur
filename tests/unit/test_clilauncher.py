@@ -344,10 +344,14 @@ def test_switch_model_by_number(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(ctl, "ACTIVE_MARKER", tmp_path / "active")
 
     import yaml
+    # The weights have to exist: a model whose file is gone cannot be
+    # started, and the launcher says so rather than trying.
+    (tmp_path / "a.gguf").write_bytes(b"x")
+    (tmp_path / "b.gguf").write_bytes(b"x")
     reg.write_text(yaml.safe_dump({"models": [
-        {"name": "a", "gguf": "/tmp/a.gguf", "llama_port": 1, "daemon_port": 2,
+        {"name": "a", "gguf": str(tmp_path / "a.gguf"), "llama_port": 1, "daemon_port": 2,
          "ctx_size": 100, "max_tokens": 90, "model_id": "A-GGUF"},
-        {"name": "b", "gguf": "/tmp/b.gguf", "llama_port": 3, "daemon_port": 4,
+        {"name": "b", "gguf": str(tmp_path / "b.gguf"), "llama_port": 3, "daemon_port": 4,
          "ctx_size": 100, "max_tokens": 90, "model_id": "B-GGUF"},
     ]}))
     used = []
@@ -366,8 +370,9 @@ def test_switch_model_by_name(monkeypatch, tmp_path):
     monkeypatch.setattr(ctl, "ACTIVE_MARKER", tmp_path / "active")
 
     import yaml
+    (tmp_path / "a.gguf").write_bytes(b"x")
     reg.write_text(yaml.safe_dump({"models": [
-        {"name": "alpha", "gguf": "/tmp/a.gguf", "llama_port": 1,
+        {"name": "alpha", "gguf": str(tmp_path / "a.gguf"), "llama_port": 1,
          "daemon_port": 2, "ctx_size": 100, "max_tokens": 90, "model_id": "A"},
     ]}))
     used = []

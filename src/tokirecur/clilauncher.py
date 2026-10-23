@@ -126,6 +126,13 @@ def _status_row(spec) -> str:
     daemon = "up" if st["daemon"]["reachable"] else "down"
     gpu = _gpu_label(spec, st["llama"]["reachable"])
     row = f"llama={llama} daemon={daemon} gpu={gpu}"
+    # A model whose weights have been deleted is not a model. The registry
+    # keeps the row - the file may come back, and the port assignment is
+    # still its own - but the person has to be told, or they pick it and
+    # watch a launch fail with a message about a port.
+    if ctl.model_file_missing(spec):
+        row += " [file missing]"
+        return row
     # A vision model without its projector answers images as though it saw
     # nothing, so the row says which it is rather than leaving it a surprise.
     mmproj = getattr(spec, "mmproj", "") or ""
@@ -177,6 +184,14 @@ def switch_model() -> None:
         return
     if chosen == active:
         print(f"  {chosen} is already active.")
+        return
+    spec = next((s for s in specs if s.name == chosen), None)
+    if spec is not None and ctl.model_file_missing(spec):
+        gguf = getattr(spec, "gguf", "") or ""
+        # Say what is wrong before trying to start it. The failure from
+        # starting it is about a binary or a port, and the person has no
+        # way to guess that the weights are simply gone.
+        print(f"  error: {chosen}'s file is gone ({gguf}) — there is nothing to start.")
         return
     print(f"  starting {chosen} ...")
     try:

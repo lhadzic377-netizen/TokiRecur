@@ -3669,10 +3669,15 @@ def test_textual_launcher_marks_vision_models(env, tmp_path):
 
     proj = tmp_path / "mmproj-F16.gguf"
     proj.write_bytes(b"x")
+    # The weights have to be there: a model whose file is gone is reported
+    # as gone, and that badge would hide the vision one this test is about.
+    weights = tmp_path / "model.gguf"
+    weights.write_bytes(b"x")
 
     def spec(name, mmproj, label):
         return SimpleNamespace(
             name=name, label=label, mmproj=mmproj,
+            gguf=str(weights),
             llama_port=1, daemon_port=2, ctx_size=4096,
         )
 

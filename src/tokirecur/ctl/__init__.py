@@ -374,26 +374,60 @@ def resolve_gguf_path(spec: ModelSpec) -> Path:
     directory holds GGUFs but none match, the first one is used (best
     effort). Raises FileNotFoundError with a one-command hint.
     """
-    gguf = Path(spec.gguf)
+    gguf_text = getattr(spec, "gguf", "") or ""
+    gguf = Path(gguf_text) if gguf_text else None
     candidates: list[Path] = []
-    if gguf.is_absolute():
+    if gguf is not None and gguf.is_absolute():
         if gguf.exists():
             return gguf
         candidates.append(Path.home() / "models" / spec.name / gguf.name)
-    else:
+    elif gguf is not None:
         candidates.append(Path.home() / "models" / spec.name / gguf)
     for candidate in candidates:
         if candidate.exists():
             return candidate
     model_dir = Path.home() / "models" / spec.name
     if model_dir.is_dir():
-        fallback = sorted(model_dir.glob("*.gguf"))
+        # A projector is a GGUF too, and it lives in the same directory as
+        # the model it belongs to. When the model file has been deleted, the
+        # "first gguf here" fallback used to find the projector and hand it
+        # back as the weights - a model that loads a vision tower and calls
+        # it a language model.
+        fallback = [p for p in sorted(model_dir.glob("*.gguf")) if not _is_projector(p)]
         if fallback:
             return fallback[0]
     raise FileNotFoundError(
-        f"model file not found: {spec.gguf} — run `toki model install "
+        f"model file not found: {gguf_text or spec.name} — run `toki model install "
         "starter` (or `toki model pull <hf-repo>`), then retry"
     )
+
+
+def _is_projector(path: Path) -> bool:
+    """Whether a GGUF is a vision projector rather than a model."""
+    if path.name.lower().startswith("mmproj"):
+        return True
+    try:
+        from ..ggufmeta import read_gguf_kind
+
+        return read_gguf_kind(path).architecture == "clip"
+    except Exception:
+        return False
+
+
+def model_file_missing(spec: ModelSpec) -> bool:
+    """Whether this model's weights are on disk at all.
+
+    The registered path is not the only place they can be: a portable
+    entry names a bare file, and a model that has been moved is found by
+    name under ``~/models/<name>/``. So the question is asked of the
+    resolver, not of the string in the registry - and a model whose file
+    has merely moved is not a model that is missing.
+    """
+    try:
+        resolve_gguf_path(spec)
+    except (FileNotFoundError, OSError):
+        return True
+    return False
 
 
 def _ensure_registry() -> Path:

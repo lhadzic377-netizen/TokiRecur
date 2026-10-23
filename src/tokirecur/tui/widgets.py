@@ -17,6 +17,7 @@ All widgets are designed for live updates without flickering.
 from __future__ import annotations
 
 import time
+from datetime import datetime, timedelta
 from collections import deque
 from typing import Any
 
@@ -30,6 +31,23 @@ from textual.widgets import Static
 from .art import AMBER, YELLOW
 
 # ── ChatLog ──────────────────────────────────────────────────────────
+
+
+
+def _format_stamp(ts: float | None = None) -> str:
+    """The time to print on a line.
+
+    A replayed line carries the moment it happened, so yesterday's
+    conversation does not open looking like it happened just now. Today's
+    lines stay as a bare clock time; older ones say which day they were.
+    """
+    now = datetime.now()
+    when = datetime.fromtimestamp(ts) if ts else now
+    if when.date() == now.date():
+        return when.strftime("%H:%M:%S")
+    if when.date() == now.date() - timedelta(days=1):
+        return "yesterday " + when.strftime("%H:%M")
+    return when.strftime("%d %b %H:%M")
 
 
 class ChatLog(VerticalScroll):
@@ -80,10 +98,10 @@ class ChatLog(VerticalScroll):
         self._streaming_line_idx = None
         self._rerender()
 
-    def write_user(self, content: str) -> None:
-        ts = time.strftime("%H:%M:%S")
+    def write_user(self, content: str, *, ts: float | None = None) -> None:
+        stamp = _format_stamp(ts)
         text = Text()
-        text.append(f"[{ts}] ", style="dim")
+        text.append(f"[{stamp}] ", style="dim")
         text.append("you ", style="bold cyan")
         text.append("▸ ", style="cyan")
         text.append(content, style="white")
@@ -129,12 +147,13 @@ class ChatLog(VerticalScroll):
         tokens_generated: int = 0,
         prompt_tokens: int = 0,
         skipped_tokens: int = 0,
+        ts: float | None = None,
     ) -> None:
         """Render the final assistant line with badge + metrics."""
+        stamp = _format_stamp(ts)
         if error:
-            ts = time.strftime("%H:%M:%S")
             text = Text()
-            text.append(f"[{ts}] ", style="dim")
+            text.append(f"[{stamp}] ", style="dim")
             text.append("ai  ", style="bold red")
             text.append(f"[{mode}] ", style="red")
             text.append("▸ ", style="red")
@@ -158,9 +177,8 @@ class ChatLog(VerticalScroll):
         else:
             badge_text, badge_style = "✗ miss", "red"
 
-        ts = time.strftime("%H:%M:%S")
         text = Text()
-        text.append(f"[{ts}] ", style="dim")
+        text.append(f"[{stamp}] ", style="dim")
         text.append("ai  ", style="bold green")
         text.append(f"[{mode}] ", style="green")
         text.append(badge_text + " ", style=badge_style)

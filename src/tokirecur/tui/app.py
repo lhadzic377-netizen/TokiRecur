@@ -130,8 +130,9 @@ class TokiApp(App):
             self._history.append(m)
             role = m.get("role", "")
             content = m.get("content", "")
+            when = m.get("ts")
             if role == "user":
-                self.chat.write_user(content)
+                self.chat.write_user(content, ts=when)
             elif role == "assistant":
                 # Re-render as a finished assistant line.
                 self._message_counter += 1
@@ -143,6 +144,7 @@ class TokiApp(App):
                     total_ms=m.get("meta", {}).get("total_ms", 0),
                     tokens_generated=m.get("meta", {}).get("tokens", 0),
                     skipped_tokens=m.get("meta", {}).get("skipped", 0),
+                    ts=when,
                 )
         if loaded:
             self.chat.write_system(f"loaded {len(loaded)} messages from history", style="dim")

@@ -25,7 +25,13 @@ from textual.reactive import reactive
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, Select, Static
 
-from ..ctl import load_registry, model_status, read_client_modes, write_client_mode
+from ..ctl import (
+    load_registry,
+    model_file_missing,
+    model_status,
+    read_client_modes,
+    write_client_mode,
+)
 from ..launch_catalog import LAUNCH_APPS, configured_provider_model, unavailable_reason
 from . import _cleanup as _tui_cleanup
 from . import art
@@ -534,8 +540,8 @@ class LauncherApp(App[dict | None]):
         spec = next((s for s in self.specs if s.name == name), None)
         if spec is None:
             return None
-        gguf = getattr(spec, "gguf", "") or ""
-        if gguf and not Path(gguf).exists():
+        if model_file_missing(spec):
+            gguf = getattr(spec, "gguf", "") or ""
             return f"{name}: the model file is gone ({gguf})"
         return None
 
@@ -732,8 +738,7 @@ class LauncherApp(App[dict | None]):
             # keeps the row - the weights may come back - but the person
             # has to be told, or they pin it and watch a launch fail with
             # a message about a port.
-            gguf = getattr(spec, "gguf", "") or ""
-            gone = bool(gguf) and not Path(gguf).exists()
+            gone = model_file_missing(spec)
 
             row = Text(self._GUT, end="")
             if focus:
@@ -774,7 +779,7 @@ class LauncherApp(App[dict | None]):
                     f"ctx={st.get('ctx', spec.ctx_size)}  {spec.label}"
                 )
                 if gone:
-                    detail += f"  — the file is gone: {gguf}"
+                    detail += f"  — the file is gone: {getattr(spec, 'gguf', '')}"
                 elif vision_bad:
                     # The one warning worth spelling out rather than tagging.
                     detail += f"  — projector missing: {mmproj}"
