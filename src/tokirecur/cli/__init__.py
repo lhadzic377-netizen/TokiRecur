@@ -2732,20 +2732,13 @@ def main() -> int:
         return 0
     # Backward-compat: `toki --workload X --max-tokens N` is the
     # default-benchmark shortcut. Detect flags and route accordingly.
-    if sys.argv[1] not in _SUBCOMMANDS and sys.argv[1].startswith("-"):
+    if sys.argv[1] not in cli.commands and sys.argv[1].startswith("-"):
         return run_default_benchmark()
-    if sys.argv[1] not in _SUBCOMMANDS:
+    if sys.argv[1] not in cli.commands:
         # Truly unknown subcommand — show help.
         click.echo(cli.get_help(click.Context(cli)))
         return 0 if sys.argv[1] in ("--help", "-h") else 2
     return cli(obj={})
-
-
-_SUBCOMMANDS = {
-    "bench", "doctor", "down", "evict", "hardware", "interactive",
-    "serve", "stats", "status", "up", "shell",
-    "diff", "web", "dashboard", "tui", "model", "service",
-}
 
 
 def run_default_benchmark() -> int:
