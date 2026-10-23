@@ -36,8 +36,11 @@ def test_chat_hermes_interactive():
 
 
 def test_chat_opencode_opens_tui_with_model():
+    """No model flag: this build of opencode has no -m, and a flag it does
+    not know makes it print its help and exit instead of starting. The
+    model is in the config, which the launch writes."""
     plan = launch_cmd("chat", "opencode", spec())
-    assert plan["argv"] == ["opencode", "-m", "tokirecur-laguna/laguna-s-2.1"]
+    assert plan["argv"] == ["opencode"]
     assert not plan["detach"]
 
 
@@ -60,7 +63,7 @@ def test_chat_toki_uses_model_urls(monkeypatch):
 
 def test_tui_opencode_preselects_model():
     plan = launch_cmd("tui", "opencode", spec())
-    assert plan["argv"] == ["opencode", "-m", "tokirecur-laguna/laguna-s-2.1"]
+    assert plan["argv"] == ["opencode"]
     assert not plan["detach"]
 
 

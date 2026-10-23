@@ -258,7 +258,11 @@ def launch_cmd(interface: str, client: str, spec: Any | None) -> dict:
             argv = ["toki", "tui", "--raw-url", llama_url, "--daemon-url", daemon_url]
             return {"argv": argv, "detach": False, "url": None, "env": env}
         if client == "opencode":
-            return {"argv": ["opencode", "-m", model_ref], "detach": False,
+            # No model flag: this build of opencode has no -m/--model, and
+            # passing one it does not know makes it print its help and exit
+            # instead of starting. The model comes from the config, which
+            # was just written with the same reference.
+            return {"argv": ["opencode"], "detach": False,
                     "url": None, "env": env}
         if client == "mimo":
             return {"argv": ["mimo", "-m", model_ref], "detach": False,

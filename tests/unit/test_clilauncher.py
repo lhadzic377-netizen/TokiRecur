@@ -203,9 +203,9 @@ def test_launch_agent_uses_selector_launch_cmd(monkeypatch, capsys):
     )
 
     cl._launch_agent("opencode")
-    assert captured["argv"] == [
-        r"C:\bin\opencode.exe", "-m", "tokirecur-qwen3/Qwen3-8B-GGUF",
-    ]
+    # No -m: this build of opencode has no such flag, and one it does not
+    # know makes it print its help and exit instead of starting.
+    assert captured["argv"] == [r"C:\bin\opencode.exe"]
     assert captured["env"] == os.environ
 
 
@@ -309,8 +309,7 @@ def test_agent_launch_cmd_wrapper(monkeypatch, capsys):
 
     monkeypatch.setattr(cl.subprocess, "Popen", fake_popen)
     cl._launch_agent("opencode")
-    assert captured["argv"] == ["cmd.exe", "/c", r"C:\npm\opencode.cmd", "-m",
-                                "tokirecur-qwen3/Qwen3-8B-GGUF"]
+    assert captured["argv"] == ["cmd.exe", "/c", r"C:\npm\opencode.cmd"]
     assert "pid 4242" in capsys.readouterr().out
 
 
