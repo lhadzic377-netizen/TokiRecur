@@ -69,8 +69,13 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  // Every reveal on the page, not just the ones a selector happened to
+  // mention: a section heading that waits for a rule that forgot it is
+  // a heading nobody ever sees.
+  const reveals = document.querySelectorAll(".reveal");
+
   if (!("IntersectionObserver" in window)) {
-    groups.forEach((el) => el.classList.add("in-view"));
+    reveals.forEach((el) => el.classList.add("in-view"));
     return;
   }
   const io = new IntersectionObserver(
@@ -84,5 +89,75 @@ document.addEventListener("DOMContentLoaded", () => {
     },
     { threshold: 0.05 }
   );
-  groups.forEach((el) => io.observe(el));
+  reveals.forEach((el) => io.observe(el));
+});
+
+/* ---------------------------------------------------------------------------
+   The two bits of motion that are not reveals: the nav knows where you are,
+   and the numbers count up once, when they first come into view.
+   --------------------------------------------------------------------------- */
+
+document.addEventListener("DOMContentLoaded", () => {
+  const navLinks = Array.from(
+    document.querySelectorAll("#nav-links a[href^='#']")
+  ).filter((a) => a.getAttribute("href").length > 1);
+
+  const sections = navLinks
+    .map((a) => document.querySelector(a.getAttribute("href")))
+    .filter(Boolean);
+
+  if (sections.length && "IntersectionObserver" in window) {
+    const spy = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (!entry.isIntersecting) return;
+          navLinks.forEach((a) => {
+            a.classList.toggle(
+              "active",
+              a.getAttribute("href") === `#${entry.target.id}`
+            );
+          });
+        });
+      },
+      { rootMargin: "-45% 0px -50% 0px" }
+    );
+    sections.forEach((s) => spy.observe(s));
+  }
+
+  // "+96.2%" counts to 96.2; "0" counts to nothing but still settles.
+  const countUp = (el) => {
+    const raw = el.textContent.trim();
+    const match = raw.match(/(-?\d+(?:\.\d+)?)/);
+    if (!match) return;
+    const target = parseFloat(match[1]);
+    if (!isFinite(target) || target === 0) return;
+    const decimals = (match[1].split(".")[1] || "").length;
+    const prefix = raw.slice(0, match.index);
+    const suffix = raw.slice(match.index + match[1].length);
+    const started = performance.now();
+    const duration = 1100;
+    const tick = (now) => {
+      const p = Math.min(1, (now - started) / duration);
+      const eased = 1 - Math.pow(1 - p, 3);
+      el.textContent = `${prefix}${(target * eased).toFixed(decimals)}${suffix}`;
+      if (p < 1) requestAnimationFrame(tick);
+      else el.textContent = raw;
+    };
+    requestAnimationFrame(tick);
+  };
+
+  const numbers = document.querySelectorAll(".stats .num");
+  if (numbers.length && "IntersectionObserver" in window) {
+    const counter = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (!entry.isIntersecting) return;
+          countUp(entry.target);
+          counter.unobserve(entry.target);
+        });
+      },
+      { threshold: 0.6 }
+    );
+    numbers.forEach((n) => counter.observe(n));
+  }
 });
