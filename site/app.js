@@ -106,22 +106,35 @@ document.addEventListener("DOMContentLoaded", () => {
     .map((a) => document.querySelector(a.getAttribute("href")))
     .filter(Boolean);
 
-  if (sections.length && "IntersectionObserver" in window) {
-    const spy = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((entry) => {
-          if (!entry.isIntersecting) return;
-          navLinks.forEach((a) => {
-            a.classList.toggle(
-              "active",
-              a.getAttribute("href") === `#${entry.target.id}`
-            );
-          });
-        });
-      },
-      { rootMargin: "-45% 0px -50% 0px" }
-    );
-    sections.forEach((s) => spy.observe(s));
+  if (sections.length) {
+    // The indicator follows the section you are actually in. An observer
+    // fires on the edge of a section, so it lit "Architecture" while the
+    // cards were on screen.
+    const pick = () => {
+      const line = window.scrollY + window.innerHeight * 0.4;
+      let active = null;
+      for (const s of sections) {
+        if (s.offsetTop <= line) active = s;
+        else break;
+      }
+      navLinks.forEach((a) => {
+        a.classList.toggle(
+          "active",
+          Boolean(active) && a.getAttribute("href") === `#${active.id}`
+        );
+      });
+    };
+    pick();
+    window.addEventListener("scroll", pick, { passive: true });
+  }
+
+  // The bar is a floating layer: it only grows a shadow once content is
+  // actually passing under it.
+  const topbar = document.querySelector(".topbar");
+  if (topbar) {
+    const mark = () => topbar.classList.toggle("scrolled", window.scrollY > 8);
+    mark();
+    window.addEventListener("scroll", mark, { passive: true });
   }
 
   // "+96.2%" counts to 96.2; "0" counts to nothing but still settles.
