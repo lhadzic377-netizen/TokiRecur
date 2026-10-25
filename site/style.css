@@ -32,12 +32,12 @@
   --cream: #f4ecdc;
 
   /* type */
-  --sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --sans: "Geist", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
 
-  --step--1: clamp(0.78rem, 0.76rem + 0.1vw, 0.84rem);
-  --step-0: clamp(0.95rem, 0.92rem + 0.15vw, 1.02rem);
-  --step-1: clamp(1.1rem, 1.04rem + 0.3vw, 1.3rem);
+  --step--1: clamp(0.8rem, 0.78rem + 0.1vw, 0.88rem);
+  --step-0: clamp(1rem, 0.97rem + 0.16vw, 1.08rem);
+  --step-1: clamp(1.15rem, 1.08rem + 0.34vw, 1.38rem);
   --step-2: clamp(1.45rem, 1.3rem + 0.7vw, 1.9rem);
   --step-3: clamp(2rem, 1.7rem + 1.4vw, 2.9rem);
   --step-4: clamp(2.6rem, 1.9rem + 3.1vw, 4.6rem);
@@ -47,12 +47,12 @@
   --s2: 8px;
   --s3: 12px;
   --s4: 16px;
-  --s5: 24px;
-  --s6: 32px;
-  --s7: 48px;
-  --s8: 64px;
-  --s9: 96px;
-  --s10: 144px;
+  --s5: 28px;
+  --s6: 40px;
+  --s7: 56px;
+  --s8: 80px;
+  --s9: 112px;
+  --s10: 160px;
 
   --radius: 14px;
   --radius-lg: 22px;
@@ -81,7 +81,7 @@ body {
   color: var(--fg);
   font-family: var(--sans);
   font-size: var(--step-0);
-  line-height: 1.65;
+  line-height: 1.7;
   letter-spacing: -0.006em;
   font-optical-sizing: auto;
   -webkit-font-smoothing: antialiased;
@@ -159,16 +159,16 @@ p {
 .section-sub {
   color: var(--fg-dim);
   max-width: 62ch;
-  margin: var(--s4) 0 var(--s8);
+  margin: var(--s5) 0 var(--s9);
   font-size: var(--step-1);
-  line-height: 1.55;
+  line-height: 1.62;
 }
 
 .note {
   color: var(--muted);
-  font-size: var(--step--1);
-  line-height: 1.7;
-  max-width: 70ch;
+  font-size: 0.9rem;
+  line-height: 1.75;
+  max-width: 72ch;
 }
 
 /* --- topbar --------------------------------------------------------------- */
@@ -319,8 +319,17 @@ section > h2 + .section-sub { margin-top: var(--s4); }
 
 .hero {
   position: relative;
+  /* The glow is drawn, not photographed. A JPEG with a hard right edge shows
+     the moment the viewport moves, and it tints the headline's yellow into
+     an orange gradient nobody chose. */
+  background: radial-gradient(
+    62% 58% at 84% 14%,
+    rgba(255, 214, 10, 0.11),
+    rgba(255, 214, 10, 0.035) 52%,
+    transparent 78%
+  );
   display: grid;
-  grid-template-columns: minmax(0, 1.18fr) minmax(0, 0.82fr);
+  grid-template-columns: minmax(0, 1.14fr) minmax(0, 0.86fr);
   gap: clamp(28px, 5vw, 72px);
   align-items: center;
   padding-top: clamp(56px, 9vw, 120px) !important;
@@ -328,34 +337,18 @@ section > h2 + .section-sub { margin-top: var(--s4); }
   overflow: hidden;
 }
 
-.hero-glow {
-  position: absolute;
-  z-index: -1;
-  top: -14%;
-  right: -20%;
-  width: 74%;
-  max-width: 860px;
-  aspect-ratio: 1.46;
-  object-fit: cover;
-  opacity: 0.34;
-  filter: brightness(0.52) saturate(1.25);
-  mix-blend-mode: screen;
-  -webkit-mask-image: radial-gradient(58% 58% at 55% 45%, #000 12%, transparent 72%);
-  mask-image: radial-gradient(58% 58% at 55% 45%, #000 12%, transparent 72%);
-  pointer-events: none;
-}
-
 .hero h1 {
-  font-size: clamp(2.45rem, 1.5rem + 2.9vw, 3.7rem);
-  letter-spacing: -0.04em;
+  font-size: clamp(2.3rem, 1.55rem + 2.35vw, 3.3rem);
+  letter-spacing: -0.042em;
+  line-height: 1.04;
   margin: 0 0 var(--s5);
 }
 
 .hero .lede {
   color: var(--fg-dim);
   font-size: var(--step-1);
-  line-height: 1.6;
-  max-width: 56ch;
+  line-height: 1.62;
+  max-width: 44ch;
   margin-bottom: var(--s6);
 }
 
@@ -365,44 +358,71 @@ section > h2 + .section-sub { margin-top: var(--s4); }
   grid-column: 1 / -1;
 }
 
-/* the visual half: the real 3D mark over the reuse loop */
-
-.hero-visual {
+/* The hero shows the product, not a logo of it: the real launcher, in a
+   window frame, because that is what a person is about to run. */
+.terminal {
   position: relative;
-  display: grid;
-  place-items: center;
-  min-height: 420px;
+  margin: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-lg);
+  background: #0b0b0c;
+  overflow: hidden;
+  box-shadow: var(--shadow-lift);
 }
 
-.hero-mark {
-  position: absolute;
-  top: 38%;
-  left: 50%;
-  width: min(62%, 268px);
-  transform: translate(-50%, -54%);
-  filter: drop-shadow(0 26px 46px rgba(0, 0, 0, 0.75));
-  animation: mark-float 9s var(--ease) infinite;
+.terminal-bar {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.022);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.05em;
+  color: var(--muted);
 }
 
-@keyframes mark-float {
-  0%, 100% { transform: translate(-50%, -54%); }
-  50% { transform: translate(-50%, -58%); }
+.terminal-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--brand);
+  box-shadow: 0 0 10px rgba(255, 214, 10, 0.55);
 }
 
+.terminal img {
+  width: 100%;
+  height: auto;
+}
+
+/* --- the reuse diagram ---------------------------------------------------- */
+
+/* The one picture that explains the product: a prompt is computed once and
+   every later request reads it back. */
 .reuse-loop {
   position: relative;
-  width: 100%;
-  max-width: 440px;
-  margin-top: auto;
-  padding: var(--s4) var(--s4) var(--s3);
+  margin: 0;
+  padding: var(--s5) var(--s5) var(--s4);
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  background: rgba(9, 11, 14, 0.93);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  background: var(--panel);
 }
 
-.reuse-loop svg { width: 100%; height: auto; overflow: visible; }
+.reuse-loop svg {
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.reuse-loop figcaption {
+  margin-top: var(--s4);
+  padding-top: var(--s4);
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.6;
+}
 
 .loop-block {
   fill: var(--panel-2);
@@ -457,8 +477,8 @@ section > h2 + .section-sub { margin-top: var(--s4); }
 .cta {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--s3);
-  margin-bottom: var(--s8);
+  gap: var(--s4);
+  margin-bottom: var(--s9);
 }
 
 .btn {
@@ -481,8 +501,22 @@ section > h2 + .section-sub { margin-top: var(--s4); }
   transition: transform 0.22s var(--ease);
 }
 
+/* The arrow is its own little island inside the button, so the label and the
+   direction read as two things instead of one crowded word. */
+.btn-icon {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  margin-right: -6px;
+  border-radius: 50%;
+  background: rgba(20, 20, 12, 0.14);
+  transition: transform 0.22s var(--ease), background 0.22s var(--ease);
+}
+
 .btn:hover { transform: translateY(-1px); }
 .btn:hover svg { transform: translateX(3px); }
+.btn.primary:hover .btn-icon { transform: translateX(2px) translateY(-1px); background: rgba(20, 20, 12, 0.2); }
 
 /* The press answers the finger: 100ms, and it is already there. */
 .btn:active,
@@ -495,11 +529,11 @@ section > h2 + .section-sub { margin-top: var(--s4); }
 .btn.primary {
   background: var(--brand);
   color: var(--brand-ink);
-  box-shadow: 0 10px 30px -14px rgba(255, 214, 10, 0.85);
+  box-shadow: 0 10px 26px -18px rgba(255, 214, 10, 0.6);
 }
 
 .btn.primary:hover {
-  box-shadow: 0 16px 38px -14px rgba(255, 214, 10, 0.95);
+  box-shadow: 0 14px 30px -18px rgba(255, 214, 10, 0.7);
 }
 
 .btn.ghost {
@@ -518,8 +552,8 @@ section > h2 + .section-sub { margin-top: var(--s4); }
 .stats {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: var(--s5);
-  padding-top: var(--s6);
+  gap: var(--s6);
+  padding-top: var(--s7);
   border-top: 1px solid var(--line);
 }
 
@@ -534,9 +568,9 @@ section > h2 + .section-sub { margin-top: var(--s4); }
 
 .stat .label {
   color: var(--muted);
-  font-size: 0.86rem;
-  line-height: 1.5;
-  margin-top: var(--s2);
+  font-size: 0.9rem;
+  line-height: 1.55;
+  margin-top: var(--s3);
 }
 
 /* --- video ---------------------------------------------------------------- */
@@ -550,6 +584,80 @@ section > h2 + .section-sub { margin-top: var(--s4); }
   box-shadow: var(--shadow-lift);
 }
 
+/* The video is a poster until somebody asks for it. An empty grey box
+   reads as a broken page, and nobody should wait on YouTube to read the
+   page around it. */
+.video-poster {
+  position: relative;
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: var(--bg-2);
+  cursor: pointer;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+}
+
+.video-poster img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0.72;
+  transition: opacity 0.35s var(--ease), transform 0.7s var(--ease);
+}
+
+.video-poster:hover img {
+  opacity: 0.95;
+  transform: scale(1.02);
+}
+
+.video-poster:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: -4px;
+}
+
+.video-play {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 78px;
+  height: 78px;
+  border-radius: 50%;
+  background: var(--brand);
+  color: var(--brand-ink);
+  display: grid;
+  place-items: center;
+  box-shadow: 0 20px 60px -18px rgba(0, 0, 0, 0.95);
+  transition: transform 0.25s var(--ease);
+}
+
+.video-play svg {
+  width: 30px;
+  height: 30px;
+  margin-left: 4px;
+}
+
+.video-poster:hover .video-play {
+  transform: translate(-50%, -50%) scale(1.07);
+}
+
+.video-note {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: var(--s6) var(--s5) var(--s4);
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+  text-align: left;
+  background: linear-gradient(180deg, transparent, rgba(8, 9, 11, 0.88));
+}
+
 .video-wrap iframe {
   width: 100%;
   aspect-ratio: 16 / 9;
@@ -557,84 +665,82 @@ section > h2 + .section-sub { margin-top: var(--s4); }
   display: block;
 }
 
-/* --- cards ---------------------------------------------------------------- */
+/* --- what ships ---------------------------------------------------------- */
 
-.cards-grid {
+/* Six peers, one list. Boxes would say "these six are the same kind of
+   thing", which is true, but six boxes in three columns is the shape every
+   landing page reaches for. A hairline and a number say the same thing
+   with less noise, and the page keeps a line of sight to the next section. */
+.feature-grid {
+  list-style: none;
+  margin: var(--s7) 0 0;
+  padding: 0;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--s5);
-  margin-top: var(--s7);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: clamp(28px, 5vw, 64px);
 }
+
+.feature {
+  padding: var(--s6) 0;
+  border-top: 1px solid var(--line);
+}
+
+.feature-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  margin-bottom: var(--s4);
+  color: var(--brand);
+}
+
+.feature-icon svg {
+  width: 26px;
+  height: 26px;
+}
+
+.feature h3 {
+  font-size: var(--step-1);
+  letter-spacing: -0.02em;
+  margin-bottom: var(--s2);
+}
+
+.feature p {
+  color: var(--fg-dim);
+  font-size: 0.98rem;
+  line-height: 1.62;
+  max-width: 46ch;
+}
+
+/* --- cards (pricing) ----------------------------------------------------- */
 
 .card {
   position: relative;
   display: flex;
   flex-direction: column;
-  padding: var(--s6);
+  padding: var(--s6) var(--s6) var(--s7);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: linear-gradient(180deg, var(--panel) 0%, rgba(17, 20, 24, 0.35) 100%);
-  transition: border-color 0.24s var(--ease), transform 0.24s var(--ease),
-    box-shadow 0.24s var(--ease);
-}
-
-.card::before {
-  content: "";
-  position: absolute;
-  inset: -1px -1px auto -1px;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, var(--brand), transparent);
-  opacity: 0;
-  transition: opacity 0.24s var(--ease);
 }
 
 .card:hover {
   border-color: var(--brand-line);
-  transform: translateY(-3px);
-  box-shadow: var(--shadow-lift);
-}
-
-.card:active {
-  transform: translateY(-1px) scale(0.995);
-  transition-duration: 100ms;
-}
-
-.card:hover::before { opacity: 1; }
-
-.card .icon {
-  width: 40px;
-  height: 40px;
-  display: grid;
-  place-items: center;
-  border-radius: 11px;
-  border: 1px solid var(--line-strong);
-  background: var(--brand-soft);
-  color: var(--brand);
-  margin-bottom: var(--s5);
-}
-
-.card .icon svg {
-  width: 19px;
-  height: 19px;
-}
-
-.card h3 {
-  font-size: var(--step-1);
-  margin-bottom: var(--s3);
-  letter-spacing: -0.02em;
-}
-
-.card p {
-  color: var(--fg-dim);
-  font-size: 0.95rem;
-  line-height: 1.6;
 }
 
 /* --- steps ---------------------------------------------------------------- */
 
+.how-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0.86fr);
+  gap: clamp(28px, 5vw, 64px);
+  align-items: start;
+  margin-top: var(--s7);
+}
+
 ol.steps {
   list-style: none;
-  margin: var(--s7) 0 0;
+  margin: 0;
   padding: 0;
   display: grid;
   gap: var(--s5);
@@ -642,12 +748,10 @@ ol.steps {
 
 ol.steps > li {
   display: grid;
-  grid-template-columns: 44px minmax(0, 1fr);
+  grid-template-columns: 48px minmax(0, 1fr);
   gap: var(--s5);
-  padding: var(--s6);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--panel);
+  padding: var(--s6) 0;
+  border-top: 1px solid var(--line);
   color: var(--fg-dim);
   font-size: 0.97rem;
   line-height: 1.62;
@@ -712,8 +816,9 @@ ol.steps code,
 
 .honesty-body p {
   color: var(--fg-dim);
-  margin-bottom: var(--s4);
+  margin-bottom: var(--s5);
   max-width: 62ch;
+  line-height: 1.72;
 }
 
 .honesty-body p:last-child { margin-bottom: 0; }
@@ -830,25 +935,25 @@ ol.steps code,
 table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.92rem;
+  font-size: 0.97rem;
   min-width: 640px;
 }
 
 thead th {
   text-align: left;
   font-family: var(--mono);
-  font-size: 0.74rem;
+  font-size: 0.76rem;
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--muted);
   font-weight: 500;
-  padding: var(--s4) var(--s5);
+  padding: var(--s5);
   border-bottom: 1px solid var(--line);
   background: var(--bg-2);
 }
 
 tbody td {
-  padding: var(--s4) var(--s5);
+  padding: var(--s5);
   border-bottom: 1px solid var(--line);
   color: var(--fg-dim);
   font-variant-numeric: tabular-nums;
@@ -887,8 +992,8 @@ tbody td:first-child { color: var(--fg); font-family: var(--mono); font-size: 0.
   background: var(--bg-2);
   overflow-x: auto;
   font-family: var(--mono);
-  font-size: 0.86rem;
-  line-height: 1.9;
+  font-size: 0.92rem;
+  line-height: 2;
   color: var(--fg-dim);
 }
 
@@ -904,6 +1009,13 @@ tbody td:first-child { color: var(--fg); font-family: var(--mono); font-size: 0.
 .code .c {
   color: var(--muted);
   white-space: nowrap;
+}
+
+/* A command longer than the box wraps instead of running under its own
+   comment. Two lines of shell beats a line that lies about what it says. */
+.code .cmd {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .code .copy {
@@ -1076,13 +1188,14 @@ footer {
   gap: var(--s7);
 }
 
+/* The mark on its own: a cream plate around it made the footer look like a
+   sticker on the page. */
 .footer-mark {
-  width: 148px;
-  height: auto;
-  border-radius: 10px;
-  background: var(--cream);
-  padding: 7px;
-  margin-bottom: var(--s4);
+  width: 76px;
+  height: 76px;
+  object-fit: contain;
+  margin-bottom: var(--s5);
+  filter: drop-shadow(0 12px 26px rgba(0, 0, 0, 0.6));
 }
 
 .footer-brand p {
@@ -1229,8 +1342,7 @@ footer {
 /* --- materials, restraint, and the user's settings ------------------------ */
 
 @media (prefers-reduced-transparency: reduce) {
-  .topbar,
-  .reuse-loop {
+  .topbar {
     background: var(--bg);
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
@@ -1255,8 +1367,9 @@ footer {
 /* --- responsive ----------------------------------------------------------- */
 
 @media (max-width: 1080px) {
-  .cards-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .how-grid { grid-template-columns: minmax(0, 1fr); }
+  .reuse-loop { max-width: 520px; }
 }
 
 @media (max-width: 900px) {
@@ -1295,8 +1408,15 @@ footer {
     text-align: left;
   }
 
-  .hero-visual { min-height: 320px; order: -1; }
-  .hero-mark { width: min(58%, 240px); }
+  .hero-visual { order: -1; max-width: 560px; }
+
+  /* A phone cannot show a whole terminal legibly, so it shows the part that
+     identifies it: the wordmark and the model in use. */
+  .terminal img {
+    aspect-ratio: 16 / 6;
+    object-fit: cover;
+    object-position: top center;
+  }
 
   .meet-toke,
   .honesty-body { grid-template-columns: minmax(0, 1fr); }
@@ -1308,7 +1428,7 @@ footer {
 }
 
 @media (max-width: 620px) {
-  .cards-grid { grid-template-columns: minmax(0, 1fr); }
+  .feature-grid { grid-template-columns: minmax(0, 1fr); }
   .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s4); }
   .stat .num { font-size: var(--step-1); }
   .cta .btn { flex: 1 1 100%; justify-content: center; }

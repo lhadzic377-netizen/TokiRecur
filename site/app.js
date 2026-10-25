@@ -33,8 +33,13 @@ document.addEventListener("DOMContentLoaded", () => {
     pre.appendChild(btn);
   });
 
+  // The stagger is a ripple, not a queue: without a cap the fortieth element
+  // waits four seconds for its turn, and a page that scrolls fast looks
+  // broken rather than choreographed.
   const stagger = (els, base = 0.08) =>
-    els.forEach((el, i) => el.style.setProperty("--d", `${base * i}s`));
+    els.forEach((el, i) =>
+      el.style.setProperty("--d", `${Math.min(base * i, 0.42)}s`),
+    );
 
   const hero = document.querySelectorAll(".hero .reveal");
   stagger(hero, 0.12);
@@ -69,6 +74,20 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  // The video is a poster until it is asked for.
+  document.querySelectorAll("[data-video]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const frame = document.createElement("iframe");
+      frame.src = `https://www.youtube.com/embed/${btn.dataset.video}?autoplay=1&rel=0`;
+      frame.title = "Toki Recur — see it in action";
+      frame.allow =
+        "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture";
+      frame.referrerPolicy = "strict-origin-when-cross-origin";
+      frame.allowFullscreen = true;
+      btn.replaceWith(frame);
+    });
+  });
+
   // Every reveal on the page, not just the ones a selector happened to
   // mention: a section heading that waits for a rule that forgot it is
   // a heading nobody ever sees.
@@ -81,7 +100,13 @@ document.addEventListener("DOMContentLoaded", () => {
   const io = new IntersectionObserver(
     (entries) => {
       entries.forEach((entry) => {
-        if (entry.isIntersecting) {
+        // Anything at or above the fold is revealed, even when the observer
+        // says it is not intersecting: a jump to an anchor, a restored scroll
+        // position, or a page that loads halfway down leaves those elements
+        // behind the viewport, and a heading nobody can see is a heading
+        // that does not exist.
+        const past = entry.boundingClientRect.top < window.innerHeight;
+        if (entry.isIntersecting || past) {
           entry.target.classList.add("in-view");
           io.unobserve(entry.target);
         }
