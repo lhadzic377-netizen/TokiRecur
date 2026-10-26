@@ -14,7 +14,35 @@ from tokirecur.core.recycling import RecyclingEngine, RecyclingResult
 from tokirecur.index import Index
 
 
-def _client(tmp_path, monkeypatch, observed):
+def _registry(tmp_path, efforts: str = ""):
+    """A registry with one model, declaring the given effort levels."""
+    path = tmp_path / "models.yaml"
+    path.write_text(
+        "models:\n"
+        "- name: served\n"
+        "  gguf: /models/served.gguf\n"
+        "  llama_port: 8090\n"
+        "  daemon_port: 8790\n"
+        "  ctx_size: 200000\n"
+        "  parallel: 1\n"
+        "  kv: f16\n"
+        "  max_tokens: 100000\n"
+        "  model_id: served\n"
+        + (f"  reasoning_efforts: [{efforts}]\n" if efforts else "")
+    )
+    return path
+
+
+def _client(tmp_path, monkeypatch, observed, efforts: str = ""):
+    monkeypatch.setattr(
+        "tokirecur.ctl.DEFAULT_REGISTRY", _registry(tmp_path, efforts),
+        raising=False,
+    )
+    # The active model is what the daemon falls back to when the backend
+    # has not said which model it serves.
+    marker = tmp_path / "active-model"
+    marker.write_text("served\n")
+    monkeypatch.setattr("tokirecur.ctl.ACTIVE_MARKER", marker, raising=False)
     backend = LlamaServerBackend(base_url="http://llama.invalid")
     index = Index()
     app = create_app(
@@ -40,7 +68,7 @@ def _client(tmp_path, monkeypatch, observed):
 
 def _post(client, **extra):
     payload = {
-        "model": "test", "messages": [{"role": "user", "content": "hi"}],
+        "model": "served", "messages": [{"role": "user", "content": "hi"}],
     }
     payload.update(extra)
     return client.post("/v1/chat/completions", json=payload)
@@ -83,6 +111,19 @@ def test_an_unknown_effort_is_ignored(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch, observed)
     _post(client, reasoning_effort="enormous")
     assert observed["effort"] is None
+
+
+def test_a_level_the_model_refuses_is_dropped(tmp_path, monkeypatch):
+    """Qwen3.8 raises on "max": the level comes back a 500, not an
+    answer. The daemon checks the model's own list first, so the model's
+    setting stands instead of the request failing."""
+    observed: dict = {}
+    client = _client(tmp_path, monkeypatch, observed, efforts="none,low,medium")
+    _post(client, reasoning_effort="max")
+    assert observed["effort"] is None
+
+    _post(client, reasoning_effort="medium")
+    assert observed["effort"] == "medium"
 
 
 @pytest.mark.parametrize("level", ["low", "medium", "high", "xhigh", "max"])

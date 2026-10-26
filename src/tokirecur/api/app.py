@@ -430,19 +430,50 @@ def _resolve_effort(
         from ..ctl import EFFORT_LEVELS, load_registry, resolve_model_id
     except Exception:
         return None
-    if requested:
-        wanted = requested.strip().lower()
-        return wanted if wanted in EFFORT_LEVELS else None
     try:
         specs = load_registry()
     except Exception:
         return None
+    if not served:
+        # The backend has not answered yet, or is not reachable. The
+        # active model is the next best answer to "which model is this".
+        try:
+            from ..ctl import read_active
+            served = read_active()
+        except Exception:
+            served = None
+    if requested:
+        wanted = requested.strip().lower()
+        if wanted not in EFFORT_LEVELS:
+            return None
+        # The model may not take every level: Qwen3.8 raises on "max",
+        # and a level its template refuses is a 500, not a default. The
+        # model's own setting stands instead.
+        served_spec = _served_spec(specs, served)
+        levels = getattr(served_spec, "reasoning_efforts", None) or []
+        if levels and wanted not in levels:
+            return None
+        return wanted
     spec, effort = resolve_model_id(specs, model_id)
     if spec is None or effort is None:
         return None
     if served and not _same_model(spec, served):
         return None
     return effort
+
+
+def _served_spec(specs: list[Any], served: str | None) -> Any:
+    """The registry spec for the model the daemon is serving."""
+    if not served:
+        return None
+    wanted = served.strip().lower()
+    for spec in specs:
+        if wanted in {
+            str(getattr(spec, "model_id", "")).strip().lower(),
+            str(getattr(spec, "name", "")).strip().lower(),
+        }:
+            return spec
+    return None
 
 
 def _same_model(spec: Any, served: str) -> bool:
