@@ -13,7 +13,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300..700&family=Geist+Mono:wght@400..600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/style.css?v=61">
+<link rel="stylesheet" href="/style.css?v=65">
 <script>document.documentElement.classList.add('js-ready');</script>
 </head>
 <body>
@@ -73,12 +73,12 @@
 
   <section class="app-demo" id="demo">
     <div class="demo-head">
-      <p class="kicker reveal"><span class="accent">Try it</span> &middot; a simulated session</p>
+      <p class="kicker reveal"><span class="accent">Try it</span> &middot; the launcher, live</p>
       <h2 class="reveal">The whole thing, in this tab.</h2>
       <p class="reveal">
-        The launcher, the chat, the settings, the model list &mdash; the interface as it ships, running on
-        canned answers in your browser. Open the chat, then send the same message twice: the second turn
-        comes back from the cache, because that is the product.
+        The launcher, the settings, the model list &mdash; the interface as it ships, with the app's own
+        values. Press <kbd>s</kbd> for the settings, <kbd>&rarr;</kbd> for the model list, and change a
+        field to watch it say the server has to restart.
       </p>
     </div>
     <figure class="demo-terminal reveal terminal">
@@ -91,8 +91,16 @@
       </figcaption>
       <div class="tui" data-tui></div>
       <noscript>
-        <img src="/img/tui-chat.png" alt="The toki chat: a transcript with reasoning and cache timings, the model and daemon status, and live, session and precision panels" width="1400" height="859" loading="lazy">
+        <img src="/img/tui-launcher.png?v=3" alt="The toki terminal launcher: the TOKI wordmark, the model in use, and the agents it can start" width="620" height="550" loading="lazy">
       </noscript>
+    </figure>
+    <figure class="demo-real reveal">
+      <img src="/img/tui-chat-live.png?v=1" alt="The toki chat in a terminal: a transcript with cache hits, reused tokens and timings, the model and daemon status on the left, live and session metrics on the right" width="1400" height="859" loading="lazy">
+      <figcaption>
+        The chat is the one screen we do not fake. This is the app, in a terminal: a real session, the
+        prefix read back out of the cache, the timings the daemon reported.
+        <span class="swipe">Swipe to read it.</span>
+      </figcaption>
     </figure>
   </section>
 
@@ -487,6 +495,6 @@
 </footer>
 
 <script src="/app.js?v=15" defer></script>
-<script src="/tui.js?v=32" defer></script>
+<script src="/tui.js?v=33" defer></script>
 </body>
 </html>
