@@ -533,6 +533,7 @@ class LlamaServerBackend(LlamaBackend):
         temperature: float = 0.0,
         cache_prompt: bool = True,
         chat_template_kwargs: dict | None = None,
+        reasoning_effort: str | None = None,
         tools: list | None = None,
         tool_choice: str | dict | None = None,
         sampling: dict | None = None,
@@ -582,6 +583,12 @@ class LlamaServerBackend(LlamaBackend):
                 payload["tool_choice"] = tool_choice
         if chat_template_kwargs:
             payload["chat_template_kwargs"] = chat_template_kwargs
+        if reasoning_effort:
+            # llama-server reads this field itself and hands it to the chat
+            # template, so the model steers its own reasoning depth. Sending
+            # it the way llama-server expects is the whole point: the
+            # template decides what "high" means for its family.
+            payload["reasoning_effort"] = reasoning_effort
         started = time.perf_counter()
         r = self._client.post(
             f"{self.base_url}/v1/chat/completions",
@@ -594,6 +601,7 @@ class LlamaServerBackend(LlamaBackend):
         timings = body.get("timings", {}) or {}
         # OpenAI response shape: {"choices": [{"message": {"content": "..."}}]}
         text = ""
+        reasoning = ""
         tool_calls = None
         finish_reason = None
         choices = body.get("choices") or []
@@ -601,6 +609,10 @@ class LlamaServerBackend(LlamaBackend):
             choice = choices[0] or {}
             msg = choice.get("message") or {}
             text = msg.get("content", "") or ""
+            # llama-server puts the thinking here when the reasoning format
+            # asks for it. Without this the effort is invisible: the model
+            # thinks, spends the tokens, and says nothing about it.
+            reasoning = msg.get("reasoning_content", "") or ""
             tool_calls = msg.get("tool_calls")
             finish_reason = choice.get("finish_reason")
         # OpenAI response shape: {"choices": [{"message": {"content": "..."}}],
@@ -610,6 +622,7 @@ class LlamaServerBackend(LlamaBackend):
         usage = body.get("usage") or {}
         return {
             "text": text,
+            "reasoning": reasoning,
             "tool_calls": tool_calls,
             "finish_reason": finish_reason,
             "tokens_generated": int(
@@ -639,6 +652,7 @@ class LlamaServerBackend(LlamaBackend):
         temperature: float = 0.0,
         cache_prompt: bool = True,
         chat_template_kwargs: dict | None = None,
+        reasoning_effort: str | None = None,
         tools: list | None = None,
         tool_choice: str | dict | None = None,
         sampling: dict | None = None,
@@ -676,6 +690,8 @@ class LlamaServerBackend(LlamaBackend):
                 payload["tool_choice"] = tool_choice
         if chat_template_kwargs:
             payload["chat_template_kwargs"] = chat_template_kwargs
+        if reasoning_effort:
+            payload["reasoning_effort"] = reasoning_effort
         started = time.perf_counter()
         first_token_at: float | None = None
         text_parts: list[str] = []

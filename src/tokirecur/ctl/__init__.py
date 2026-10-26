@@ -362,6 +362,12 @@ class ModelSpec:
     # `--reasoning off` to llama-server for templates that honor it
     # (stock Qwen3.5); ignored by templates that hard-code thinking.
     reasoning: str = "auto"
+    # Reasoning effort levels this model's chat template understands
+    # ("none", "low", "medium", "high", ...). Empty (default) means the
+    # model has the on/off switch only. Each level becomes a selectable
+    # variant of the model — one server, one set of weights, one slot —
+    # so the harnesses can pick an effort by model id.
+    reasoning_efforts: list[str] = field(default_factory=list)
     # Per-model sampling overrides merged over ctl.DEFAULT_SAMPLING by
     # the daemon (threaded as TOKI_SAMPLING at spawn). Keys:
     # temperature / repeat_penalty / top_k / top_p / min_p. Empty
@@ -390,6 +396,81 @@ class ModelSpec:
 
     def state_dir(self, root: Path | None = None) -> Path:
         return (root or STATE_ROOT) / "model" / self.name
+
+
+# The effort vocabulary llama.cpp understands (--reasoning-effort, and
+# the per-request "reasoning_effort" field). "none" is thinking off.
+EFFORT_LEVELS: tuple[str, ...] = (
+    "none", "minimal", "low", "medium", "high", "xhigh", "max",
+)
+
+
+@dataclass(frozen=True)
+class ModelVariant:
+    """A model as a person picks it: the weights, plus one effort level.
+
+    The base variant (``effort is None``) is the model as configured —
+    whatever ``reasoning:`` says. The others are the same weights with
+    the reasoning steered to a level. They share the server, the slot and
+    the cache: only the rendered prompt differs.
+    """
+
+    spec: ModelSpec
+    effort: str | None = None
+
+    @property
+    def model_id(self) -> str:
+        if self.effort is None:
+            return self.spec.model_id
+        return f"{self.spec.model_id}:{self.effort}"
+
+    @property
+    def name(self) -> str:
+        if self.effort is None:
+            return self.spec.name
+        return f"{self.spec.name} · {self.effort}"
+
+    @property
+    def label(self) -> str:
+        if self.effort is None:
+            return self.spec.label
+        return f"{self.spec.label} · {self.effort}"
+
+
+def expand_variants(specs: list[ModelSpec]) -> list[ModelVariant]:
+    """Every model a person can pick: each spec, then its effort variants."""
+    out: list[ModelVariant] = []
+    for spec in specs:
+        out.append(ModelVariant(spec))
+        for effort in getattr(spec, "reasoning_efforts", None) or []:
+            out.append(ModelVariant(spec, effort))
+    return out
+
+
+def resolve_model_id(
+    specs: list[ModelSpec], model_id: str,
+) -> tuple[ModelSpec | None, str | None]:
+    """The spec and effort a requested model id names.
+
+    "qwen3.8-27b" is the model as configured; "qwen3.8-27b:high" is that
+    model with its reasoning steered. An unknown id resolves to
+    ``(None, None)`` — the caller then falls back to what it serves.
+    """
+    wanted = (model_id or "").strip()
+    if not wanted:
+        return None, None
+    for spec in specs:
+        if spec.model_id == wanted:
+            return spec, None
+    base, _, effort = wanted.rpartition(":")
+    if base and effort:
+        for spec in specs:
+            if spec.model_id != base:
+                continue
+            levels = getattr(spec, "reasoning_efforts", None) or []
+            if not levels or effort in levels:
+                return spec, effort
+    return None, None
 
 
 def resolve_gguf_path(spec: ModelSpec) -> Path:
@@ -948,6 +1029,150 @@ def get_model(name: str, registry: Path | None = None) -> ModelSpec:
     raise KeyError(f"unknown model '{name}' (see `toki model list`)")
 
 
+# The levels the app and the harnesses offer. llama.cpp's vocabulary is
+# wider ("minimal" too), but a template that honours effort usually maps
+# these six; "none" is thinking off.
+DEFAULT_EFFORT_LEVELS: tuple[str, ...] = (
+    "none", "low", "medium", "high", "xhigh", "max",
+)
+
+
+def probe_reasoning_efforts(
+    spec: ModelSpec, known: list[str] | None = None,
+) -> list[str] | None:
+    """The effort levels the model's chat template understands.
+
+    llama-server reports what its loaded template can do in ``/props``
+    (``chat_template_caps``). A template that does not understand the
+    effort variable gets none — the levels would be silently ignored,
+    and offering a choice that does nothing is worse than not offering
+    it.
+
+    ``None`` means the question could not be asked (the server is not
+    running, or is an old build): the caller leaves the registry alone
+    rather than writing a guess.
+    """
+    caps = probe_template_caps(spec)
+    if caps is None:
+        return None
+    if not caps.get("supports_reasoning_effort"):
+        return []
+    if known:
+        # The registry already knows the levels. Asking the model again
+        # costs six requests on every launch to learn the same thing.
+        return list(known)
+    return probe_reasoning_levels(spec)
+
+
+def probe_template_caps(spec: ModelSpec) -> dict[str, Any] | None:
+    """What the loaded model's chat template can do, per llama-server.
+
+    ``None`` when the server could not be asked.
+    """
+    try:
+        import httpx
+        response = httpx.get(f"{spec.llama_url}/props", timeout=5.0)
+        response.raise_for_status()
+        caps = (response.json() or {}).get("chat_template_caps") or {}
+    except Exception:
+        return None
+    return caps if isinstance(caps, dict) else None
+
+
+def probe_reasoning_levels(spec: ModelSpec) -> list[str]:
+    """The levels this model's template actually accepts.
+
+    A template that does not know a level refuses it — Qwen3.8 raises
+    on anything but xhigh, medium and low, and the request comes back a
+    500. So each level is tried once with a one-token request, and the
+    ones the model refuses are dropped. Offering a level the template
+    would refuse is a choice that fails exactly when it is picked.
+
+    "none" is always safe: it is thinking off, which the template never
+    reaches the effort for.
+    """
+    levels: list[str] = ["none"]
+    try:
+        import httpx
+    except Exception:
+        return levels
+    for level in DEFAULT_EFFORT_LEVELS:
+        if level == "none":
+            continue
+        payload = {
+            "model": "default",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 1,
+            "stream": False,
+            "reasoning_effort": level,
+        }
+        try:
+            response = httpx.post(
+                f"{spec.llama_url}/v1/chat/completions",
+                json=payload,
+                timeout=120.0,
+            )
+        except Exception:
+            continue
+        if response.status_code == 200:
+            levels.append(level)
+    return levels
+
+
+def _active_effort_path() -> Path:
+    """Where the active reasoning effort is remembered.
+
+    A sibling of the active-model marker: the effort belongs to the model
+    being served, so it lives next to the choice of model.
+    """
+    if os.environ.get("TOKI_ACTIVE_EFFORT"):
+        return Path(os.environ["TOKI_ACTIVE_EFFORT"])
+    return DEFAULT_REGISTRY.parent / "active-effort"
+
+
+def read_active_effort() -> str | None:
+    """The reasoning effort the active model is being served at."""
+    try:
+        value = _active_effort_path().read_text().strip().lower()
+    except OSError:
+        return None
+    return value if value in EFFORT_LEVELS else None
+
+
+def write_active_effort(effort: str | None) -> Path:
+    """Remember the effort the active model should be served at."""
+    path = _active_effort_path()
+    if effort is None:
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        return path
+    value = effort.strip().lower()
+    if value not in EFFORT_LEVELS:
+        raise ValueError(
+            f"unknown reasoning effort {effort!r}; "
+            f"expected one of {', '.join(EFFORT_LEVELS)}"
+        )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _atomic_write_text(path, value + "\n")
+    return path
+
+
+def active_variant(spec: ModelSpec) -> ModelVariant:
+    """The model as it is being served: at the active effort, when the
+    model understands that effort.
+
+    A model that does not declare levels has no variants, so the effort
+    does not apply to it: its own ``reasoning:`` setting stands.
+    """
+    effort = read_active_effort()
+    levels = getattr(spec, "reasoning_efforts", None) or []
+    if not effort or (levels and effort not in levels):
+        return ModelVariant(spec)
+    return ModelVariant(spec, effort)
+
+
 def read_active(registry: Path | None = None) -> str | None:
     if ACTIVE_MARKER.exists():
         name = ACTIVE_MARKER.read_text().strip()
@@ -1120,6 +1345,28 @@ def _truthy(v: str) -> bool:
     raise ValueError(f"expected true/false/yes/no/1/0, got {v!r}")
 
 
+def _effort_list(v: str) -> list[str]:
+    """Parse a comma- or space-separated list of effort levels.
+
+    Empty clears the list: a model with no levels has the on/off switch
+    only. An unknown level is refused rather than stored, because a
+    level nobody defined would be a variant that never resolves.
+    """
+    parts = [p.strip().lower() for p in v.replace(",", " ").split()]
+    parts = [p for p in parts if p]
+    unknown = [p for p in parts if p not in EFFORT_LEVELS]
+    if unknown:
+        raise ValueError(
+            f"unknown reasoning effort(s): {', '.join(unknown)}; "
+            f"expected some of {', '.join(EFFORT_LEVELS)}"
+        )
+    seen: list[str] = []
+    for p in parts:
+        if p not in seen:
+            seen.append(p)
+    return seen
+
+
 _EDITABLE_FIELDS: dict[str, Callable[[str], Any]] = {
     "gguf": str,
     "llama_port": int,
@@ -1131,6 +1378,7 @@ _EDITABLE_FIELDS: dict[str, Callable[[str], Any]] = {
     "model_id": str,
     "binary": str,
     "reasoning": str,
+    "reasoning_efforts": _effort_list,
     "always_on": _truthy,
     "boot": _truthy,
 }
@@ -3032,6 +3280,25 @@ def start_model(spec: ModelSpec, wait: bool = True) -> None:
         effective = min(real_ctx, ctx) if real_ctx else ctx
         (state / "effective_ctx.txt").write_text(str(max(_CTX_FLOOR, effective)))
 
+    # A model whose template understands effort levels gets them as
+    # variants, so the pickers and the harnesses can offer a depth. The
+    # answer comes from the running server's own report of what its
+    # template can do — a template that ignores the levels would make
+    # the choice a lie.
+    levels = probe_reasoning_efforts(spec, list(spec.reasoning_efforts or []))
+    if levels is not None and list(levels) != list(spec.reasoning_efforts):
+        try:
+            update_spec_field(spec.name, "reasoning_efforts", ",".join(levels))
+            logger.info(
+                "%s: reasoning effort levels %s",
+                spec.name, ", ".join(levels) if levels else "(none)",
+            )
+        except Exception as e:
+            logger.warning(
+                "%s: could not record the reasoning effort levels: %s",
+                spec.name, e,
+            )
+
     if not daemon_reachable(spec):
         _takeover_stale_daemon(spec)
         effective = _effective_ctx(spec)
@@ -3949,11 +4216,38 @@ def _load_jsonc(path: Path) -> dict[str, Any]:
         return value if isinstance(value, dict) else {}
 
 
+def _effort_variant_models(spec: ModelSpec) -> list[dict[str, Any]]:
+    """The effort variants of a model, in the shape the harnesses read.
+
+    A variant is the same weights with the reasoning steered: one server,
+    one slot, one cache. The effort rides in the model id, so the daemon
+    applies it — the harness only has to be able to pick an id.
+    """
+    out: list[dict[str, Any]] = []
+    for variant in expand_variants([spec]):
+        if variant.effort is None:
+            continue
+        out.append({
+            "id": variant.model_id,
+            "name": variant.label,
+            "contextWindow": _effective_ctx(spec),
+            "maxTokens": _client_output_limit(spec),
+            "input": ["text"],
+            # The effort is already in the id. Offering a per-request
+            # selector as well would be two ways to say one thing.
+            "reasoningEfforts": False,
+        })
+    return out
+
+
 def write_qwen_config(
     spec: ModelSpec, specs: list[ModelSpec] | None = None,
     path: Path | None = None, mode: str | None = None,
 ) -> Path:
     """Write Qwen Code's local OpenAI-compatible route and default model."""
+    # The model as it is being served: at the active effort, when the
+    # model understands that effort.
+    variant = active_variant(spec)
     cfg_path = path or _qwen_config_path()
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     cfg = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
@@ -3974,7 +4268,7 @@ def write_qwen_config(
     endpoint = _client_endpoint(spec, _resolve_mode("qwen", mode))
     output = _client_output_limit(spec)
     entries.append({
-        "id": spec.model_id,
+        "id": variant.model_id,
         "name": f"Toki Recur ({spec.label})",
         "envKey": "TOKI_AUTH_TOKEN",
         "baseUrl": endpoint,
@@ -3985,7 +4279,7 @@ def write_qwen_config(
         },
     })
     providers["openai"] = entries
-    cfg["model"] = {"name": spec.model_id}
+    cfg["model"] = {"name": variant.model_id}
     security = cfg.get("security")
     if not isinstance(security, dict):
         security = {}
@@ -4005,6 +4299,9 @@ def write_droid_config(
     path: Path | None = None, mode: str | None = None,
 ) -> Path:
     """Write Factory Droid's BYOK custom model entry."""
+    # The model as it is being served: at the active effort, when the
+    # model understands that effort.
+    variant = active_variant(spec)
     cfg_path = path or _factory_config_path()
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     cfg = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
@@ -4020,7 +4317,7 @@ def write_droid_config(
     ]
     endpoint = _client_endpoint(spec, _resolve_mode("droid", mode))
     models.append({
-        "model": spec.model_id,
+        "model": variant.model_id,
         "displayName": f"Toki Recur ({spec.label})",
         "baseUrl": endpoint,
         "apiKey": "${TOKI_AUTH_TOKEN}",
@@ -4028,7 +4325,7 @@ def write_droid_config(
         "maxOutputTokens": _client_output_limit(spec),
     })
     cfg["customModels"] = models
-    cfg["model"] = f"custom:{spec.model_id}"
+    cfg["model"] = f"custom:{variant.model_id}"
     _write_private_config(cfg_path, json.dumps(cfg, indent=2) + "\n")
     return cfg_path
 
@@ -4038,6 +4335,9 @@ def write_cline_config(
     path: Path | None = None, mode: str | None = None,
 ) -> Path:
     """Write Cline's isolated OpenAI-compatible provider settings."""
+    # The model as it is being served: at the active effort, when the
+    # model understands that effort.
+    variant = active_variant(spec)
     cfg_path = path or _cline_config_path()
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     cfg = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
@@ -4059,7 +4359,7 @@ def write_cline_config(
     settings.update({
         "provider": "openai-compatible",
         "apiKey": _configured_auth_token() or auth_token(),
-        "model": spec.model_id,
+        "model": variant.model_id,
         "baseUrl": _client_endpoint(spec, _resolve_mode("cline", mode)),
         "contextWindow": _effective_ctx(spec),
         "maxTokens": _client_output_limit(spec),
@@ -4079,10 +4379,13 @@ def write_claude_config(
     path: Path | None = None, mode: str | None = None,
 ) -> Path:
     """Write a private Claude Code override for the local Anthropic route."""
+    # The model as it is being served: at the active effort, when the
+    # model understands that effort.
+    variant = active_variant(spec)
     del specs, mode
     cfg_path = path or _claude_settings_path()
     token = _configured_auth_token() or auth_token()
-    model_id = spec.model_id
+    model_id = variant.model_id
     cfg = {
         "env": {
             "ANTHROPIC_BASE_URL": f"{spec.daemon_url}/anthropic",
@@ -4102,6 +4405,9 @@ def write_dsh_config(
     path: Path | None = None, mode: str | None = None,
 ) -> Path:
     """Write DeepSeek Harness's llm-pi-ai route and default model."""
+    # The model as it is being served: at the active effort, when the
+    # model understands that effort.
+    variant = active_variant(spec)
     cfg_path = path or _dsh_config_path()
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     cfg = yaml.safe_load(cfg_path.read_text()) if cfg_path.exists() else {}
@@ -4130,17 +4436,19 @@ def write_dsh_config(
         "api": "openai-completions",
         "baseURL": _client_endpoint(spec, _resolve_mode("dsh", mode)),
         "models": [{
-            "id": spec.model_id,
+            "id": variant.model_id,
             "name": spec.label,
             "contextWindow": _effective_ctx(spec),
             "maxTokens": _client_output_limit(spec),
             "input": ["text"],
-            "reasoningEfforts": reasoning_efforts,
-        }],
+            # A model that declares its levels has them as separate models
+            # below, so the harness offers one way to pick an effort, not two.
+            "reasoningEfforts": False if spec.reasoning_efforts else reasoning_efforts,
+        }] + _effort_variant_models(spec),
     }
     cfg["agent-default-model"] = {
         "provider": "tokirecur",
-        "model": spec.model_id,
+        "model": variant.model_id,
     }
     _write_private_config(cfg_path, yaml.safe_dump(cfg, sort_keys=False))
     # The profile layers are what tui and web actually read. Written here so
@@ -4157,6 +4465,9 @@ def write_grok_config(
     path: Path | None = None, mode: str | None = None,
 ) -> Path:
     """Write Grok Build's custom OpenAI-compatible model route."""
+    # The model as it is being served: at the active effort, when the
+    # model understands that effort.
+    variant = active_variant(spec)
     cfg_path = path or _grok_config_path()
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     cfg: dict[str, Any] = {}
@@ -4177,7 +4488,7 @@ def write_grok_config(
     for key in [key for key in model_table if str(key).startswith("tokirecur-")]:
         model_table.pop(key, None)
     model_table[alias] = {
-        "model": spec.model_id,
+        "model": variant.model_id,
         "name": f"Toki Recur ({spec.label})",
         "base_url": _client_endpoint(spec, _resolve_mode("grok", mode)),
         "env_key": "TOKI_AUTH_TOKEN",
@@ -4195,6 +4506,9 @@ def write_kilo_config(
     path: Path | None = None, mode: str | None = None,
 ) -> Path:
     """Write Kilo Code's custom OpenAI-compatible provider."""
+    # The model as it is being served: at the active effort, when the
+    # model understands that effort.
+    variant = active_variant(spec)
     cfg_path = path or _kilo_config_path()
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     cfg = _load_jsonc(cfg_path)
@@ -4223,7 +4537,7 @@ def write_kilo_config(
         if not (isinstance(value, dict)
                 and str(value.get("name", "")).startswith("Toki Recur ("))
     }
-    models[spec.model_id] = {
+    models[variant.model_id] = {
         "name": f"Toki Recur ({spec.label})",
         "tool_call": True,
         "reasoning": _client_reasoning(spec),
@@ -4233,8 +4547,19 @@ def write_kilo_config(
         },
         "cost": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0},
     }
+    for entry in _effort_variant_models(spec):
+        models[entry["id"]] = {
+            "name": f"Toki Recur ({entry['name']})",
+            "tool_call": True,
+            "reasoning": True,
+            "limit": {
+                "context": _effective_ctx(spec),
+                "output": _client_output_limit(spec),
+            },
+            "cost": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0},
+        }
     provider["models"] = models
-    cfg["model"] = f"openai-compatible/{spec.model_id}"
+    cfg["model"] = f"openai-compatible/{variant.model_id}"
     _write_private_config(cfg_path, json.dumps(cfg, indent=2) + "\n")
     return cfg_path
 
@@ -4244,6 +4569,9 @@ def write_pi_config(
     path: Path | None = None, mode: str | None = None,
 ) -> Path:
     """Write Pi's compatible endpoint and startup defaults."""
+    # The model as it is being served: at the active effort, when the
+    # model understands that effort.
+    variant = active_variant(spec)
     agent_dir = path.parent if path is not None else _pi_config_dir()
     cfg_path = path or agent_dir / "models.json"
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
@@ -4259,20 +4587,20 @@ def write_pi_config(
         "api": "openai-completions",
         "apiKey": "${TOKI_AUTH_TOKEN}",
         "models": [{
-            "id": spec.model_id,
+            "id": variant.model_id,
             "name": f"Toki Recur ({spec.label})",
             "contextWindow": _effective_ctx(spec),
             "maxTokens": _client_output_limit(spec),
             "input": ["text"],
             "reasoning": _client_reasoning(spec),
-        }],
+        }] + _effort_variant_models(spec),
     }
     settings_path = agent_dir / "settings.json"
     settings = json.loads(settings_path.read_text()) if settings_path.exists() else {}
     if not isinstance(settings, dict):
         settings = {}
     settings["defaultProvider"] = "tokirecur"
-    settings["defaultModel"] = spec.model_id
+    settings["defaultModel"] = variant.model_id
     _write_private_config(cfg_path, json.dumps(cfg, indent=2) + "\n")
     _write_private_config(settings_path, json.dumps(settings, indent=2) + "\n")
     return cfg_path
@@ -4283,6 +4611,9 @@ def write_kimi_config(
     path: Path | None = None, mode: str | None = None,
 ) -> Path:
     """Write Kimi Code's OpenAI-compatible provider and model alias."""
+    # The model as it is being served: at the active effort, when the
+    # model understands that effort.
+    variant = active_variant(spec)
     cfg_path = path or _kimi_config_path()
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     cfg: dict[str, Any] = {}
@@ -4307,10 +4638,10 @@ def write_kimi_config(
     for key, value in list(models.items()):
         if isinstance(value, dict) and value.get("provider") == "tokirecur":
             models.pop(key, None)
-    alias = f"tokirecur/{spec.model_id}"
+    alias = f"tokirecur/{variant.model_id}"
     models[alias] = {
         "provider": "tokirecur",
-        "model": spec.model_id,
+        "model": variant.model_id,
         "max_context_size": _effective_ctx(spec),
         "display_name": f"Toki Recur ({spec.label})",
         "capabilities": ["thinking", "tool_use"] if _client_reasoning(spec)
@@ -4326,6 +4657,9 @@ def write_omp_config(
     path: Path | None = None, mode: str | None = None,
 ) -> Path:
     """Write OMP's custom OpenAI-compatible provider."""
+    # The model as it is being served: at the active effort, when the
+    # model understands that effort.
+    variant = active_variant(spec)
     cfg_path = path or _omp_config_path()
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     if cfg_path.suffix.lower() == ".json":
@@ -4344,7 +4678,7 @@ def write_omp_config(
         "apiKey": "TOKI_AUTH_TOKEN",
         "auth": "apiKey",
         "models": [{
-            "id": spec.model_id,
+            "id": variant.model_id,
             "name": f"Toki Recur ({spec.label})",
             "contextWindow": _effective_ctx(spec),
             "maxTokens": _client_output_limit(spec),
@@ -4725,6 +5059,9 @@ def write_opencode_config(
     the toki daemon (context truth, KV recycling, /v1/models); ``raw``
     points straight at llama-server.
     """
+    # The model as it is being served: at the active effort, when the
+    # model understands that effort.
+    variant = active_variant(spec)
     cfg_path = path or Path(os.environ.get(
         "OPENCODE_CONFIG", str(Path.home() / ".config/opencode/opencode.json")))
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
@@ -4749,7 +5086,7 @@ def write_opencode_config(
 
     small = _small_model_ref(advertised, active=spec)
     cfg["small_model"] = small
-    cfg["model"] = f"tokirecur-{spec.name}/{spec.model_id}"
+    cfg["model"] = f"tokirecur-{spec.name}/{variant.model_id}"
 
     # Anti-loop guardrail: opencode's `instructions` takes FILE PATHS,
     # so we write a toki-owned markdown file and reference it. Never
@@ -4775,6 +5112,9 @@ def write_openclaw_config(
     daemon); ``managed`` (default) routes through the daemon. Either
     way ``contextWindow`` is the model's effective context.
     """
+    # The model as it is being served: at the active effort, when the
+    # model understands that effort.
+    variant = active_variant(spec)
     cfg_path = path or Path(os.environ.get(
         "OPENCLAW_CONFIG", str(Path.home() / ".openclaw/openclaw.json")))
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
@@ -4819,7 +5159,7 @@ def write_openclaw_config(
 
     agents = cfg.setdefault("agents", {})
     defaults = agents.setdefault("defaults", {})
-    defaults["model"] = {"primary": f"tokirecur-{spec.name}/{spec.model_id}"}
+    defaults["model"] = {"primary": f"tokirecur-{spec.name}/{variant.model_id}"}
     defaults["timeoutSeconds"] = 3600
 
     # Anti-loop guardrail: openclaw has no config-injectable system
@@ -4864,6 +5204,9 @@ def write_hermes_config(
     404. We purge and re-take the ``llamacpp`` key in BOTH formats so
     hermes always routes through the toki daemon.
     """
+    # The model as it is being served: at the active effort, when the
+    # model understands that effort.
+    variant = active_variant(spec)
     cfg_path = path or _hermes_config_path()
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     cfg: dict[str, Any] = yaml.safe_load(cfg_path.read_text()) if cfg_path.exists() else {}
@@ -4902,12 +5245,17 @@ def write_hermes_config(
         s.model_id: {"context_length": _effective_ctx(s)}
         for s in all_specs
     }
+    # The effort variants of every model, so a harness that only knows
+    # how to pick a model id can still pick an effort.
+    for s in all_specs:
+        for entry in _effort_variant_models(s):
+            models_with_ctx[entry["id"]] = {"context_length": _effective_ctx(s)}
     entry = {
         "name": "llamacpp",
         "base_url": f"{base}/v1",
         "api_key": _configured_auth_token() or auth_token(),
         "models": models_with_ctx,
-        "default_model": spec.model_id,
+        "default_model": variant.model_id,
         "_toki": True,  # marker so a future re-write can find it
     }
     has_entry = False
@@ -4926,7 +5274,7 @@ def write_hermes_config(
         "api": f"{base}/v1",
         "api_key": _configured_auth_token() or auth_token(),
         "models": models_with_ctx,
-        "default_model": spec.model_id,
+        "default_model": variant.model_id,
         "name": "Toki Recur (llamacpp)",
         "_toki": True,
     }
@@ -4941,7 +5289,7 @@ def write_hermes_config(
         {
             "api_key": _configured_auth_token() or auth_token(),
             "base_url": f"{base}/v1",
-            "default": spec.model_id,
+            "default": variant.model_id,
             "provider": "llamacpp",
             # Explicit context override for the active model (resolution
             # step 0) — the only channel that beats hermes's 64k probe
@@ -5010,6 +5358,9 @@ def write_codex_config(
     "responses"``), which llama-server does not serve — a ``raw`` codex
     provider would fail every request.
     """
+    # The model as it is being served: at the active effort, when the
+    # model understands that effort.
+    variant = active_variant(spec)
     cfg_path = path or Path(os.environ.get(
         "CODEX_HOME", str(Path.home() / ".codex"))) / "config.toml"
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
@@ -5053,7 +5404,7 @@ def write_codex_config(
         providers.pop(key, None)
 
     top["model_provider"] = f"tokirecur-{spec.name}"
-    top["model"] = spec.model_id
+    top["model"] = variant.model_id
 
     # Anti-loop guardrail: codex has NO `system_prompt` config key (the
     # top-level ConfigToml schema doesn't define one — an unknown key is

@@ -145,9 +145,15 @@ class LauncherApp(App[dict | None]):
         super().__init__()
         self._on_launch = on_launch
         self.specs: list[Any] = []
+        # The models a person can pick: each registry model, then its
+        # reasoning variants. A variant is the same weights with the
+        # reasoning steered, so it is one server and one slot.
+        self.variants: list[Any] = []
         self.launch_idx = 0
         self.model_idx = 0
         self.pinned: str | None = None
+        # The effort the pinned model is served at (None = the model's own).
+        self.pinned_effort: str | None = None
         self._statuses: dict[str, Any] = {}
         self._error: str | None = None
         self._launching: str | None = None
@@ -163,6 +169,7 @@ class LauncherApp(App[dict | None]):
 
     def on_mount(self) -> None:
         self.specs = load_registry()
+        self.variants = _model_variants(self.specs)
         if not self.specs:
             self._error = "no models in registry — run `toki model list`"
         self._refresh_pinned()
@@ -202,7 +209,14 @@ class LauncherApp(App[dict | None]):
         active = self._read_active()
         if self.pinned is None or self.pinned not in {s.name for s in self.specs}:
             self.pinned = active or self.specs[0].name
-        self.model_idx = max(0, min(self.model_idx, len(self.specs) - 1))
+        # The effort the active model is being served at, so the picker
+        # opens on the variant that is actually in use.
+        try:
+            from ..ctl import read_active_effort
+            self.pinned_effort = read_active_effort()
+        except Exception:
+            self.pinned_effort = None
+        self.model_idx = max(0, min(self.model_idx, len(self.variants) - 1))
 
     def _read_active(self) -> str | None:
         try:
@@ -263,9 +277,10 @@ class LauncherApp(App[dict | None]):
         if self.focus_pane == "launchers":
             self.launch_idx = (self.launch_idx + delta) % len(LAUNCH_APPS)
         elif self.focus_pane == "models":
-            if not self.specs:
+            variants = self._variants()
+            if not variants:
                 return
-            self.model_idx = (self.model_idx + delta) % len(self.specs)
+            self.model_idx = (self.model_idx + delta) % len(variants)
         elif self.focus_pane == "settings":
             rows = _settings_rows(self.specs, app=self)
             if not rows:
@@ -279,7 +294,8 @@ class LauncherApp(App[dict | None]):
             if 0 <= index < len(LAUNCH_APPS):
                 self.launch_idx = index
         else:
-            if self.specs and 0 <= index < len(self.specs):
+            variants = self._variants()
+            if variants and 0 <= index < len(variants):
                 self.model_idx = index
         self._refresh += 1
 
@@ -444,6 +460,7 @@ class LauncherApp(App[dict | None]):
             # user the restart failed and the next launch will use it.
             self._restarting.pop((name, field), None)
             self.specs = ctl_mod.load_registry()
+            self.variants = _model_variants(self.specs)
             invalidate_settings_rows()
             self._refresh += 1
             self.notify(
@@ -453,6 +470,7 @@ class LauncherApp(App[dict | None]):
             return
         # Reload specs so the row shows the new value.
         self.specs = ctl_mod.load_registry()
+        self.variants = _model_variants(self.specs)
         invalidate_settings_rows()
         if field in _RESTART_REQUIRED_FIELDS:
             self.notify(
@@ -513,23 +531,37 @@ class LauncherApp(App[dict | None]):
             if self.specs:
                 self.focus_pane = "models"
         else:
-            if not self.specs:
+            variants = self._variants()
+            if not variants:
                 return
-            name = self.specs[max(0, min(self.model_idx, len(self.specs) - 1))].name
-            fallback = self.specs[0].name if self.specs else None
-            self.pinned = name if self.pinned != name else fallback
+            variant = variants[
+                max(0, min(self.model_idx, len(variants) - 1))
+            ]
+            name = variant.spec.name
+            # Pinning the same variant again falls back to the first model,
+            # effort and all — the way pinning the same model twice did.
+            fallback = variants[0]
+            already = self.pinned == name and self.pinned_effort == variant.effort
+            if already:
+                self.pinned = fallback.spec.name
+                self.pinned_effort = fallback.effort
+            else:
+                self.pinned = name
+                self.pinned_effort = variant.effort
             missing = self._missing_file_reason(self.pinned)
             if missing:
                 # Pinning a model whose weights are gone would leave the
                 # launcher pointing at something that cannot start.
-                self.pinned = fallback if fallback != name else None
+                self.pinned = fallback.spec.name if fallback.spec.name != name else None
+                self.pinned_effort = fallback.effort
                 self.notify(missing, timeout=5, severity="warning")
                 self._refresh += 1
                 return
-            from ..ctl import set_active
+            from ..ctl import set_active, write_active_effort
 
             try:
                 set_active(self.pinned or name)
+                write_active_effort(self.pinned_effort)
             except Exception as e:
                 self.notify(f"pin failed (not persisted): {e}", timeout=6, severity="warning")
         self._refresh += 1
@@ -708,10 +740,22 @@ class LauncherApp(App[dict | None]):
             out.append(Text(f"{self._GUT}↓ more", style="dim"))
         return out
 
+    def _variants(self) -> list[Any]:
+        """The models a person can pick: each model, then its variants."""
+        variants = getattr(self, "variants", None)
+        if variants is None:
+            return _model_variants(self.specs)
+        return variants
+
     def _render_models(self, width: int) -> list[Text]:
         out: list[Text] = []
         out.append(Text(self._GUT + "Select model", style=f"bold {art.YELLOW}"))
-        if not self.specs:
+        # Inline rather than through the method: this render is called
+        # with a stand-in app in the tests.
+        variants = getattr(self, "variants", None)
+        if variants is None:
+            variants = _model_variants(self.specs)
+        if not variants:
             out.append(Text(self._GUT + "(no models in registry)", style="dim"))
             return out
 
@@ -720,18 +764,27 @@ class LauncherApp(App[dict | None]):
         # for exactly this reason. A list that runs off the bottom takes
         # the highlight with it: the person arrows down, the cursor leaves
         # the screen, and there is nothing left to see or aim at.
-        visible = max(3, min(len(self.specs), _visible_rows(self, 5)))
-        start = max(0, min(self.model_idx - visible // 2, len(self.specs) - visible))
+        visible = max(3, min(len(variants), _visible_rows(self, 5)))
+        start = max(0, min(self.model_idx - visible // 2, len(variants) - visible))
         end = start + visible
         if start:
             out.append(Text(self._GUT + "↑ more", style="dim"))
         for i in range(start, end):
-            spec = self.specs[i]
+            variant = variants[i]
+            spec = variant.spec
             st = self._statuses.get(spec.name, {})
             llama = st.get("llama", False)
             daemon = st.get("daemon", False)
             focus = i == self.model_idx
-            pinned = spec.name == self.pinned
+            pinned = (
+                spec.name == self.pinned
+                and variant.effort == self.pinned_effort
+            )
+            # A variant sits under its model: the same weights, the
+            # reasoning steered to a level.
+            name = spec.name
+            if variant.effort is not None:
+                name = f"  {name}"
             # laguna is the fallback stack — it has no chat backends, so
             # the llama/daemon health dots do not apply to it.
             show_dots = spec.name != "laguna"
@@ -751,7 +804,9 @@ class LauncherApp(App[dict | None]):
             row = Text(self._GUT, end="")
             if focus:
                 row.append("▌ ", style=f"bold {art.YELLOW}")
-                row.append(f"{spec.name:<6}", style=f"bold {art.YELLOW}")
+                row.append(f"{name:<8}", style=f"bold {art.YELLOW}")
+                if variant.effort is not None:
+                    row.append(f" {variant.effort}", style=f"bold {art.AMBER}")
                 if pinned:
                     row.append(" <~ pinned", style=f"bold {art.AMBER}")
                 if gone:
@@ -766,7 +821,9 @@ class LauncherApp(App[dict | None]):
                     row.append(" ", style="dim")
                     row.append("●", style=art.GREEN if daemon else art.RED)
             else:
-                row.append(f"{spec.name:<6}", style=art.TEXT)
+                row.append(f"{name:<8}", style=art.TEXT)
+                if variant.effort is not None:
+                    row.append(f" {variant.effort}", style=f"dim {art.AMBER}")
                 if pinned:
                     row.append(" <~ pinned", style=f"dim {art.AMBER}")
                 if gone:
@@ -786,13 +843,15 @@ class LauncherApp(App[dict | None]):
                     f"      :{spec.llama_port}/:{spec.daemon_port}  "
                     f"ctx={st.get('ctx', spec.ctx_size)}  {spec.label}"
                 )
+                if variant.effort is not None:
+                    detail += f"  ·  reasoning {variant.effort}"
                 if gone:
                     detail += f"  — the file is gone: {getattr(spec, 'gguf', '')}"
                 elif vision_bad:
                     # The one warning worth spelling out rather than tagging.
                     detail += f"  — projector missing: {mmproj}"
                 out.append(Text(detail, style="dim"))
-        if end < len(self.specs):
+        if end < len(variants):
             out.append(Text(self._GUT + "↓ more", style="dim"))
         return out
 
@@ -927,6 +986,7 @@ _SETTINGS_FIELDS: tuple[str, ...] = (
     "always_on",
     "boot",
     "reasoning",
+    "reasoning_efforts",
 )
 
 
@@ -1308,6 +1368,20 @@ def _choices_for_field(spec: Any, field: str) -> dict[str, str] | None:
     return ordered
 
 
+def _model_variants(specs: Any) -> list[Any]:
+    """The models a person can pick: each model, then its effort variants.
+
+    A variant is the same weights with the reasoning steered to a level.
+    They share the server, the slot and the cache, so a variant is a
+    choice of depth, not of model.
+    """
+    try:
+        from ..ctl import expand_variants
+        return expand_variants(list(specs))
+    except Exception:
+        return list(specs)
+
+
 def _settings_rows(
     specs: Any,
     app: LauncherApp | None = None,
@@ -1360,6 +1434,9 @@ def _settings_rows(
             )
             if mismatched:
                 value = f"reg:{reg_value} · live:{live_value}"
+            elif isinstance(reg_value, (list, tuple)):
+                # A list of levels reads as the levels, not as a repr.
+                value = ", ".join(str(v) for v in reg_value)
             else:
                 value = "" if reg_value is None else str(reg_value)
             rows.append((spec.name, field, value))

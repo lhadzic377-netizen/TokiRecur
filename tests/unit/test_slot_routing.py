@@ -78,6 +78,7 @@ class FakeBackend:
         temperature: float = 0.0,
         cache_prompt: bool = True,
         chat_template_kwargs=None,
+        reasoning_effort=None,
         tools=None,
         tool_choice=None,
         sampling: dict | None = None,

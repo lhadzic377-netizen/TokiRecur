@@ -411,6 +411,55 @@ def _active_model_id() -> str | None:
         return None
 
 
+def _resolve_effort(
+    model_id: str, requested: str | None, served: str | None = None,
+) -> str | None:
+    """The reasoning effort this turn runs at, or None for the model's own.
+
+    A client may ask for an effort outright ("high"), or name a model
+    variant ("qwen3.8-27b:high") and let the variant carry it. A
+    variant's effort only applies when it names the model this daemon
+    actually serves: the daemon is single-tenant, so an effort meant for
+    another model would be answered by this one.
+
+    An effort the level vocabulary does not know is ignored rather than
+    guessed at — a template that does not understand "high" would answer
+    with whatever it defaults to, and saying so is better than pretending.
+    """
+    try:
+        from ..ctl import EFFORT_LEVELS, load_registry, resolve_model_id
+    except Exception:
+        return None
+    if requested:
+        wanted = requested.strip().lower()
+        return wanted if wanted in EFFORT_LEVELS else None
+    try:
+        specs = load_registry()
+    except Exception:
+        return None
+    spec, effort = resolve_model_id(specs, model_id)
+    if spec is None or effort is None:
+        return None
+    if served and not _same_model(spec, served):
+        return None
+    return effort
+
+
+def _same_model(spec: Any, served: str) -> bool:
+    """Whether the served id names this spec.
+
+    The served id comes from the backend, which reports llama-server's own
+    alias for the weights ("Qwen3.8-27B-Q4_K_M"); the registry spells it
+    its own way ("qwen3.8-27b-q4_k_m"). Same model, different case — so
+    the comparison is case-blind, and the name counts too.
+    """
+    wanted = served.strip().lower()
+    return wanted in {
+        str(getattr(spec, "model_id", "")).strip().lower(),
+        str(getattr(spec, "name", "")).strip().lower(),
+    }
+
+
 def _resolve_max_tokens(requested: int, reasoning: str = "auto") -> int:
     """Floor at the thinking/non-thinking budget without capping larger
     client requests, then clamp to the real slot context when the stack
@@ -509,6 +558,13 @@ class ChatCompletionRequest(BaseModel):
     # relays llama-server's OpenAI deltas verbatim.
     tools: list | None = None
     tool_choice: str | dict | None = None
+    # Reasoning effort for this turn: "none", "minimal", "low", "medium",
+    # "high", "xhigh", "max". llama-server hands it to the model's chat
+    # template, so the model steers its own depth — the levels mean
+    # whatever that template says they mean. "none" is thinking off.
+    # A client that instead names a variant ("qwen3.8-27b:high") gets
+    # the same thing: the variant's effort applies.
+    reasoning_effort: str | None = None
     # Pass-through for chat-template kwargs. If unset, the daemon
     # defaults to disabling Qwen3.5's thinking mode so the response
     # contains visible content instead of internal reasoning tokens.
@@ -873,9 +929,32 @@ def create_app(
             })
         return entry
 
+    def _model_info_entries() -> list[dict[str, Any]]:
+        """The model this daemon serves, and its effort variants.
+
+        A client that asks "what models do you have?" should see the
+        variants: they are the same weights with the reasoning steered,
+        and a harness that can only pick a model id picks them by id.
+        """
+        entry = _model_info_entry()
+        entries = [entry]
+        try:
+            from ..ctl import expand_variants, load_registry
+            specs = load_registry()
+        except Exception:
+            return entries
+        served = _served_model_id()
+        for variant in expand_variants(specs):
+            if variant.effort is None or variant.spec.model_id != served:
+                continue
+            sibling = dict(entry)
+            sibling["id"] = variant.model_id
+            entries.append(sibling)
+        return entries
+
     @app.get("/v1/models")
     async def models_list() -> dict:
-        return {"object": "list", "data": [_model_info_entry()]}
+        return {"object": "list", "data": _model_info_entries()}
 
     @app.get("/v1/models/{model}")
     async def models_get(model: str) -> dict:
@@ -1008,6 +1087,7 @@ def create_app(
         completion_id: str,
         is_chat: bool,
         chat_template_kwargs: dict | None = None,
+        reasoning_effort: str | None = None,
         tools: list | None = None,
         tool_choice: str | dict | None = None,
         sampling: dict | None = None,
@@ -1032,7 +1112,9 @@ def create_app(
         # (they stop on EOS). Native completions can't think, so they
         # get the non-thinking floor.
         max_tokens = _resolve_max_tokens(
-            max_tokens, reasoning=default_reasoning if is_chat else "off"
+            max_tokens,
+            reasoning=("off" if reasoning_effort == "none" else default_reasoning)
+            if is_chat else "off",
         )
 
         def chunk_with(
@@ -1075,6 +1157,7 @@ def create_app(
                     max_slots=max_slots,
                     session_id=session_id,
                     chat_template_kwargs=chat_template_kwargs,
+                    reasoning_effort=reasoning_effort,
                     tools=tools,
                     tool_choice=tool_choice,
                     sampling=sampling,
@@ -1680,7 +1763,22 @@ def create_app(
         # (not the global marker: a flipped marker made responses echo
         # a model this stack was not running) so downstream consumers
         # see a consistent, honest name.
+        # The effort this turn runs at. Resolved before the model name is
+        # overridden below, because a variant carries its effort in the
+        # model id ("qwen3.8-27b:high").
         active_model = _served_model_id()
+        effort = _resolve_effort(req.model, req.reasoning_effort, active_model)
+        # Thinking follows the effort: "none" is thinking off, every other
+        # level turns it on. A client that sent its own chat_template_kwargs
+        # keeps them.
+        ctk = req.chat_template_kwargs
+        if effort is not None:
+            ctk = dict(ctk or {})
+            ctk.setdefault("enable_thinking", effort != "none")
+        # The token floor follows too: a turn with thinking off does not
+        # need the headroom a thinking turn does.
+        reasoning_mode = "off" if effort == "none" else default_reasoning
+
         if active_model and req.model and req.model != active_model:
             logger.debug(
                 "chat_completions: client model %r != active %r; "
@@ -1715,7 +1813,8 @@ def create_app(
                         req.model,
                         completion_id,
                         is_chat=True,
-                        chat_template_kwargs=req.chat_template_kwargs,
+                        chat_template_kwargs=ctk,
+                        reasoning_effort=effort,
                         tools=req.tools,
                         tool_choice=req.tool_choice,
                         sampling=sampling,
@@ -1724,17 +1823,17 @@ def create_app(
                 )
             # Default thinking mode from the model's `reasoning` setting;
             # the client can override with explicit chat_template_kwargs.
-            ctk = req.chat_template_kwargs
             if ctk is None:
                 ctk = _default_chat_template_kwargs(default_reasoning)
             result = await _run_engine(
                 engine.serve_chat,
                 messages,
-                max_tokens=_resolve_max_tokens(req.max_tokens, reasoning=default_reasoning),
+                max_tokens=_resolve_max_tokens(req.max_tokens, reasoning=reasoning_mode),
                 temperature=temperature,
                 max_slots=_resolve_max_slots(req.max_slots),
                 session_id=req.session_id,
                 chat_template_kwargs=ctk,
+                reasoning_effort=effort,
                 tools=req.tools,
                 tool_choice=req.tool_choice,
                 sampling=sampling,

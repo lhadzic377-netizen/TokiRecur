@@ -285,6 +285,12 @@ class DaemonClient:
                 "session_id": session_id,
                 "max_slots": 4,
             }
+            # The reasoning effort the launcher pinned, if any. The
+            # daemon hands it to the model's chat template, which is
+            # where a level means something.
+            effort = _active_effort()
+            if effort:
+                payload["reasoning_effort"] = effort
             target_label = "cached"
         else:
             yield {"event": "error", "message": f"unknown mode: {mode}"}
@@ -429,6 +435,15 @@ class DaemonClient:
 
 
 # ── helpers ──────────────────────────────────────────────────────────
+
+
+def _active_effort() -> str | None:
+    """The reasoning effort the launcher pinned, if the model has one."""
+    try:
+        from ..ctl import read_active_effort
+        return read_active_effort()
+    except Exception:
+        return None
 
 
 def _now() -> float:
