@@ -145,8 +145,8 @@
   ];
 
   const HELP = [
-    "Commands: /help  /clear  /mode [raw|cached|compare]  /session-new  /precision  /metrics  /quit",
-    "Keys: Ctrl+L clear · Ctrl+R reprobe · Ctrl+P precision · Ctrl+M metrics panel",
+    "Commands: /help /quit /clear /mode [raw|cached|compare] /session [id] /session-new /precision /metrics /slots /reset /reprobe /max_tokens [n]",
+    "Keys:    Ctrl+1 raw · Ctrl+2 cached · Ctrl+3 compare · Ctrl+L clear · Ctrl+R reprobe · Ctrl+P precision · Ctrl+U new session · Ctrl+M toggle metrics panel · Ctrl+T cycle max tokens",
   ];
 
   const REPLIES = {
@@ -223,28 +223,28 @@
   function freshChat() {
     return {
       messages: [
-        { role: "system", at: "09:41:02", text: "session #a7f2 · ornith-1.5-35b-a3b-gguf · cached · 200k ctx" },
+        { role: "system", at: "09:41:02", style: "cyan", text: "session #a7f2 · cached · 200k ctx" },
         { role: "user", at: "09:41:07", text: "Summarise what this daemon does, in two sentences." },
         {
           role: "ai",
           at: "09:41:12",
-          badge: "[cached]",
+          mode: "cached",
           hit: false,
           think: "They want the pitch, not the internals. Two sentences, no bullets.",
           text: "It sits in front of llama-server and keeps the KV cache alive between requests. Agents that share a long prefix compute it once, then every later turn reads it back instead of prefilling again.",
-          stats: "in 1,204 tok · ttft 3.6s · total 4.4s · 62 tok",
+          stats: "in 1,204 tok · ttft 3600ms · total 4400ms · 62 tok",
         },
         { role: "user", at: "09:41:40", text: "Ask the exact same thing again." },
         {
           role: "ai",
           at: "09:41:41",
-          badge: "[cached]",
+          mode: "cached",
           hit: true,
           think: "Same prefix as the turn above. This should be a full hit.",
           text: "Same prefix, so the cache answers it: 1,204 prompt tokens read back in 210ms instead of prefilled for 3.6s. The words below are the first answer again, because a hit is a hit.",
-          stats: "in 0 tok · ttft 210ms · total 380ms · 61 tok",
+          stats: "in 0 tok · ttft 210ms · total 380ms · 61 tok · reused 1204",
         },
-        { role: "system", at: "09:41:41", text: "cache: 1,204 tok reused · hit rate 50% (1/2)" },
+        { role: "system", at: "09:41:41", style: "dim", text: "cache: 1,204 tok reused · hit rate 50% (1/2)" },
       ],
       seen: {},
       busy: false,
@@ -363,53 +363,56 @@
 
   /* --- chat -------------------------------------------------------------- */
 
+  /* The chat is the real app's chat: the sidebar panel, the bordered
+     transcript with the brand header, the metrics panel, and the input
+     row. Same words, same colours, same badges. */
+
   function renderChat() {
     const chat = state.chat;
     const wrap = el("div", "tui-chat");
     root.appendChild(wrap);
 
-    /* left rail */
+    /* left panel */
     const side = el("aside", "tui-side");
     wrap.appendChild(side);
-    side.appendChild(el("b", "side-title", "Toki"));
-    side.appendChild(el("div", "side-rule"));
-    const kv = (label, value, cls) => {
-      const row = el("div", "side-row");
-      row.appendChild(el("span", "side-key", label));
-      row.appendChild(el("span", cls || "side-value", value));
-      side.appendChild(row);
+    const sideBox = el("div", "panel-box");
+    side.appendChild(sideBox);
+    sideBox.appendChild(el("b", "panel-title", "Toki"));
+    sideBox.appendChild(el("div", "rule"));
+    sideBox.appendChild(el("div", `side-line mode-${state.mode}`, `mode ${state.mode}`));
+    sideBox.appendChild(el("div", "side-line yellow", "ses  #a7f2"));
+    sideBox.appendChild(el("div", "rule"));
+    const status = (glyph, cls, text) => {
+      const row = el("div", "side-line");
+      row.appendChild(el("span", cls, glyph));
+      row.appendChild(el("span", "dim", ` ${text}`));
+      sideBox.appendChild(row);
     };
-    kv("mode", state.mode, `side-value mode-${state.mode}`);
-    kv("ses", "#a7f2", "side-value");
-    side.appendChild(el("div", "side-rule"));
-    const dot = (label, value) => {
-      const row = el("div", "side-row");
-      const b = el("span", "ok", "●");
-      row.appendChild(b);
-      row.appendChild(el("span", "side-key", ` ${label}`));
-      row.appendChild(el("span", "side-value", value));
-      side.appendChild(row);
-    };
-    dot("llama", ":8089");
-    dot("daemon", ":8788");
-    dot("auth", "ok");
-    side.appendChild(el("div", "side-rule"));
-    side.appendChild(el("b", "side-title small", "Slots"));
-    kv("s0", "0%");
-    kv("s1", chat.busy ? "62%" : "4%");
+    status("●", "ok", "llama 127.0.0.1:8100");
+    status("●", "ok", "daemon 127.0.0.1:8799");
+    status("●", "ok", "auth ok");
+    sideBox.appendChild(el("div", "rule"));
+    sideBox.appendChild(el("b", "panel-title", "Slots"));
+    sideBox.appendChild(el("div", "side-line dim", "  · s0 0%"));
+    sideBox.appendChild(el("div", `side-line ${chat.busy ? "cyan" : "dim"}`, "  · s1 0%"));
+    sideBox.appendChild(el("div", "side-line dim", "Ctrl+1/2/3 mode"));
+    sideBox.appendChild(el("div", "side-line dim", "· Ctrl+U session"));
 
     /* transcript */
-    const main = el("div", "tui-transcript");
-    main.dataset.transcript = "1";
+    const main = el("main", "tui-main");
     wrap.appendChild(main);
-    chat.messages.forEach((message) => main.appendChild(messageNode(message)));
+    const box = el("div", "chat-box");
+    box.dataset.transcript = "1";
+    main.appendChild(box);
+    box.appendChild(el("b", "chat-wordmark", "TOKI"));
+    box.appendChild(el("div", "chat-tagline", "recycled-prefill LLM stack · AMD Ryzen AI"));
+    chat.messages.forEach((message) => box.appendChild(messageNode(message)));
     if (chat.busy) {
       const waiting = el("div", "msg ai");
       span(waiting, "msg-time", `[${clock()}]`);
       span(waiting, "msg-role", "ai");
-      span(waiting, "msg-sep", " ▸ ");
       span(waiting, "msg-cursor", "▌");
-      main.appendChild(waiting);
+      box.appendChild(waiting);
     }
 
     /* right panel */
@@ -417,13 +420,11 @@
 
     /* prompt */
     const form = el("form", "tui-prompt");
-    const caret = el("span", "prompt-caret", "❯");
-    form.appendChild(caret);
     const input = el("input", "tui-input");
     input.type = "text";
     input.autocomplete = "off";
     input.spellcheck = false;
-    input.placeholder = "Type a message and press Enter…   (try /help)";
+    input.placeholder = "Type a message and press Enter…  (try /help)";
     input.setAttribute("aria-label", "Message to the simulated toki session");
     form.appendChild(input);
     input.addEventListener("keydown", (event) => {
@@ -456,27 +457,44 @@
     const row = el("div", `msg ${message.role}`);
     if (message.think) {
       const think = el("div", "think");
-      span(think, "think-role", "think › ");
-      span(think, "think-text", message.think);
+      span(think, "think-text", `    think › ${message.think}`);
       row.appendChild(think);
     }
     const flow = el("div", "msg-line");
-    span(flow, "msg-time", `[${message.at}]`);
-    span(
-      flow,
-      "msg-role",
-      message.role === "ai" ? "ai" : message.role === "user" ? "you" : message.role === "compare" ? "compare" : "system"
-    );
-    span(flow, "msg-sep", " ▸ ");
-    if (message.role === "ai") {
-      if (message.badge) span(flow, "badge", message.badge);
-      if (message.hit === true) span(flow, "hit", " ✓ hit ");
-      else if (message.hit === false) span(flow, "miss", " ✗ miss ");
+    span(flow, "msg-time", `[${message.at}] `);
+    if (message.role === "user") {
+      span(flow, "msg-you", "you ");
+      span(flow, "msg-arrow", "▸ ");
+      span(flow, "msg-text", message.text);
+    } else if (message.role === "ai") {
+      span(flow, "msg-ai", "ai  ");
+      span(flow, "msg-mode", `[${message.mode || "cached"}] `);
+      if (message.hit === true) span(flow, "hit", "✓ hit ");
+      else if (message.hit === false) span(flow, "miss", "✗ miss ");
+      else if (message.hit === "raw") span(flow, "rawbadge", "↯ raw ");
+      span(flow, "msg-text", message.text);
+      if (message.stats) span(flow, "msg-stats", `  [${message.stats}]`);
+    } else if (message.role === "compare") {
+      span(flow, "msg-compare", "compare ");
+      span(flow, "compare-speed", `[${message.speedup}× `);
+      span(flow, "dim", "cached vs raw");
+      span(flow, "compare-speed", "]");
+      span(flow, "dim", `  raw=${message.raw}`);
+      span(flow, "dim", `  cached=${message.cached}`);
+      row.appendChild(flow);
+      if (message.body) {
+        const body = el("div", "msg-line");
+        span(body, message.identical ? "ok" : "warn", message.body);
+        row.appendChild(body);
+      }
+      return row;
+    } else {
+      span(flow, "msg-system", "system ");
+      span(flow, "msg-arrow magenta", "▸ ");
+      span(flow, message.style || "warn", message.text);
     }
-    const text = span(flow, "msg-text", message.text);
     row.appendChild(flow);
     row.body = flow;
-    if (message.stats) span(flow, "msg-stats", `  [${message.stats}]`);
     return row;
   }
 
@@ -484,36 +502,41 @@
     const chat = state.chat;
     const live = chat.live;
     const rate = Math.round((live.hit / (live.hit + live.miss)) * 100);
-    const panel = el("aside", "tui-panel");
+    const panel = el("aside", "tui-info");
+    const box = el("div", "panel-box");
+    panel.appendChild(box);
 
-    panel.appendChild(el("b", "panel-title", "Live"));
-    const stat = (label, value, cls) => {
-      const row = el("div", "panel-row");
-      row.appendChild(el("span", "panel-key", label));
-      row.appendChild(el("span", cls || "panel-value", value));
-      panel.appendChild(row);
-    };
-    stat("req", number(live.req));
-    stat("hit", number(live.hit));
-    stat("miss", number(live.miss));
-    stat("rate", `${rate}%`);
-    stat("skip", `${number(live.skip)} tok`);
-    stat("slots", String(live.slots));
-    stat("auth_fail", String(live.auth), live.auth ? "bad" : "panel-value");
+    box.appendChild(el("b", "panel-title", "Live"));
+    box.appendChild(el("div", "p-line white", `  req=${live.req} hit=${live.hit} miss=${live.miss}`));
+    box.appendChild(el("div", "p-line cyan", `  rate=${rate}% skip=${live.skip}tok slots=${live.slots}`));
+    if (live.auth) box.appendChild(el("div", "p-line red", `  auth_fail=${live.auth}`));
 
-    panel.appendChild(el("b", "panel-title", "Session"));
+    box.appendChild(el("b", "panel-title", "Session"));
     const session = chat.session;
-    stat("msgs", number(session.msgs));
-    stat("gen", `${number(session.gen)} tok`);
-    stat("reused", `${number(session.reused)} tok`);
-    stat("hits", `${Math.round((session.hits / Math.max(session.total, 1)) * 100)}% (${session.hits}/${session.total})`);
-    stat("ctx", `${session.ctx}%`);
+    box.appendChild(el("div", "p-line white", `  msgs=${session.msgs} gen=${session.gen}tok reused=${session.reused}tok`));
+    const hits = session.total ? `${Math.round((session.hits / session.total) * 100)}%` : "—";
+    box.appendChild(el("div", "p-line cyan", `  hits=${hits} ctx=${session.ctx}%`));
 
-    panel.appendChild(el("b", "panel-title", chat.precision ? "Precision" : "Precision  —"));
+    box.appendChild(el("b", "panel-title", "Precision"));
     if (chat.precision) {
-      stat("baseline", `${chat.precision.baseline}%`);
-      stat("recycled", `${chat.precision.recycled}%`);
-      stat("match", `${chat.precision.match}%`);
+      const p = chat.precision;
+      const bar = (pct) => {
+        const width = 14;
+        const filled = Math.round((pct / 100) * width);
+        return "█".repeat(filled) + "░".repeat(width - filled);
+      };
+      const row = (label, pct) => {
+        const line = el("div", "p-line");
+        line.appendChild(el("span", "p-key", `  ${label}`));
+        line.appendChild(el("span", pct >= 99 ? "ok" : pct >= 80 ? "warn" : "red", ` ${bar(pct)} ${pct}%`));
+        box.appendChild(line);
+      };
+      row("baseline", p.baseline);
+      row("recycled", p.recycled);
+      row("match", p.match);
+      box.appendChild(el("div", "p-line dim", "  (10 prompts)"));
+    } else {
+      box.appendChild(el("div", "p-line dim", "  (Ctrl+P to run)"));
     }
     return panel;
   }
@@ -554,12 +577,12 @@
 
     const command = text.toLowerCase();
     if (command === "/help") {
-      push({ role: "system", at: clock(), text: HELP[0] });
-      push({ role: "system", at: clock(), text: HELP[1] });
+      push({ role: "system", at: clock(), style: "cyan", text: HELP[0] });
+      push({ role: "system", at: clock(), style: "cyan", text: HELP[1] });
       return;
     }
     if (command === "/clear") {
-      chat.messages = [{ role: "system", at: clock(), text: "transcript cleared · session #a7f2 kept" }];
+      chat.messages = [{ role: "system", at: clock(), style: "dim", text: "chat cleared" }];
       render();
       return;
     }
@@ -576,22 +599,22 @@
       const next = text.split(/\s+/)[1];
       if (["raw", "cached", "compare"].includes(next)) {
         state.mode = next;
-        push({ role: "system", at: clock(), text: `mode → ${next}` });
+        push({ role: "system", at: clock(), style: "cyan", text: `mode → ${next}` });
       } else {
-        push({ role: "system", at: clock(), text: "usage: /mode raw|cached|compare" });
+        push({ role: "system", at: clock(), style: "red", text: "unknown command: /mode  (try /help)" });
       }
       return;
     }
     if (command === "/precision") {
-      push({ role: "system", at: clock(), text: "running precision check…" });
+      push({ role: "system", at: clock(), style: "cyan", text: "running precision check…" });
       window.setTimeout(() => {
         chat.precision = { baseline: 33, recycled: 100, match: 33 };
-        push({ role: "system", at: clock(), text: "precision: baseline=33%  recycled=100%  match=33%" });
+        push({ role: "system", at: clock(), style: "ok", text: "precision: baseline=33%  recycled=100%  match=33%" });
       }, 900);
       return;
     }
     if (command === "/session-new") {
-      chat.messages = [{ role: "system", at: clock(), text: "new session #b3c8 · cache is shared, the transcript is not" }];
+      chat.messages = [{ role: "system", at: clock(), style: "cyan", text: "new session: b3c8d4e1f0…" }];
       render();
       return;
     }
@@ -600,9 +623,8 @@
     push({ role: "user", at: clock(), text });
     const key = text.toLowerCase().replace(/\s+/g, " ").trim();
     const rawMode = state.mode === "raw";
-    const hit = rawMode ? false : Boolean(chat.seen[key]);
+    const hit = rawMode ? "raw" : Boolean(chat.seen[key]);
     chat.seen[key] = true;
-    const badge = rawMode ? "[raw]" : "[cached]";
     const reply = REPLIES[intentFor(text)];
     chat.busy = true;
 
@@ -624,7 +646,7 @@
       const message = {
         role: "ai",
         at: clock(),
-        badge,
+        mode: rawMode ? "raw" : "cached",
         hit,
         think: reply.think,
         text: "",
@@ -651,7 +673,9 @@
           timer = window.setTimeout(tick, hit ? 6 : 22);
           return;
         }
-        message.stats = `in ${hit ? 0 : number(1204)} tok · ttft ${ttft}ms · total ${total}ms · ${tokens} tok`;
+        message.stats =
+          `in ${hit === true ? 0 : number(1204)} tok · ttft ${ttft}ms · total ${total}ms · ${tokens} tok` +
+          (hit === true ? " · reused 1204" : "");
         const stats = el("span", "msg-stats", `  [${message.stats}]`);
         node.body.appendChild(stats);
         chat.session.gen += tokens;
@@ -662,10 +686,17 @@
           const rawTtft = ttft + 720 + Math.round(Math.random() * 400);
           const rawTotal = total + 900 + Math.round(Math.random() * 700);
           const ratio = (total / rawTotal).toFixed(2);
+          const identical = hit !== "raw";
           const compare = {
             role: "compare",
             at: clock(),
-            text: `[${ratio}× cached vs raw]  raw=${rawTtft}/${rawTotal}ms  cached=${ttft}/${total}ms`,
+            speedup: ratio,
+            raw: `${rawTtft}/${rawTotal}ms`,
+            cached: `${ttft}/${total}ms`,
+            identical,
+            body: identical
+              ? "  outputs byte-identical"
+              : "  outputs differ: 39 chars (first diff at char 19)",
           };
           chat.messages.push(compare);
           const transcript = root.querySelector("[data-transcript]");
