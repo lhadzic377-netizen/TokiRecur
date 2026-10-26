@@ -4874,6 +4874,23 @@ def _provider_entry(spec: ModelSpec, mode: str = "managed") -> dict[str, Any]:
     # 400 "not enough tokens".
     ctx = _effective_ctx(spec)
     base = spec.llama_url if mode == "raw" else spec.daemon_url
+    models: dict[str, Any] = {
+        spec.model_id: {
+            "name": f"{spec.label} (Toki Recur)",
+            "contextWindow": ctx,
+            "limit": {"context": ctx, "output": min(8192, max(1, ctx // 2))},
+        }
+    }
+    # The effort variants: the same weights with the reasoning steered.
+    # A harness that can only pick a model id picks the effort by id.
+    for variant in expand_variants([spec]):
+        if variant.effort is None:
+            continue
+        models[variant.model_id] = {
+            "name": f"{variant.label} (Toki Recur)",
+            "contextWindow": ctx,
+            "limit": {"context": ctx, "output": min(8192, max(1, ctx // 2))},
+        }
     return {
         "name": f"Toki Recur ({spec.label})",
         "npm": "@ai-sdk/openai-compatible",
@@ -4881,13 +4898,7 @@ def _provider_entry(spec: ModelSpec, mode: str = "managed") -> dict[str, Any]:
             "baseURL": f"{base}/v1",
             "apiKey": _configured_auth_token() or auth_token(),
         },
-        "models": {
-            spec.model_id: {
-                "name": f"{spec.label} (Toki Recur)",
-                "contextWindow": ctx,
-                "limit": {"context": ctx, "output": min(8192, max(1, ctx // 2))},
-            }
-        },
+        "models": models,
     }
 
 
