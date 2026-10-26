@@ -221,17 +221,21 @@
   /* --- state ------------------------------------------------------------- */
 
   function freshChat() {
+    /* A session that has already happened: the miss, the hit, the compare
+       pair, the precision check, and one turn in raw mode. It fills the
+       box the way a real transcript does, and it shows every badge the
+       app can print. */
     return {
       messages: [
         { role: "system", at: "09:41:02", style: "cyan", text: "session #a7f2 · cached · 200k ctx" },
-        { role: "user", at: "09:41:07", text: "Summarise what this daemon does, in two sentences." },
+        { role: "user", at: "09:41:07", text: "What does this daemon do?" },
         {
           role: "ai",
           at: "09:41:12",
           mode: "cached",
           hit: false,
-          think: "They want the pitch, not the internals. Two sentences, no bullets.",
-          text: "It sits in front of llama-server and keeps the KV cache alive between requests. Agents that share a long prefix compute it once, then every later turn reads it back instead of prefilling again.",
+          think: "They want the pitch, not the internals. Two sentences.",
+          text: "It sits in front of llama-server and keeps the KV cache alive between requests. A shared prefix is computed once, then read back.",
           stats: "in 1,204 tok · ttft 3600ms · total 4400ms · 62 tok",
         },
         { role: "user", at: "09:41:40", text: "Ask the exact same thing again." },
@@ -241,16 +245,38 @@
           mode: "cached",
           hit: true,
           think: "Same prefix as the turn above. This should be a full hit.",
-          text: "Same prefix, so the cache answers it: 1,204 prompt tokens read back in 210ms instead of prefilled for 3.6s. The words below are the first answer again, because a hit is a hit.",
+          text: "Same prefix, so the cache answers it: 1,204 tokens read back in 210ms instead of prefilled for 3.6s.",
           stats: "in 0 tok · ttft 210ms · total 380ms · 61 tok · reused 1204",
         },
-        { role: "system", at: "09:41:41", style: "dim", text: "cache: 1,204 tok reused · hit rate 50% (1/2)" },
+        { role: "user", at: "09:42:04", text: "Run both sides and show me the difference." },
+        {
+          role: "compare",
+          at: "09:42:07",
+          speedup: "0.68",
+          raw: "2608/4907ms",
+          cached: "1682/3340ms",
+          identical: true,
+          body: "  outputs byte-identical",
+        },
+        { role: "user", at: "09:42:19", text: "/precision" },
+        { role: "system", at: "09:42:19", style: "cyan", text: "running precision check…" },
+        { role: "system", at: "09:42:21", style: "ok", text: "precision: baseline=33%  recycled=100%  match=33%" },
+        { role: "user", at: "09:42:33", text: "Now switch to raw and ask the same thing." },
+        { role: "system", at: "09:42:33", style: "cyan", text: "mode → raw" },
+        {
+          role: "ai",
+          at: "09:42:37",
+          mode: "raw",
+          hit: "raw",
+          text: "No prefix to reuse, so the prompt is prefilled again: 1,204 tokens, 3.4s before the first token.",
+          stats: "in 1,204 tok · ttft 3400ms · total 3600ms · 41 tok",
+        },
       ],
       seen: {},
       busy: false,
-      live: { req: 14, hit: 8, miss: 6, skip: 9473, slots: 2, auth: 0 },
-      session: { msgs: 2, gen: 123, reused: 1204, hits: 1, total: 2, ctx: 4 },
-      precision: null,
+      live: { req: 18, hit: 10, miss: 8, skip: 9473, slots: 2, auth: 0 },
+      session: { msgs: 5, gen: 286, reused: 1204, hits: 2, total: 5, ctx: 6 },
+      precision: { baseline: 33, recycled: 100, match: 33 },
       panel: true,
     };
   }
