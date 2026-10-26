@@ -1446,6 +1446,10 @@ footer {
    page draws is what the app draws. It is a simulation — the answers are
    canned — but the frame, the keys and the readouts are the real ones. */
 
+main > section.app-demo {
+  max-width: 1600px;
+}
+
 .app-demo .demo-head {
   max-width: 60ch;
   margin-bottom: var(--s6);
@@ -1519,13 +1523,13 @@ footer {
   --tui-cyan: #4dd0e1;
 
   position: relative;
-  height: clamp(420px, 74vh, 660px);
-  padding: 14px 16px;
+  height: clamp(440px, 80vh, 840px);
+  padding: 16px 18px;
   background: #08090b;
   color: var(--tui-text);
   font-family: var(--mono);
-  font-size: 15.5px;
-  font-size: clamp(9.5px, 1.28vw, 15.5px);
+  font-size: 17px;
+  font-size: clamp(9.5px, 1.3vw, 17px);
   display: flex;
   flex-direction: column;
   line-height: 1.38;
@@ -1570,7 +1574,9 @@ footer {
 .tui .wordmark {
   color: var(--tui-yellow);
   font-family: "DejaVu Sans Mono", ui-monospace, monospace;
-  line-height: 1.02;
+  font-size: 1.3em;
+  font-weight: 700;
+  line-height: 1.1;
 }
 
 .tui .wordmark + .tui-line { margin-top: 0.55em; }
@@ -1601,7 +1607,7 @@ footer {
 
 .tui-chat {
   display: grid;
-  grid-template-columns: 24ch minmax(0, 1fr) 34ch;
+  grid-template-columns: 24ch minmax(0, 1fr) 36ch;
   grid-template-rows: minmax(0, 1fr) auto;
   column-gap: 0;
   height: 100%;
@@ -1676,7 +1682,7 @@ footer {
 .mode-raw { color: var(--tui-red); font-weight: 700; }
 .mode-compare { color: var(--tui-purple); font-weight: 700; }
 
-.p-line { white-space: pre; }
+.p-line { white-space: pre-wrap; }
 .p-line.white { color: var(--tui-text); }
 .p-line.cyan { color: var(--tui-cyan); }
 .p-line.dim { color: var(--tui-muted); }
