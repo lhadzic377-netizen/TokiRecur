@@ -1528,8 +1528,8 @@ main > section.app-demo {
   background: #08090b;
   color: var(--tui-text);
   font-family: var(--mono);
-  font-size: 16px;
-  font-size: clamp(9.5px, 1.22vw, 16px);
+  font-size: 14px;
+  font-size: clamp(9px, 1vw, 14px);
   display: flex;
   flex-direction: column;
   line-height: 1.38;
@@ -1574,7 +1574,7 @@ main > section.app-demo {
 .tui .wordmark {
   color: var(--tui-yellow);
   font-family: "DejaVu Sans Mono", ui-monospace, monospace;
-  font-size: 1.3em;
+  font-size: 1.5em;
   font-weight: 700;
   line-height: 1.1;
 }
