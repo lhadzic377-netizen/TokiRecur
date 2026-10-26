@@ -13,7 +13,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300..700&family=Geist+Mono:wght@400..600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/style.css?v=26">
+<link rel="stylesheet" href="/style.css?v=36">
 <script>document.documentElement.classList.add('js-ready');</script>
 </head>
 <body>
@@ -58,8 +58,14 @@
     </div>
 
     <figure class="hero-visual reveal terminal">
-      <figcaption class="terminal-bar"><span class="terminal-dot"></span>toki &mdash; the launcher</figcaption>
-      <img src="/img/tui-launcher.png?v=3" alt="The toki terminal launcher: the TOKI wordmark, the model in use, and the agents it can start" width="620" height="550" loading="eager">
+      <figcaption class="terminal-bar">
+        <span class="terminal-dot"></span>toki &mdash; the launcher
+        <span class="terminal-keys" aria-hidden="true">live &middot; &uarr;&darr; 1&ndash;9 m &rarr; s enter</span>
+      </figcaption>
+      <div class="tui" data-tui aria-label="The toki launcher, live. Use the arrow keys to move, 1 to 9 to jump, m to switch the inference mode, the right arrow for the model list, s for settings, Enter to launch."></div>
+      <noscript>
+        <img src="/img/tui-launcher.png?v=3" alt="The toki terminal launcher: the TOKI wordmark, the model in use, and the agents it can start" width="620" height="550" loading="eager">
+      </noscript>
     </figure>
 
     <div class="stats">
@@ -461,5 +467,6 @@
 </footer>
 
 <script src="/app.js?v=15" defer></script>
+<script src="/tui.js?v=7" defer></script>
 </body>
 </html>

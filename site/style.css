@@ -329,8 +329,8 @@ section > h2 + .section-sub { margin-top: var(--s4); }
     transparent 78%
   );
   display: grid;
-  grid-template-columns: minmax(0, 1.14fr) minmax(0, 0.86fr);
-  gap: clamp(28px, 5vw, 72px);
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: clamp(28px, 4vw, 52px);
   align-items: center;
   padding-top: clamp(56px, 9vw, 120px) !important;
   padding-bottom: clamp(56px, 8vw, 110px) !important;
@@ -338,7 +338,7 @@ section > h2 + .section-sub { margin-top: var(--s4); }
 }
 
 .hero h1 {
-  font-size: clamp(2.3rem, 1.55rem + 2.35vw, 3.3rem);
+  font-size: clamp(2.2rem, 1.5rem + 2.2vw, 3.05rem);
   letter-spacing: -0.042em;
   line-height: 1.04;
   margin: 0 0 var(--s5);
@@ -1437,4 +1437,85 @@ footer {
   .footer-grid { grid-template-columns: minmax(0, 1fr); gap: var(--s6); }
   .footer-bottom { flex-direction: column; gap: var(--s2); }
   main > section { padding: var(--s9) var(--gutter); }
+}
+
+/* --- the live launcher ---------------------------------------------------- */
+
+/* The launcher is the front door of the product, so the site opens with the
+   front door working. Same rows, same colours, same keys: the terminal in
+   the hero is the real interface, not a picture of one. */
+
+.tui {
+  --tui-yellow: #ffd60a;
+  --tui-amber: #b8860b;
+  --tui-text: #f0ece0;
+  --tui-muted: #9a967f;
+  --tui-red: #ff6b8b;
+  --tui-green: #4ade80;
+
+  margin: 0;
+  padding: 16px 12px 18px;
+  background: #08090b;
+  color: var(--tui-text);
+  font-family: var(--mono);
+  /* cqw: one character's worth of the column the terminal sits in. */
+  font-size: 16px;
+  font-size: clamp(8.5px, 2.83cqw, 16px);
+  line-height: 1.35;
+  white-space: pre;
+  /* The launcher is a fixed-width terminal: it does not reflow, and it does
+     not scroll either. What does not fit is cut, exactly as it is cut in a
+     real terminal that is too narrow. */
+  overflow: hidden;
+  outline: none;
+  min-height: 600px;
+  transition: box-shadow 0.22s var(--ease);
+}
+
+.hero-visual { container-type: inline-size; }
+
+.tui:focus-visible,
+.tui.focused {
+  box-shadow: inset 0 0 0 1px var(--brand-line);
+}
+
+.tui .tui-line { white-space: pre; }
+.tui .gutter { color: var(--tui-muted); }
+/* The wordmark is figlet art: it is drawn with _ | / \ and reads as
+   letters only in a face whose glyphs are shaped the way the art expects. */
+.tui .wordmark {
+  color: var(--tui-yellow);
+  font-family: "DejaVu Sans Mono", ui-monospace, monospace;
+  font-weight: 400;
+}
+.tui .sel { color: var(--tui-yellow); font-weight: 600; }
+.tui .bar { color: var(--tui-yellow); font-weight: 600; }
+.tui .name { color: var(--tui-muted); }
+.tui .chip { color: var(--tui-amber); }
+.tui .dim-chip { color: rgba(184, 134, 11, 0.72); }
+.tui .ok { color: var(--tui-green); }
+.tui .off { color: var(--tui-red); }
+.tui .dim { color: var(--tui-muted); }
+.tui .value { color: var(--tui-text); }
+.tui .group { color: var(--tui-yellow); font-weight: 600; margin-top: 6px; }
+.tui .status { margin-top: 12px; }
+.tui .hints { color: var(--tui-muted); }
+
+.terminal-keys {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+}
+
+@media (max-width: 860px) {
+  /* A phone cannot show a whole terminal legibly, so it shows the part that
+     identifies it: the wordmark and the model in use. */
+  .terminal-keys { display: none; }
+  .tui {
+    min-height: 0;
+    max-height: 300px;
+    -webkit-mask-image: linear-gradient(to bottom, #000 76%, transparent 99%);
+    mask-image: linear-gradient(to bottom, #000 76%, transparent 99%);
+  }
 }
