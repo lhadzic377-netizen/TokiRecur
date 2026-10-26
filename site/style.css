@@ -1528,8 +1528,8 @@ main > section.app-demo {
   background: #08090b;
   color: var(--tui-text);
   font-family: var(--mono);
-  font-size: 17px;
-  font-size: clamp(9.5px, 1.3vw, 17px);
+  font-size: 16px;
+  font-size: clamp(9.5px, 1.22vw, 16px);
   display: flex;
   flex-direction: column;
   line-height: 1.38;
@@ -1607,7 +1607,7 @@ main > section.app-demo {
 
 .tui-chat {
   display: grid;
-  grid-template-columns: 24ch minmax(0, 1fr) 36ch;
+  grid-template-columns: 22ch minmax(0, 1fr) 30ch;
   grid-template-rows: minmax(0, 1fr) auto;
   column-gap: 0;
   height: 100%;
@@ -1625,6 +1625,7 @@ main > section.app-demo {
 
 .panel-box {
   border: 1px solid #3d3d3d;
+  border-radius: 4px;
   padding: 0 1;
   height: 100%;
   overflow: hidden;
@@ -1640,6 +1641,7 @@ main > section.app-demo {
 .chat-box {
   height: 100%;
   border: 1px solid #2b2b2b;
+  border-radius: 4px;
   padding: 0 1;
   overflow-y: auto;
   scrollbar-width: thin;
@@ -1672,10 +1674,10 @@ main > section.app-demo {
   height: 1px;
   background: #3d3d3d;
   margin: 5px 0;
-  width: 100%;
+  width: 20ch;
 }
 
-.side-line { white-space: pre; }
+.side-line { white-space: pre-wrap; }
 .side-line.yellow { color: var(--tui-yellow); }
 .side-line.cyan { color: var(--tui-cyan); }
 .mode-cached { color: var(--tui-green); font-weight: 700; }
@@ -1708,6 +1710,7 @@ main > section.app-demo {
 .msg-arrow.magenta { color: var(--tui-purple); }
 .msg-text { color: var(--tui-text); }
 .msg-stats { color: var(--tui-muted); }
+.msg-stats.reused { color: var(--tui-cyan); }
 .hit { color: var(--tui-green); font-weight: 700; }
 .miss { color: var(--tui-red); }
 .rawbadge { color: var(--tui-blue); font-weight: 700; }
@@ -1741,6 +1744,7 @@ main > section.app-demo {
   margin: 0 1;
   padding: 6px 9px;
   border: 1px solid #3d3d3d;
+  border-radius: 4px;
   border-radius: 3px;
   background: #121212;
 }

@@ -248,6 +248,7 @@
           text: "Same prefix, so the cache answers it: 1,204 tokens read back in 210ms instead of prefilled for 3.6s.",
           stats: "in 0 tok · ttft 210ms · total 380ms · 61 tok · reused 1204",
         },
+        { role: "system", at: "09:41:41", style: "dim", text: "cache: 1,204 tok reused · hit rate 50% (1/2)" },
         { role: "user", at: "09:42:04", text: "Run both sides and show me the difference." },
         {
           role: "compare",
@@ -268,6 +269,7 @@
           at: "09:42:37",
           mode: "raw",
           hit: "raw",
+          think: "Raw means no prefix to reuse. Say what that costs.",
           text: "No prefix to reuse, so the prompt is prefilled again: 1,204 tokens, 3.4s before the first token.",
           stats: "in 1,204 tok · ttft 3400ms · total 3600ms · 41 tok",
         },
@@ -499,7 +501,12 @@
       else if (message.hit === false) span(flow, "miss", "✗ miss ");
       else if (message.hit === "raw") span(flow, "rawbadge", "↯ raw ");
       span(flow, "msg-text", message.text);
-      if (message.stats) span(flow, "msg-stats", `  [${message.stats}]`);
+      if (message.stats) {
+        const parts = message.stats.split("· reused ");
+        span(flow, "msg-stats", `  [${parts[0]}`);
+        if (parts.length > 1) span(flow, "msg-stats reused", `· reused ${parts[1]}`);
+        span(flow, "msg-stats", "]");
+      }
     } else if (message.role === "compare") {
       span(flow, "msg-compare", "compare ");
       span(flow, "compare-speed", `[${message.speedup}× `);
