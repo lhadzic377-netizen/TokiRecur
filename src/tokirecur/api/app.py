@@ -36,6 +36,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel, Field
 
+from .. import tap
 from ..core.recycling import (
     LlamaBackend,
     RecyclingEngine,
@@ -1258,6 +1259,16 @@ def create_app(
                     {"content": err_msg},
                 )
                 yield "data: [DONE]\n\n"
+                tap.record(
+                    endpoint="chat.completions" if is_chat else "completions",
+                    model=model_name,
+                    messages=messages,
+                    prompt=prompt if not is_chat else None,
+                    effort=reasoning_effort,
+                    session_id=session_id,
+                    params={"temperature": temperature, "max_tokens": max_tokens},
+                    error=f"{type(e).__name__}: {e}",
+                )
                 return
             if result is None:
                 yield "data: [DONE]\n\n"
@@ -1324,6 +1335,21 @@ def create_app(
             slot_id=result.slot_id,
             context_tokens=slot_ctx,
             spilled=result.spilled,
+        )
+        tap.record(
+            endpoint="chat.completions" if is_chat else "completions",
+            model=model_name,
+            result=result,
+            messages=messages,
+            prompt=prompt if not is_chat else None,
+            effort=reasoning_effort,
+            session_id=session_id,
+            params={
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "sampling": sampling,
+                "chat_template_kwargs": chat_template_kwargs,
+            },
         )
 
     def _normalize_responses_tools(tools: list | None) -> list | None:
@@ -1720,6 +1746,20 @@ def create_app(
             context_tokens=slot_ctx,
             spilled=result.spilled,
         )
+        tap.record(
+            endpoint="responses",
+            model=req.model,
+            result=result,
+            messages=messages,
+            effort=None if reasoning_mode != "off" else "none",
+            session_id=req.session_id,
+            params={
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "sampling": sampling,
+                "chat_template_kwargs": ctk,
+            },
+        )
 
     @app.post("/v1/completions")
     async def completions(req: CompletionRequest) -> Response:
@@ -1773,6 +1813,18 @@ def create_app(
                 slot_id=result.slot_id,
                 context_tokens=slot_ctx,
                 spilled=result.spilled,
+            )
+            tap.record(
+                endpoint="completions",
+                model=req.model,
+                result=result,
+                prompt=req.prompt,
+                session_id=req.session_id,
+                params={
+                    "temperature": temperature,
+                    "max_tokens": req.max_tokens,
+                    "sampling": sampling,
+                },
             )
             return CompletionResponse(
                 id=f"cmpl-{int(time.time() * 1000)}",
@@ -1913,6 +1965,20 @@ def create_app(
                 context_tokens=slot_ctx,
                 spilled=result.spilled,
             )
+            tap.record(
+                endpoint="chat.completions",
+                model=req.model,
+                result=result,
+                messages=messages,
+                effort=effort,
+                session_id=req.session_id,
+                params={
+                    "temperature": temperature,
+                    "max_tokens": req.max_tokens,
+                    "sampling": sampling,
+                    "chat_template_kwargs": ctk,
+                },
+            )
             # OpenAI chat response shape. In tool mode the assistant
             # message carries tool_calls (and null content) and the
             # finish reason is "tool_calls".
@@ -1961,6 +2027,44 @@ def create_app(
             logger.exception("chat completion failed")
             raise HTTPException(status_code=500, detail=str(e)) from e
 
+    async def _tap_anthropic_stream(
+        items: Any, *, model_name: str, messages: list[dict],
+        session: str | None, params: dict,
+    ) -> Any:
+        """Relay the engine's stream, recording the finished turn.
+
+        The Anthropic path hands the engine's items to ``stream_message``,
+        which consumes them — so the tap has to sit between the two to
+        still see the final result.
+        """
+        result = None
+        try:
+            async for item in items:
+                if item.get("kind") == "result":
+                    result = item.get("result")
+                yield item
+        except Exception as e:
+            tap.record(
+                endpoint="messages",
+                model=model_name,
+                messages=messages,
+                effort=None,
+                session_id=session,
+                params=params,
+                error=f"{type(e).__name__}: {e}",
+            )
+            raise
+        if result is not None:
+            tap.record(
+                endpoint="messages",
+                model=model_name,
+                result=result,
+                messages=messages,
+                effort=None,
+                session_id=session,
+                params=params,
+            )
+
     @app.api_route("/anthropic/api/hello", methods=["GET", "HEAD"])
     async def anthropic_hello() -> Response:
         """Anthropic-style connectivity probe.
@@ -2004,6 +2108,18 @@ def create_app(
                         tool_choice=tool_choice,
                         sampling=sampling,
                     )
+                    items = _tap_anthropic_stream(
+                        items,
+                        model_name=model_name,
+                        messages=messages,
+                        session=session,
+                        params={
+                            "temperature": temperature,
+                            "max_tokens": max_tokens,
+                            "sampling": sampling,
+                            "chat_template_kwargs": template_kwargs,
+                        },
+                    )
                     async for event in stream_message(items, model_name):
                         yield event
                 except Exception as e:
@@ -2040,6 +2156,20 @@ def create_app(
                 slot_id=result.slot_id,
                 context_tokens=slot_ctx,
                 spilled=result.spilled,
+            )
+            tap.record(
+                endpoint="messages",
+                model=model_name,
+                result=result,
+                messages=messages,
+                effort=None,
+                session_id=session,
+                params={
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                    "sampling": sampling,
+                    "chat_template_kwargs": template_kwargs,
+                },
             )
             return JSONResponse(response_message(result, model_name))
         except Exception as e:
@@ -2123,6 +2253,20 @@ def create_app(
                 slot_id=result.slot_id,
                 context_tokens=slot_ctx,
                 spilled=result.spilled,
+            )
+            tap.record(
+                endpoint="responses",
+                model=req.model,
+                result=result,
+                messages=messages,
+                effort=None if reasoning_mode != "off" else "none",
+                session_id=req.session_id,
+                params={
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                    "sampling": sampling,
+                    "chat_template_kwargs": ctk,
+                },
             )
             created = int(time.time())
             ts = int(time.time() * 1000)

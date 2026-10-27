@@ -222,6 +222,10 @@ toki evict --target-mb 4096                           # LRU evict to fit budget
 toki doctor                                           # llama-server, ROCm, GPU
 toki compare report.json report2.json                 # diff two bench reports
 
+# ── training data (off by default) ──────────────────────────────────────────
+toki tap on                                           # record every managed turn
+toki tap export --format sft --out training.jsonl     # one example per turn
+
 # ── OpenAI-compatible API server (running under `toki up`) ──────────────────
 # POST http://127.0.0.1:8787/v1/completions
 # POST http://127.0.0.1:8787/v1/chat/completions
@@ -421,6 +425,32 @@ toki web --port 7778 --raw-url http://...:8088 # custom port + backend
 - System prompt input persisted in the sidebar
 - Conversation history with multi-turn support
 - Mobile-responsive layout
+
+## Recording turns for training (`toki tap`)
+
+Off by default. With it on, the daemon appends one JSONL line per managed
+turn — what the model was given, what it answered, the reasoning it produced,
+and the turn's numbers — to
+`~/.local/state/tokirecur/tap/YYYY-MM-DD.jsonl`. Nothing leaves the machine.
+
+```bash
+toki tap on                     # start (no restart: the daemon checks per turn)
+toki tap status                 # switch, directory, files, record count
+toki tap off                    # stop, keep the files
+toki tap export --format sft --out training.jsonl
+toki tap clear                  # delete the recordings
+```
+
+`--format sft` writes the plain `{"messages": [...]}` shape a trainer accepts,
+one completed turn per line; `--with-reasoning/--no-reasoning` decides whether
+the reasoning rides beside the answer. The TUI shows `● rec` while the switch
+is on (`Ctrl+T` in the launcher toggles it), and the desktop app has the same
+switch in Settings → Recording.
+
+Honest limits: images are recorded as the captions the text-only model was
+shown, not as pixels; token ids are not recorded (the engine does not return
+them for chat, and re-tokenising is not guaranteed identical); and the TUI's
+raw mode bypasses the daemon but writes to the same file with `mode: "raw"`.
 
 ## Architectural improvements
 

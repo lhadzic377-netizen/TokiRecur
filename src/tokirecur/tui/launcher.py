@@ -131,6 +131,7 @@ class LauncherApp(App[dict | None]):
         Binding("q", "quit_app", "quit", show=False, priority=True),
         Binding("s", "settings", "Settings", priority=True),
         Binding("m", "toggle_mode", "Mode", priority=True),
+        Binding("ctrl+t", "toggle_tap", "Record", priority=True),
     ]
 
     focus_pane: reactive[str] = reactive("launchers")  # launchers | models | settings
@@ -310,6 +311,27 @@ class LauncherApp(App[dict | None]):
         if self.focus_pane in ("models", "settings"):
             self.focus_pane = "launchers"
         self._refresh += 1
+
+    def action_toggle_tap(self) -> None:
+        """Ctrl+T: record every managed turn to JSONL, or stop.
+
+        Deliberate rather than hidden: turning it on says where the
+        turns are going, because a recorder people forget about is how
+        prompts end up on disk without anyone choosing it.
+        """
+        from .. import tap
+
+        turning_on = not tap.is_enabled()
+        tap.set_enabled(turning_on)
+        if turning_on:
+            self.notify(
+                f"Recording every turn to {tap.tap_dir()}\n"
+                "`toki tap off` stops it; files stay.",
+                severity="warning",
+                timeout=8,
+            )
+        else:
+            self.notify("Recording stopped. Files stay where they are.", timeout=5)
 
     def action_settings(self) -> None:
         """s: open the settings pane (edit any registry field)."""
@@ -690,8 +712,14 @@ class LauncherApp(App[dict | None]):
                 line.append("●", style=art.GREEN if daemon else art.RED)
         else:
             line.append("no model pinned", style="dim")
+        from .. import tap
+
+        if tap.is_enabled():
+            line.append("    ", style="dim")
+            line.append("● rec", style=f"bold {art.RED}")
         line.append("    ", style="dim")
-        line.append("1-9 jump · m mode · enter launch · esc quit", style="dim")
+        line.append("1-9 jump · m mode · ctrl+t rec · enter launch · esc quit",
+                    style="dim")
         return line
 
     def _render_launchers(self, width: int) -> list[Text]:

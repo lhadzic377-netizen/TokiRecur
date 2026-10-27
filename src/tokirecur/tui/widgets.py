@@ -28,7 +28,7 @@ from textual.containers import VerticalScroll
 from textual.reactive import reactive
 from textual.widgets import Static
 
-from .art import AMBER, YELLOW
+from .art import AMBER, RED, YELLOW
 
 # ── ChatLog ──────────────────────────────────────────────────────────
 
@@ -375,6 +375,10 @@ class StatusBar(Static):
         text.append(f"ctx={self.ctx_pct}% ", style="bold cyan")
         text.append(f"maxtok={self.max_tokens} ", style=f"bold {AMBER}")
         text.append(f"hits={self.hit_rate} ", style="dim cyan")
+        from .. import tap
+
+        if tap.is_enabled():
+            text.append("● rec ", style=f"bold {RED}")
         text.append("│ Ctrl+R · Ctrl+T · /help", style="dim")
         return text
 

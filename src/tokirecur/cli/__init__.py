@@ -2680,6 +2680,128 @@ def service_logs(name: str) -> None:
     raise SystemExit(svc_logs(name))
 
 
+# ── Recording turns for training data ────────────────────────────────────
+
+
+@cli.group()
+def tap() -> None:
+    """Record every managed turn to JSONL, off by default.
+
+    With the tap on, the daemon appends one line per completion to
+    ``~/.local/state/tokirecur/tap/YYYY-MM-DD.jsonl``: the messages the
+    model was given, the answer, the reasoning, and the numbers that
+    describe the turn. Nothing leaves the machine.
+
+    The switch is a file, so turning it on never restarts a stack.
+    """
+
+
+@tap.command("on")
+def tap_on() -> None:
+    """Start recording (takes effect on the next turn)."""
+    from .. import tap as _tap
+
+    path = _tap.set_enabled(True)
+    click.echo(f"tap: on  (switch {path})")
+    click.echo(f"      records {_tap.tap_dir()}")
+
+
+@tap.command("off")
+def tap_off() -> None:
+    """Stop recording. Existing files are kept."""
+    from .. import tap as _tap
+
+    _tap.set_enabled(False)
+    click.echo("tap: off")
+
+
+@tap.command("status")
+def tap_status() -> None:
+    """Show the switch and what is on disk."""
+    from .. import tap as _tap
+
+    info = _tap.stats()
+    click.echo(f"tap: {'on' if info['enabled'] else 'off'}")
+    click.echo(f"  switch  {info['flag']}")
+    click.echo(f"  dir     {info['dir']}")
+    if info["files"]:
+        mib = info["bytes"] / (1024 * 1024)
+        cap = info["max_bytes"] / (1024 * 1024)
+        click.echo(f"  files   {info['files']} ({mib:.1f} MiB of {cap:.0f} MiB)")
+        click.echo(f"  records {info['records']}")
+        click.echo(f"  newest  {info['newest']}")
+    else:
+        click.echo("  records none yet")
+
+
+@tap.command("path")
+def tap_path() -> None:
+    """Print the recording directory (for scripts)."""
+    from .. import tap as _tap
+
+    click.echo(str(_tap.tap_dir()))
+
+
+@tap.command("clear")
+@click.option("--yes", is_flag=True, help="Do not ask for confirmation.")
+def tap_clear(yes: bool) -> None:
+    """Delete every recording. The switch is left as it is."""
+    from .. import tap as _tap
+
+    if not yes and not click.confirm("delete every recording?", default=False):
+        raise SystemExit(1)
+    removed, freed = _tap.clear()
+    click.echo(f"tap: removed {removed} file(s), {freed / (1024 * 1024):.1f} MiB")
+
+
+@tap.command("export")
+@click.option("--format", "fmt", type=click.Choice(["jsonl", "sft"]),
+              default="jsonl", show_default=True,
+              help="jsonl keeps every field; sft writes one training example per turn.")
+@click.option("--out", type=click.Path(path_type=Path), default=None,
+              help="Write here instead of stdout.")
+@click.option("--since", default=None,
+              help="Only files from this UTC day onward (YYYY-MM-DD).")
+@click.option("--with-reasoning/--no-reasoning", default=True,
+              help="Keep the reasoning beside the answer in sft output.")
+@click.option("--with-errors/--no-errors", default=False,
+              help="Include turns that failed.")
+def tap_export(
+    fmt: str, out: Path | None, since: str | None,
+    with_reasoning: bool, with_errors: bool,
+) -> None:
+    """Export recordings for a training pipeline.
+
+    ``jsonl`` is the tape itself. ``sft`` writes the plain
+    ``{"messages": [...]}`` shape every trainer accepts, one line per
+    completed turn.
+    """
+    import json as _json
+
+    from .. import tap as _tap
+
+    records = list(_tap.iter_records(since=since, include_errors=with_errors))
+    if fmt == "sft":
+        rows = list(_tap.sft_records(records, with_reasoning=with_reasoning))
+    else:
+        rows = records
+    if not rows:
+        click.echo("tap: nothing to export", err=True)
+        raise SystemExit(1)
+
+    def write(fh) -> None:
+        for row in rows:
+            fh.write(_json.dumps(row, ensure_ascii=False) + "\n")
+
+    if out is None:
+        write(sys.stdout)
+    else:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        with out.open("w", encoding="utf-8") as fh:
+            write(fh)
+        click.echo(f"tap: wrote {len(rows)} record(s) to {out}", err=True)
+
+
 def _version() -> str:
     try:
         from importlib.metadata import version

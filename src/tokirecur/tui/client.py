@@ -419,6 +419,28 @@ class DaemonClient:
         # instead of "✓ hit" / "✗ miss".
         if mode == "raw":
             cache_marker: dict = {"applicable": False, "mode": "raw"}
+            # The tape records this turn too: raw mode is where people
+            # experiment, and a dataset with a hole exactly there is a
+            # dataset of the easy half. No cache numbers, because there
+            # was no cache in front of it.
+            try:
+                from .. import tap
+
+                tap.raw_turn(
+                    model="default",
+                    messages=messages,
+                    completion="".join(text_chunks),
+                    reasoning="".join(reasoning_chunks),
+                    effort=effort,
+                    params={
+                        "url": self.raw_url,
+                        "temperature": temperature,
+                        "max_tokens": max_tokens,
+                        "cache_prompt": cache_prompt_enabled(),
+                    },
+                )
+            except Exception:  # noqa: BLE001 — recording never breaks a turn
+                pass
         else:
             # Cached mode: prefer the daemon's verdict chunk (hit,
             # soft_hit, reuse_depth, cache_id, ...); fall back to a
