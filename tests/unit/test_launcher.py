@@ -7,7 +7,7 @@ import pytest
 
 from tokirecur import ctl
 from tokirecur.tui import launcher as launcher_mod
-from tokirecur.tui.launcher import LAUNCH_APPS, LauncherApp
+from tokirecur.tui.launcher import LAUNCH_APPS, LauncherApp, _settings_rows
 
 
 @pytest.fixture(autouse=True)
@@ -199,6 +199,24 @@ def test_number_keys_jump_to_model():
     assert idx_after == 1  # pressing "2" jumps to model index 1
 
 
+async def _goto_setting(pilot, app, field: str, name: str) -> None:
+    """Move the settings highlight to a row, by name.
+
+    The pane opens on the machine-wide recorder row, so a model's field
+    is no longer the first row and counting downs to reach one is a trap.
+    """
+    from tokirecur.tui.launcher import _settings_rows
+
+    rows = _settings_rows(app.specs, app=app)
+    idx = next(
+        i for i, (row_name, row_field, _) in enumerate(rows)
+        if row_name == name and row_field == field
+    )
+    for _ in range(idx):
+        await pilot.press("down")
+    await pilot.pause()
+
+
 def test_settings_pane_renders_rows_for_each_spec():
     """Pressing `s` shows the settings pane with one editable row per
     field per registry spec, with the highlighted row accented."""
@@ -209,23 +227,26 @@ def test_settings_pane_renders_rows_for_each_spec():
             await pilot.press("s")
             await pilot.pause()
             rendered = str(app.pane.render())
-        return rendered
+            rows = _settings_rows(app.specs, app=app)
+        return rendered, rows
 
-    rendered = asyncio.run(run_app())
-    # Every default model appears as a section header.
-    assert "9b" in rendered
-    assert "35b" in rendered
-    assert "laguna" in rendered
+    rendered, rows = asyncio.run(run_app())
+    # The rows cover every default model — the pane shows a window of
+    # them, so the model list is a claim about the rows, not about what
+    # happens to be on screen.
+    names = {name for name, _, _ in rows}
+    assert {"9b", "35b", "laguna"} <= names
     # Editable fields appear.
-    assert "gguf" in rendered
-    assert "llama_port" in rendered
-    assert "ctx_size" in rendered
-    assert "binary" in rendered
-    assert "reasoning" in rendered
+    fields = {field for _, field, _ in rows}
+    assert {"gguf", "llama_port", "ctx_size", "binary", "reasoning"} <= fields
     # Read-only fields do NOT appear (name, source).
-    assert rendered.count("\n  9b") == 1 or "  9b\n" in rendered  # one section header
-    # The first row gets the accent bar.
-    assert "▌ gguf" in rendered
+    assert "source" not in fields
+    # The machine-wide recorder leads the pane, and the first row gets
+    # the accent bar.
+    assert rows[0][0] == "machine"
+    assert rows[0][1] == "record turns"
+    assert "▌ record turns" in rendered
+    assert "gguf" in rendered
 
 
 def test_settings_pane_navigation_wraps():
@@ -290,8 +311,9 @@ def test_settings_edit_modal_commits_new_value():
             await pilot.pause()
             await pilot.press("s")
             await pilot.pause()
-            # We're on the first row (9b.gguf). Call the dismiss callback
-            # the modal would invoke on submit.
+            # We're on the 9b.gguf row. Call the dismiss callback the
+            # modal would invoke on submit.
+            await _goto_setting(pilot, app, "gguf", "9b")
             app._on_edit_dismissed("/tmp/new-9b.gguf")
             await pilot.pause()
             # The confirm modal opened; press Proceed.
@@ -839,6 +861,7 @@ def test_settings_restart_required_field_opens_confirm_modal():
             await pilot.press("s")
             await pilot.pause()
             original_ctx = app.specs[0].ctx_size
+            await _goto_setting(pilot, app, "ctx_size", "9b")
             app._on_edit_dismissed("8192")
             await pilot.pause()
             # Confirm modal should be on screen.

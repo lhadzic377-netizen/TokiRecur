@@ -410,6 +410,23 @@ def iter_records(
             continue
 
 
+def shelf() -> dict[str, int]:
+    """What is on the shelf, without counting the lines.
+
+    The launcher draws this in a row that re-renders on every poll, and
+    counting the lines of a 512 MiB tape on every frame is not free. The
+    file count and the bytes are a stat each.
+    """
+    files = _files()
+    total = 0
+    for path in files:
+        try:
+            total += path.stat().st_size
+        except OSError:
+            continue
+    return {"files": len(files), "bytes": total}
+
+
 def stats() -> dict[str, Any]:
     """What the switch says and what is actually on disk."""
     files = _files()

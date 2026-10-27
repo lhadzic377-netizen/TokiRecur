@@ -12,10 +12,10 @@ the main pane still navigates and launches.
 """
 
 import pytest
+from textual.widgets import Select
 
 from tokirecur import ctl
-from tokirecur.tui.launcher import LauncherApp
-from textual.widgets import Select
+from tokirecur.tui.launcher import LauncherApp, _settings_rows
 
 
 @pytest.fixture
@@ -40,6 +40,25 @@ def one_model(monkeypatch, tmp_path):
     return reg
 
 
+async def _goto(pilot, app, field: str, name: str = "m") -> None:
+    """Move the settings highlight to a row, by name.
+
+    The pane opens on the machine-wide recorder row, so counting the
+    downs to reach a model's field is a trap: a row added at the top
+    shifts every model's field by one.
+    """
+    from tokirecur.tui.launcher import _settings_rows
+
+    rows = _settings_rows(app.specs, app=app)
+    idx = next(
+        i for i, (row_name, row_field, _) in enumerate(rows)
+        if row_name == name and row_field == field
+    )
+    for _ in range(idx):
+        await pilot.press("down")
+    await pilot.pause()
+
+
 @pytest.mark.asyncio
 async def test_the_dropdown_opens_and_the_option_list_moves(one_model):
     app = LauncherApp()
@@ -47,9 +66,8 @@ async def test_the_dropdown_opens_and_the_option_list_moves(one_model):
         await pilot.pause()
         await pilot.press("s")
         await pilot.pause()
-        # Down to ctx_size (gguf, llama_port, daemon_port, ctx_size).
-        await pilot.press("down", "down", "down")
-        await pilot.pause()
+        # Down to ctx_size.
+        await _goto(pilot, app, "ctx_size")
         await pilot.press("enter")
         await pilot.pause()
         assert type(app.screen).__name__ == "SettingsChoiceScreen"
@@ -77,8 +95,7 @@ async def test_a_picked_value_is_carried_out_of_the_modal(one_model, monkeypatch
         await pilot.pause()
         await pilot.press("s")
         await pilot.pause()
-        await pilot.press("down", "down", "down")
-        await pilot.pause()
+        await _goto(pilot, app, "ctx_size")
         await pilot.press("enter")
         await pilot.pause()
         select = app.screen.query_one("#settings-choice-select", Select)
@@ -93,6 +110,50 @@ async def test_a_picked_value_is_carried_out_of_the_modal(one_model, monkeypatch
             f"the pick did not reach the launcher: {type(app.screen).__name__}"
         )
         assert select.value != "200000", "the pick did not change the value"
+
+
+@pytest.mark.asyncio
+async def test_the_recorder_row_is_in_the_settings_pane(one_model, monkeypatch, tmp_path):
+    """The recorder is a setting, so it belongs in the settings pane.
+
+    It leads the list: it is the one setting that is not a model's
+    business, and the one that writes what the user says to disk.
+    """
+    flag = tmp_path / "tap-flag"
+    monkeypatch.setenv("TOKI_TAP_FLAG", str(flag))
+    monkeypatch.setenv("TOKI_TAP_DIR", str(tmp_path / "tap"))
+    monkeypatch.delenv("TOKI_TAP", raising=False)
+
+    app = LauncherApp()
+    async with app.run_test(size=(100, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("s")
+        await pilot.pause()
+
+        rows = _settings_rows(app.specs, app=app)
+        assert rows[0][0] == "machine", f"the recorder is not first: {rows[0]}"
+        assert rows[0][1] == "record turns"
+        assert rows[0][2] == "off", f"the recorder should read off: {rows[0][2]}"
+
+        # Enter opens the on/off choice.
+        await pilot.press("enter")
+        await pilot.pause()
+        assert type(app.screen).__name__ == "SettingsChoiceScreen"
+        app.screen.query_one("#settings-choice-select", Select)
+        await pilot.press("down")     # open the list
+        await pilot.pause()
+        await pilot.press("up")       # back to "on"
+        await pilot.pause()
+        await pilot.press("enter")    # pick it
+        await pilot.pause()
+
+        assert flag.is_file(), "the pick did not reach the switch"
+        from tokirecur import tap
+
+        assert tap.is_enabled() is True
+        # The row follows the switch.
+        rows = _settings_rows(app.specs, app=app)
+        assert rows[0][2].startswith("on"), f"the row still reads off: {rows[0][2]}"
 
 
 @pytest.mark.asyncio
@@ -130,7 +191,8 @@ async def test_the_text_editor_takes_typing_and_enter(one_model, monkeypatch):
         await pilot.pause()
         await pilot.press("s")
         await pilot.pause()
-        await pilot.press("enter")          # the first field is a text field
+        await _goto(pilot, app, "gguf")     # a text field
+        await pilot.press("enter")
         await pilot.pause()
         assert type(app.screen).__name__ == "SettingsEditScreen"
         await pilot.press("ctrl+u")          # clear the Input

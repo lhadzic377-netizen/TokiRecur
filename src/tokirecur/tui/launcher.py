@@ -312,18 +312,18 @@ class LauncherApp(App[dict | None]):
             self.focus_pane = "launchers"
         self._refresh += 1
 
-    def action_toggle_tap(self) -> None:
-        """Ctrl+T: record every managed turn to JSONL, or stop.
+    def _set_recorder(self, on: bool) -> None:
+        """Turn the recorder on or off, and say what it means.
 
-        Deliberate rather than hidden: turning it on says where the
+        Deliberate rather than silent: turning it on says where the
         turns are going, because a recorder people forget about is how
         prompts end up on disk without anyone choosing it.
         """
         from .. import tap
 
-        turning_on = not tap.is_enabled()
-        tap.set_enabled(turning_on)
-        if turning_on:
+        tap.set_enabled(on)
+        invalidate_settings_rows()
+        if on:
             self.notify(
                 f"Recording every turn to {tap.tap_dir()}\n"
                 "`toki tap off` stops it; files stay.",
@@ -332,6 +332,12 @@ class LauncherApp(App[dict | None]):
             )
         else:
             self.notify("Recording stopped. Files stay where they are.", timeout=5)
+
+    def action_toggle_tap(self) -> None:
+        """Ctrl+T: record every managed turn to JSONL, or stop."""
+        from .. import tap
+
+        self._set_recorder(not tap.is_enabled())
 
     def action_settings(self) -> None:
         """s: open the settings pane (edit any registry field)."""
@@ -357,6 +363,18 @@ class LauncherApp(App[dict | None]):
         if current is None:
             return
         name, field, value = current
+        if field == RECORDER_FIELD:
+            # The recorder is a switch, not a registry field: the same
+            # on/off dropdown, but the pick lands on the switch instead
+            # of the registry.
+            from .. import tap
+
+            state = "on" if tap.is_enabled() else "off"
+            screen = SettingsChoiceScreen(
+                name, field, state, _SETTINGS_CHOICES[RECORDER_FIELD]
+            )
+            self.push_screen(screen, self._on_choice_dismissed)
+            return
         # Look up the spec so the dropdown can be spec-aware (e.g.
         # ctx_size filtered against the model's max + RAM clamp).
         spec = next((s for s in self.specs if s.name == name), None)
@@ -434,6 +452,11 @@ class LauncherApp(App[dict | None]):
         if current is None:
             return
         name, field, _ = current
+        if field == RECORDER_FIELD:
+            # The recorder is not in the registry and never was. Commit
+            # the pick to the switch, and nowhere else.
+            self._set_recorder(new_value.strip().lower() == "on")
+            return
         if field in _RESTART_REQUIRED_FIELDS:
             # Modal: ask first. Use a different label for the model-swap
             # fields (gguf / binary) — those change the model entirely,
@@ -453,9 +476,17 @@ class LauncherApp(App[dict | None]):
                     "Approximate downtime: a few seconds.\n\n"
                     "Proceed?"
                 )
+            # Cancel means cancel. The registry write used to happen
+            # either way — only the daemon restart was gated — so a
+            # change the user said no to was still saved, and the pane
+            # then showed a value nobody had agreed to.
             self.push_screen(
                 ConfirmRestartScreen(title, body),
-                lambda ok: self._commit_edit(name, field, new_value, apply=bool(ok)),
+                lambda ok: (
+                    self._commit_edit(name, field, new_value, apply=True)
+                    if ok
+                    else self.notify("edit cancelled", timeout=2)
+                ),
             )
             return
         # Sync-only and no-op fields go straight to the commit step.
@@ -1001,6 +1032,12 @@ def _wordmark_lines() -> tuple[Text, ...]:
 # Order of fields shown in the launcher settings list — must match the
 # dataclass field order the user sees. Anything not editable is rendered
 # dim and grayed-out as "(read-only)".
+#: The recorder is a machine-wide switch, not a registry field, so it
+#: gets its own row shape: a group header that cannot be mistaken for a
+#: model, and a field name that is not in ``_SETTINGS_FIELDS``.
+RECORDER_GROUP = "machine"
+RECORDER_FIELD = "record turns"
+
 _SETTINGS_FIELDS: tuple[str, ...] = (
     "gguf",
     "llama_port",
@@ -1026,6 +1063,10 @@ _CUSTOM_VALUE = "__custom__"
 # Maps field -> {option label: value}. The ``custom…`` option opens the
 # text editor. Fields absent here keep the plain text modal.
 _SETTINGS_CHOICES: dict[str, dict[str, str]] = {
+    RECORDER_FIELD: {
+        "on": "on",
+        "off": "off",
+    },
     "ctx_size": {
         "2048": "2048",
         "4096": "4096",
@@ -1410,6 +1451,30 @@ def _model_variants(specs: Any) -> list[Any]:
         return list(specs)
 
 
+def _recorder_row() -> tuple[str, str, str]:
+    """The machine-wide recorder row: is the tape running, how full.
+
+    It leads the settings list because it is the one setting that is
+    not a model's business, and because it is the one that writes what
+    the user says to disk — it should not be the last of four hundred
+    lines.
+    """
+    from .. import tap
+
+    if not tap.is_enabled():
+        return (RECORDER_GROUP, RECORDER_FIELD, "off")
+    shelf = tap.shelf()
+    files = shelf["files"]
+    size = shelf["bytes"]
+    detail = f"{files} file{'s' if files != 1 else ''}"
+    detail += (
+        f" · {size / (1024 * 1024):.1f} MiB"
+        if size >= 1024 * 1024
+        else f" · {size // 1024} KiB"
+    )
+    return (RECORDER_GROUP, RECORDER_FIELD, f"on · {detail}")
+
+
 def _settings_rows(
     specs: Any,
     app: LauncherApp | None = None,
@@ -1443,12 +1508,13 @@ def _settings_rows(
         )
     except Exception:
         live_part = ()
-    key = (tuple(s.name for s in specs), live_part)
+    recorder = _recorder_row()
+    key = (tuple(s.name for s in specs), live_part, recorder)
     cached = _SETTINGS_ROWS_CACHE.get(key)
     if cached is not None:
         return cached
 
-    rows: list[tuple[str, str, str]] = []
+    rows: list[tuple[str, str, str]] = [recorder]
     for spec in specs:
         for field in _SETTINGS_FIELDS:
             if field not in ctl_mod._EDITABLE_FIELDS:
