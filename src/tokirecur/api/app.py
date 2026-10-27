@@ -976,6 +976,12 @@ def create_app(
                 "max_tokens": ctx,
                 "meta": {"n_ctx": ctx},
             })
+        # The effort the stack is pinned at, if any: a client that wants
+        # to start from the stack's setting can read it here instead of
+        # guessing one.
+        effort = _stack_effort()
+        if effort:
+            entry["reasoning_effort"] = effort
         return entry
 
     def _model_info_entries() -> list[dict[str, Any]]:
