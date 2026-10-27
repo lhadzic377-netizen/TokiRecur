@@ -4822,16 +4822,6 @@ def _provider_entry(spec: ModelSpec, mode: str = "managed") -> dict[str, Any]:
             "limit": {"context": ctx, "output": min(8192, max(1, ctx // 2))},
         }
     }
-    # The effort variants: the same weights with the reasoning steered.
-    # A harness that can only pick a model id picks the effort by id.
-    for variant in expand_variants([spec]):
-        if variant.effort is None:
-            continue
-        models[spec.model_id] = {
-            "name": f"{variant.label} (Toki Recur)",
-            "contextWindow": ctx,
-            "limit": {"context": ctx, "output": min(8192, max(1, ctx // 2))},
-        }
     return {
         "name": f"Toki Recur ({spec.label})",
         "npm": "@ai-sdk/openai-compatible",
@@ -5029,6 +5019,10 @@ def write_opencode_config(
     # a renamed or removed model doesn't leave a dangling key.
     for stale in [k for k in providers if k.startswith("tokirecur-")]:
         providers.pop(stale, None)
+    # The pre-rename provider key, left by older versions. It points at a
+    # port nothing serves, and a model that cannot answer is a model the
+    # person should not be offered.
+    providers.pop("tokirecur", None)
     all_specs = specs if specs is not None else load_registry()
     mode = _resolve_mode("opencode", mode)
     advertised = _advertised_specs(all_specs, spec, mode)
