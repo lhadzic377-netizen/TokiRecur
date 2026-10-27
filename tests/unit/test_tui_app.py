@@ -178,6 +178,55 @@ class TestTokiApp:
                 assert pilot.app.query_one("StatusBar").daemon_status == "auth_required"
 
     @pytest.mark.asyncio
+    async def test_the_prompt_is_sent_once(self):
+        """The model must read the question once.
+
+        The app appends the prompt to the displayed history, and the
+        client appends the prompt to the messages it sends. Passing the
+        history in with the prompt already in it made every question
+        arrive twice — twice the tokens, a confused answer, and a
+        duplicated turn in the recorded training data.
+        """
+        client = _mock_client()
+        seen: list = []
+
+        async def recording_stream(*args, **kwargs):
+            seen.append((args, kwargs))
+            yield {"event": "start", "mode": "cached", "target": "cached",
+                   "session_id": "x"}
+            yield {"event": "token", "content": "Hello"}
+            yield {"event": "done", "text": "Hello",
+                   "metrics": {"ttft_ms": 50, "total_ms": 100,
+                               "tokens_generated": 1},
+                   "cache": {"hit": True, "skipped_tokens": 50}}
+        client.chat_stream = recording_stream
+
+        with patch("tokirecur.tui.app.DaemonClient", return_value=client):
+            app = TokiApp()
+            async with app.run_test() as pilot:
+                pilot.app.query_one("#input").value = "what is 2+2?"
+                await pilot.press("enter")
+                for _ in range(30):
+                    await pilot.pause()
+                    if not app.busy:
+                        break
+
+        assert seen, "the client was never called"
+        args, kwargs = seen[0]
+        prompt = args[0] if args else kwargs.get("prompt")
+        sent = kwargs.get("history") or []
+        prompts = [
+            m.get("content") for m in sent
+            if m.get("role") == "user" and m.get("content") == prompt
+        ]
+        assert len(prompts) == 0, (
+            "the prompt was already in the history handed to the client; "
+            "the client appends it again, so the model reads it twice"
+        )
+        # And the prompt itself is still sent.
+        assert prompt == "what is 2+2?"
+
+    @pytest.mark.asyncio
     async def test_raw_mode_does_not_increment_hit_miss_counters(self):
         """Regression: raw mode emits cache:{applicable:False}, which
         should NOT bump _hits or _misses (those are cache-layer metrics).
@@ -298,9 +347,13 @@ class TestTokiContextAndMaxTokens:
                         break
                 assert len(sent_histories) == 2
                 second = sent_histories[1]
-                assert second[-1] == {"role": "user", "content": "question two"}
                 assert {"role": "user", "content": "question one"} in second
                 assert {"role": "assistant", "content": "Answer 1"} in second
+                # The history handed over is the conversation so far. The
+                # client appends the new prompt itself, so the prompt is
+                # not in here — putting it in made the model read every
+                # question twice.
+                assert {"role": "user", "content": "question two"} not in second
 
     @pytest.mark.asyncio
     async def test_history_capped_at_20_messages(self):

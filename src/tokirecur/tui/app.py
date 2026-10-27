@@ -15,7 +15,7 @@ import uuid
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Horizontal
+from textual.containers import Container, Horizontal, Vertical
 from textual.reactive import reactive
 from textual.widgets import Input
 
@@ -104,8 +104,11 @@ class TokiApp(App):
             self.info,
             id="main-area",
         )
-        yield self.input
-        yield self.status_bar
+        # One bottom panel for the bar and the prompt. Textual docks every
+        # bottom-docked widget to the same edge, so the two of them docked
+        # separately drew on top of each other: the bar hid the prompt, and
+        # whichever was later in the tree won.
+        yield Vertical(self.status_bar, self.input, id="bottom-panel")
 
     # ── Lifecycle ─────────────────────────────────────────────────────
 
@@ -364,6 +367,13 @@ class TokiApp(App):
 
         # Render user message.
         self.chat.write_user(prompt)
+        # The history the API gets is the history *before* this prompt:
+        # the client appends the prompt itself. Passing it in both places
+        # made the model read every question twice — once as the last
+        # history turn and once as the new one — which cost tokens,
+        # confused the answer, and wrote the duplicate into the recorded
+        # training data.
+        api_history = self._history_for_api()
         history.append("user", prompt)
         self._history.append({"role": "user", "content": prompt})
 
@@ -387,7 +397,7 @@ class TokiApp(App):
                 session_id=self._session_id,
                 max_tokens=self._max_tokens(),
                 temperature=self._temperature(),
-                history=self._history_for_api(),
+                history=api_history,
             ):
                 ev = event.get("event")
                 if ev == "token":
@@ -474,6 +484,7 @@ class TokiApp(App):
         self.input.disabled = True
 
         self.chat.write_user(prompt + "  [compare]")
+        api_history = self._history_for_api()
         history.append("user", prompt)
         self._history.append({"role": "user", "content": prompt})
 
@@ -490,7 +501,7 @@ class TokiApp(App):
                 session_id=self._session_id,
                 max_tokens=self._max_tokens(),
                 temperature=self._temperature(),
-                history=self._history_for_api(),
+                history=api_history,
             ):
                 if ev["event"] == "done":
                     raw_text = ev.get("text", "")
@@ -505,7 +516,7 @@ class TokiApp(App):
                 session_id=self._session_id,
                 max_tokens=self._max_tokens(),
                 temperature=self._temperature(),
-                history=self._history_for_api(),
+                history=api_history,
             ):
                 if ev["event"] == "done":
                     cached_text = ev.get("text", "")

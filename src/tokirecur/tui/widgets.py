@@ -344,8 +344,12 @@ class StatusBar(Static):
 
     DEFAULT_CSS = """
     StatusBar {
-        dock: bottom;
-        height: 1;
+        /* Docked inside the bottom panel, not to the screen: a bottom-docked
+           widget and another one both land on the bottom edge, and they
+           overlap. The bar is two rows — a border and a line of text; at one
+           row the border ate the content and nothing was drawn. */
+        dock: none;
+        height: 2;
         background: $boost;
         color: $text;
         padding: 0 1;

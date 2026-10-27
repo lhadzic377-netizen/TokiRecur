@@ -28,8 +28,16 @@ Screen {
     border: round #2b2b2b;
 }
 
-#input {
+#bottom-panel {
+    /* The bar and the prompt, stacked. Two bottom-docked widgets would
+       both be placed at the bottom edge and would overlap. */
     dock: bottom;
+    height: 5;
+    background: #121212;
+}
+
+#input {
+    dock: none;
     margin: 0 1;
     background: #121212;
     border: round #3d3d3d;
@@ -52,10 +60,14 @@ Screen {
 }
 
 #status-bar {
-    dock: bottom;
+    dock: none;
     background: #000000;
     color: #9a967f;
     border-top: round #3d3d3d;
-    height: 1;
+    /* Two rows, not one: the border-top takes a row of its own, and a
+       height of 1 left the content box with nothing to draw in — the
+       whole footer (mode, session, hit rate) had been rendering as an
+       empty strip at the bottom of the screen. */
+    height: 2;
     padding: 0 1;
 }
