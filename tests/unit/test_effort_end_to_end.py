@@ -43,6 +43,13 @@ def _client(tmp_path, monkeypatch, observed, efforts: str = ""):
     marker = tmp_path / "active-model"
     marker.write_text("served\n")
     monkeypatch.setattr("tokirecur.ctl.ACTIVE_MARKER", marker, raising=False)
+    # The stack's effort: the level the launcher pinned. None unless a
+    # test says otherwise, so the machine's own state cannot leak in.
+    effort_marker = tmp_path / "active-effort"
+    monkeypatch.setattr(
+        "tokirecur.ctl._active_effort_path", lambda: effort_marker,
+        raising=False,
+    )
     backend = LlamaServerBackend(base_url="http://llama.invalid")
     index = Index()
     app = create_app(
@@ -111,6 +118,25 @@ def test_an_unknown_effort_is_ignored(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch, observed)
     _post(client, reasoning_effort="enormous")
     assert observed["effort"] is None
+
+
+def test_the_stack_effort_is_the_default(tmp_path, monkeypatch):
+    """A client that asks for nothing gets the effort the stack is
+    pinned at — that is what lets the harnesses leave the effort out of
+    their model ids entirely."""
+    observed: dict = {}
+    client = _client(tmp_path, monkeypatch, observed)
+    (tmp_path / "active-effort").write_text("medium\n")
+    _post(client)
+    assert observed["effort"] == "medium"
+
+
+def test_an_explicit_effort_beats_the_stack_effort(tmp_path, monkeypatch):
+    observed: dict = {}
+    client = _client(tmp_path, monkeypatch, observed)
+    (tmp_path / "active-effort").write_text("medium\n")
+    _post(client, reasoning_effort="high")
+    assert observed["effort"] == "high"
 
 
 def test_a_level_the_model_refuses_is_dropped(tmp_path, monkeypatch):

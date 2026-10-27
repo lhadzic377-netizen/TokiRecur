@@ -1159,20 +1159,6 @@ def write_active_effort(effort: str | None) -> Path:
     return path
 
 
-def active_variant(spec: ModelSpec) -> ModelVariant:
-    """The model as it is being served: at the active effort, when the
-    model understands that effort.
-
-    A model that does not declare levels has no variants, so the effort
-    does not apply to it: its own ``reasoning:`` setting stands.
-    """
-    effort = read_active_effort()
-    levels = getattr(spec, "reasoning_efforts", None) or []
-    if not effort or (levels and effort not in levels):
-        return ModelVariant(spec)
-    return ModelVariant(spec, effort)
-
-
 def read_active(registry: Path | None = None) -> str | None:
     if ACTIVE_MARKER.exists():
         name = ACTIVE_MARKER.read_text().strip()
@@ -4216,30 +4202,6 @@ def _load_jsonc(path: Path) -> dict[str, Any]:
         return value if isinstance(value, dict) else {}
 
 
-def _effort_variant_models(spec: ModelSpec) -> list[dict[str, Any]]:
-    """The effort variants of a model, in the shape the harnesses read.
-
-    A variant is the same weights with the reasoning steered: one server,
-    one slot, one cache. The effort rides in the model id, so the daemon
-    applies it — the harness only has to be able to pick an id.
-    """
-    out: list[dict[str, Any]] = []
-    for variant in expand_variants([spec]):
-        if variant.effort is None:
-            continue
-        out.append({
-            "id": variant.model_id,
-            "name": variant.label,
-            "contextWindow": _effective_ctx(spec),
-            "maxTokens": _client_output_limit(spec),
-            "input": ["text"],
-            # The effort is already in the id. Offering a per-request
-            # selector as well would be two ways to say one thing.
-            "reasoningEfforts": False,
-        })
-    return out
-
-
 def write_qwen_config(
     spec: ModelSpec, specs: list[ModelSpec] | None = None,
     path: Path | None = None, mode: str | None = None,
@@ -4247,7 +4209,6 @@ def write_qwen_config(
     """Write Qwen Code's local OpenAI-compatible route and default model."""
     # The model as it is being served: at the active effort, when the
     # model understands that effort.
-    variant = active_variant(spec)
     cfg_path = path or _qwen_config_path()
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     cfg = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
@@ -4268,7 +4229,7 @@ def write_qwen_config(
     endpoint = _client_endpoint(spec, _resolve_mode("qwen", mode))
     output = _client_output_limit(spec)
     entries.append({
-        "id": variant.model_id,
+        "id": spec.model_id,
         "name": f"Toki Recur ({spec.label})",
         "envKey": "TOKI_AUTH_TOKEN",
         "baseUrl": endpoint,
@@ -4279,7 +4240,7 @@ def write_qwen_config(
         },
     })
     providers["openai"] = entries
-    cfg["model"] = {"name": variant.model_id}
+    cfg["model"] = {"name": spec.model_id}
     security = cfg.get("security")
     if not isinstance(security, dict):
         security = {}
@@ -4301,7 +4262,6 @@ def write_droid_config(
     """Write Factory Droid's BYOK custom model entry."""
     # The model as it is being served: at the active effort, when the
     # model understands that effort.
-    variant = active_variant(spec)
     cfg_path = path or _factory_config_path()
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     cfg = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
@@ -4317,7 +4277,7 @@ def write_droid_config(
     ]
     endpoint = _client_endpoint(spec, _resolve_mode("droid", mode))
     models.append({
-        "model": variant.model_id,
+        "model": spec.model_id,
         "displayName": f"Toki Recur ({spec.label})",
         "baseUrl": endpoint,
         "apiKey": "${TOKI_AUTH_TOKEN}",
@@ -4325,7 +4285,7 @@ def write_droid_config(
         "maxOutputTokens": _client_output_limit(spec),
     })
     cfg["customModels"] = models
-    cfg["model"] = f"custom:{variant.model_id}"
+    cfg["model"] = f"custom:{spec.model_id}"
     _write_private_config(cfg_path, json.dumps(cfg, indent=2) + "\n")
     return cfg_path
 
@@ -4337,7 +4297,6 @@ def write_cline_config(
     """Write Cline's isolated OpenAI-compatible provider settings."""
     # The model as it is being served: at the active effort, when the
     # model understands that effort.
-    variant = active_variant(spec)
     cfg_path = path or _cline_config_path()
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     cfg = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
@@ -4359,7 +4318,7 @@ def write_cline_config(
     settings.update({
         "provider": "openai-compatible",
         "apiKey": _configured_auth_token() or auth_token(),
-        "model": variant.model_id,
+        "model": spec.model_id,
         "baseUrl": _client_endpoint(spec, _resolve_mode("cline", mode)),
         "contextWindow": _effective_ctx(spec),
         "maxTokens": _client_output_limit(spec),
@@ -4381,11 +4340,10 @@ def write_claude_config(
     """Write a private Claude Code override for the local Anthropic route."""
     # The model as it is being served: at the active effort, when the
     # model understands that effort.
-    variant = active_variant(spec)
     del specs, mode
     cfg_path = path or _claude_settings_path()
     token = _configured_auth_token() or auth_token()
-    model_id = variant.model_id
+    model_id = spec.model_id
     cfg = {
         "env": {
             "ANTHROPIC_BASE_URL": f"{spec.daemon_url}/anthropic",
@@ -4407,7 +4365,6 @@ def write_dsh_config(
     """Write DeepSeek Harness's llm-pi-ai route and default model."""
     # The model as it is being served: at the active effort, when the
     # model understands that effort.
-    variant = active_variant(spec)
     cfg_path = path or _dsh_config_path()
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     cfg = yaml.safe_load(cfg_path.read_text()) if cfg_path.exists() else {}
@@ -4436,7 +4393,7 @@ def write_dsh_config(
         "api": "openai-completions",
         "baseURL": _client_endpoint(spec, _resolve_mode("dsh", mode)),
         "models": [{
-            "id": variant.model_id,
+            "id": spec.model_id,
             "name": spec.label,
             "contextWindow": _effective_ctx(spec),
             "maxTokens": _client_output_limit(spec),
@@ -4444,11 +4401,11 @@ def write_dsh_config(
             # A model that declares its levels has them as separate models
             # below, so the harness offers one way to pick an effort, not two.
             "reasoningEfforts": False if spec.reasoning_efforts else reasoning_efforts,
-        }] + _effort_variant_models(spec),
+        }],
     }
     cfg["agent-default-model"] = {
         "provider": "tokirecur",
-        "model": variant.model_id,
+        "model": spec.model_id,
     }
     _write_private_config(cfg_path, yaml.safe_dump(cfg, sort_keys=False))
     # The profile layers are what tui and web actually read. Written here so
@@ -4467,7 +4424,6 @@ def write_grok_config(
     """Write Grok Build's custom OpenAI-compatible model route."""
     # The model as it is being served: at the active effort, when the
     # model understands that effort.
-    variant = active_variant(spec)
     cfg_path = path or _grok_config_path()
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     cfg: dict[str, Any] = {}
@@ -4488,7 +4444,7 @@ def write_grok_config(
     for key in [key for key in model_table if str(key).startswith("tokirecur-")]:
         model_table.pop(key, None)
     model_table[alias] = {
-        "model": variant.model_id,
+        "model": spec.model_id,
         "name": f"Toki Recur ({spec.label})",
         "base_url": _client_endpoint(spec, _resolve_mode("grok", mode)),
         "env_key": "TOKI_AUTH_TOKEN",
@@ -4508,7 +4464,6 @@ def write_kilo_config(
     """Write Kilo Code's custom OpenAI-compatible provider."""
     # The model as it is being served: at the active effort, when the
     # model understands that effort.
-    variant = active_variant(spec)
     cfg_path = path or _kilo_config_path()
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     cfg = _load_jsonc(cfg_path)
@@ -4537,7 +4492,7 @@ def write_kilo_config(
         if not (isinstance(value, dict)
                 and str(value.get("name", "")).startswith("Toki Recur ("))
     }
-    models[variant.model_id] = {
+    models[spec.model_id] = {
         "name": f"Toki Recur ({spec.label})",
         "tool_call": True,
         "reasoning": _client_reasoning(spec),
@@ -4547,19 +4502,8 @@ def write_kilo_config(
         },
         "cost": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0},
     }
-    for entry in _effort_variant_models(spec):
-        models[entry["id"]] = {
-            "name": f"Toki Recur ({entry['name']})",
-            "tool_call": True,
-            "reasoning": True,
-            "limit": {
-                "context": _effective_ctx(spec),
-                "output": _client_output_limit(spec),
-            },
-            "cost": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0},
-        }
     provider["models"] = models
-    cfg["model"] = f"openai-compatible/{variant.model_id}"
+    cfg["model"] = f"openai-compatible/{spec.model_id}"
     _write_private_config(cfg_path, json.dumps(cfg, indent=2) + "\n")
     return cfg_path
 
@@ -4571,7 +4515,6 @@ def write_pi_config(
     """Write Pi's compatible endpoint and startup defaults."""
     # The model as it is being served: at the active effort, when the
     # model understands that effort.
-    variant = active_variant(spec)
     agent_dir = path.parent if path is not None else _pi_config_dir()
     cfg_path = path or agent_dir / "models.json"
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
@@ -4587,20 +4530,20 @@ def write_pi_config(
         "api": "openai-completions",
         "apiKey": "${TOKI_AUTH_TOKEN}",
         "models": [{
-            "id": variant.model_id,
+            "id": spec.model_id,
             "name": f"Toki Recur ({spec.label})",
             "contextWindow": _effective_ctx(spec),
             "maxTokens": _client_output_limit(spec),
             "input": ["text"],
             "reasoning": _client_reasoning(spec),
-        }] + _effort_variant_models(spec),
+        }],
     }
     settings_path = agent_dir / "settings.json"
     settings = json.loads(settings_path.read_text()) if settings_path.exists() else {}
     if not isinstance(settings, dict):
         settings = {}
     settings["defaultProvider"] = "tokirecur"
-    settings["defaultModel"] = variant.model_id
+    settings["defaultModel"] = spec.model_id
     _write_private_config(cfg_path, json.dumps(cfg, indent=2) + "\n")
     _write_private_config(settings_path, json.dumps(settings, indent=2) + "\n")
     return cfg_path
@@ -4613,7 +4556,6 @@ def write_kimi_config(
     """Write Kimi Code's OpenAI-compatible provider and model alias."""
     # The model as it is being served: at the active effort, when the
     # model understands that effort.
-    variant = active_variant(spec)
     cfg_path = path or _kimi_config_path()
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     cfg: dict[str, Any] = {}
@@ -4638,10 +4580,10 @@ def write_kimi_config(
     for key, value in list(models.items()):
         if isinstance(value, dict) and value.get("provider") == "tokirecur":
             models.pop(key, None)
-    alias = f"tokirecur/{variant.model_id}"
+    alias = f"tokirecur/{spec.model_id}"
     models[alias] = {
         "provider": "tokirecur",
-        "model": variant.model_id,
+        "model": spec.model_id,
         "max_context_size": _effective_ctx(spec),
         "display_name": f"Toki Recur ({spec.label})",
         "capabilities": ["thinking", "tool_use"] if _client_reasoning(spec)
@@ -4659,7 +4601,6 @@ def write_omp_config(
     """Write OMP's custom OpenAI-compatible provider."""
     # The model as it is being served: at the active effort, when the
     # model understands that effort.
-    variant = active_variant(spec)
     cfg_path = path or _omp_config_path()
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     if cfg_path.suffix.lower() == ".json":
@@ -4678,7 +4619,7 @@ def write_omp_config(
         "apiKey": "TOKI_AUTH_TOKEN",
         "auth": "apiKey",
         "models": [{
-            "id": variant.model_id,
+            "id": spec.model_id,
             "name": f"Toki Recur ({spec.label})",
             "contextWindow": _effective_ctx(spec),
             "maxTokens": _client_output_limit(spec),
@@ -4886,7 +4827,7 @@ def _provider_entry(spec: ModelSpec, mode: str = "managed") -> dict[str, Any]:
     for variant in expand_variants([spec]):
         if variant.effort is None:
             continue
-        models[variant.model_id] = {
+        models[spec.model_id] = {
             "name": f"{variant.label} (Toki Recur)",
             "contextWindow": ctx,
             "limit": {"context": ctx, "output": min(8192, max(1, ctx // 2))},
@@ -5072,7 +5013,6 @@ def write_opencode_config(
     """
     # The model as it is being served: at the active effort, when the
     # model understands that effort.
-    variant = active_variant(spec)
     cfg_path = path or Path(os.environ.get(
         "OPENCODE_CONFIG", str(Path.home() / ".config/opencode/opencode.json")))
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
@@ -5097,7 +5037,7 @@ def write_opencode_config(
 
     small = _small_model_ref(advertised, active=spec)
     cfg["small_model"] = small
-    cfg["model"] = f"tokirecur-{spec.name}/{variant.model_id}"
+    cfg["model"] = f"tokirecur-{spec.name}/{spec.model_id}"
 
     # Anti-loop guardrail: opencode's `instructions` takes FILE PATHS,
     # so we write a toki-owned markdown file and reference it. Never
@@ -5125,7 +5065,6 @@ def write_openclaw_config(
     """
     # The model as it is being served: at the active effort, when the
     # model understands that effort.
-    variant = active_variant(spec)
     cfg_path = path or Path(os.environ.get(
         "OPENCLAW_CONFIG", str(Path.home() / ".openclaw/openclaw.json")))
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
@@ -5170,7 +5109,7 @@ def write_openclaw_config(
 
     agents = cfg.setdefault("agents", {})
     defaults = agents.setdefault("defaults", {})
-    defaults["model"] = {"primary": f"tokirecur-{spec.name}/{variant.model_id}"}
+    defaults["model"] = {"primary": f"tokirecur-{spec.name}/{spec.model_id}"}
     defaults["timeoutSeconds"] = 3600
 
     # Anti-loop guardrail: openclaw has no config-injectable system
@@ -5217,7 +5156,6 @@ def write_hermes_config(
     """
     # The model as it is being served: at the active effort, when the
     # model understands that effort.
-    variant = active_variant(spec)
     cfg_path = path or _hermes_config_path()
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     cfg: dict[str, Any] = yaml.safe_load(cfg_path.read_text()) if cfg_path.exists() else {}
@@ -5256,17 +5194,12 @@ def write_hermes_config(
         s.model_id: {"context_length": _effective_ctx(s)}
         for s in all_specs
     }
-    # The effort variants of every model, so a harness that only knows
-    # how to pick a model id can still pick an effort.
-    for s in all_specs:
-        for entry in _effort_variant_models(s):
-            models_with_ctx[entry["id"]] = {"context_length": _effective_ctx(s)}
     entry = {
         "name": "llamacpp",
         "base_url": f"{base}/v1",
         "api_key": _configured_auth_token() or auth_token(),
         "models": models_with_ctx,
-        "default_model": variant.model_id,
+        "default_model": spec.model_id,
         "_toki": True,  # marker so a future re-write can find it
     }
     has_entry = False
@@ -5285,7 +5218,7 @@ def write_hermes_config(
         "api": f"{base}/v1",
         "api_key": _configured_auth_token() or auth_token(),
         "models": models_with_ctx,
-        "default_model": variant.model_id,
+        "default_model": spec.model_id,
         "name": "Toki Recur (llamacpp)",
         "_toki": True,
     }
@@ -5300,7 +5233,7 @@ def write_hermes_config(
         {
             "api_key": _configured_auth_token() or auth_token(),
             "base_url": f"{base}/v1",
-            "default": variant.model_id,
+            "default": spec.model_id,
             "provider": "llamacpp",
             # Explicit context override for the active model (resolution
             # step 0) — the only channel that beats hermes's 64k probe
@@ -5371,7 +5304,6 @@ def write_codex_config(
     """
     # The model as it is being served: at the active effort, when the
     # model understands that effort.
-    variant = active_variant(spec)
     cfg_path = path or Path(os.environ.get(
         "CODEX_HOME", str(Path.home() / ".codex"))) / "config.toml"
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
@@ -5415,7 +5347,7 @@ def write_codex_config(
         providers.pop(key, None)
 
     top["model_provider"] = f"tokirecur-{spec.name}"
-    top["model"] = variant.model_id
+    top["model"] = spec.model_id
 
     # Anti-loop guardrail: codex has NO `system_prompt` config key (the
     # top-level ConfigToml schema doesn't define one — an unknown key is

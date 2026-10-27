@@ -446,6 +446,9 @@ def _resolve_effort(
         wanted = requested.strip().lower()
         if wanted not in EFFORT_LEVELS:
             return None
+        if wanted == "none":
+            # Thinking off is always an answer the model can give.
+            return wanted
         # The model may not take every level: Qwen3.8 raises on "max",
         # and a level its template refuses is a 500, not a default. The
         # model's own setting stands instead.
@@ -460,6 +463,21 @@ def _resolve_effort(
     if served and not _same_model(spec, served):
         return None
     return effort
+
+
+def _stack_effort() -> str | None:
+    """The effort the stack is being served at.
+
+    The launcher pins it; every client that does not ask for a level of
+    its own gets it. That is what makes the harnesses need no effort
+    in their model ids: the effort is a property of the stack, like the
+    model, and a client that wants a different one names it.
+    """
+    try:
+        from ..ctl import read_active_effort
+        return read_active_effort()
+    except Exception:
+        return None
 
 
 def _served_spec(specs: list[Any], served: str | None) -> Any:
@@ -1801,6 +1819,8 @@ def create_app(
         # model id ("qwen3.8-27b:high").
         active_model = _served_model_id()
         effort = _resolve_effort(req.model, req.reasoning_effort, active_model)
+        if effort is None:
+            effort = _stack_effort()
         # Thinking follows the effort: "none" is thinking off, every other
         # level turns it on. A client that sent its own chat_template_kwargs
         # keeps them.
