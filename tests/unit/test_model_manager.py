@@ -892,7 +892,14 @@ def test_pull_model_auto_ctx_default_cap(env, hf, monkeypatch):
 def test_auto_ctx_respects_ram_budget_and_ceiling(env, monkeypatch):
     """KV at f16 for the 16-layer/8-kv-head model is 32KB/token
     (unified KV: parallel doesn't multiply the pool). A small RAM box
-    gets a small ctx; the 64k ceiling caps even unlimited RAM."""
+    gets a small ctx; with RAM to spare the model gets its own window.
+
+    There used to be a flat 64k ceiling on top of the RAM fit, so a
+    model that could address 128k arrived asking for 64k — the
+    capability was in the file and the system would not use it. The
+    ceiling is gone: the model brings its window, and the RAM is the
+    only limit that is about this machine.
+    """
     from tokirecur.ggufmeta import GgufMeta
     gguf = env / "m.gguf"
     gguf.write_bytes(b"")
@@ -903,8 +910,75 @@ def test_auto_ctx_respects_ram_budget_and_ceiling(env, monkeypatch):
     # Budget = 6 - 0 - 4 = 2 GB -> max_fit ~61035, floor 512.
     assert ctl._auto_ctx_size(gguf, parallel=2, kv="f16") == 61035
     monkeypatch.setattr(ctl, "_available_gb", lambda: float("inf"))
-    # Unlimited RAM -> capped by the 64k ceiling (model max is 128k).
-    assert ctl._auto_ctx_size(gguf, parallel=2, kv="f16") == 65536
+    # Unlimited RAM -> the model's own window.
+    assert ctl._auto_ctx_size(gguf, parallel=2, kv="f16") == 128000
+
+
+def test_a_model_that_ships_yarn_keeps_its_own_window(env, monkeypatch):
+    """A GGUF converted from a YaRN-trained model carries the scaling.
+
+    llama.cpp applies that with no flags at all, so the window the model
+    can address is its trained one times the model's own factor. The
+    pull must ask for that, and the ceiling must not cut it back to the
+    trained window — otherwise the extension the file carries is thrown
+    away and the model runs at 1/4 of what it can.
+    """
+    from tokirecur.ggufmeta import GgufMeta, GgufRope
+    gguf = env / "m.gguf"
+    gguf.write_bytes(b"")
+    meta = GgufMeta(
+        n_embd=1024, n_layer=16, n_head=16, n_head_kv=8,
+        context_length=32768,
+        rope=GgufRope(scaling_type="yarn", factor=4.0,
+                      original_context_length=32768),
+    )
+    monkeypatch.setattr(ctl, "read_gguf_meta", lambda p: meta)
+    monkeypatch.setattr(ctl, "_available_gb", lambda: float("inf"))
+    # 32768 * 4 = 131072.
+    assert ctl._auto_ctx_size(gguf, parallel=2, kv="f16") == 131072
+
+    spec = ctl.ModelSpec(
+        name="m", label="m", gguf=str(gguf), llama_port=1, daemon_port=2,
+        ctx_size=131072, parallel=2, kv="f16", max_tokens=100000,
+        model_id="m")
+    assert ctl._model_max_ctx(spec) == 131072
+    # The launch plan may not cut it back to the trained window.
+    ctx, _kv, _parallel = ctl._fit_plan(spec)
+    assert ctx == 131072
+
+
+def test_a_model_without_yarn_keeps_its_trained_window(env, monkeypatch):
+    """The common case: no rope metadata, so the trained window stands."""
+    from tokirecur.ggufmeta import GgufMeta
+    gguf = env / "m.gguf"
+    gguf.write_bytes(b"")
+    monkeypatch.setattr(ctl, "read_gguf_meta", lambda p: GgufMeta(
+        n_embd=1024, n_layer=16, n_head=16, n_head_kv=8,
+        context_length=262144))
+    monkeypatch.setattr(ctl, "_available_gb", lambda: float("inf"))
+    assert ctl._auto_ctx_size(gguf, parallel=2, kv="f16") == 262144
+    spec = ctl.ModelSpec(
+        name="m", label="m", gguf=str(gguf), llama_port=1, daemon_port=2,
+        ctx_size=262144, parallel=2, kv="f16", max_tokens=100000,
+        model_id="m")
+    assert ctl._model_max_ctx(spec) == 262144
+
+
+def test_forced_yarn_in_the_registry_still_wins(env, monkeypatch):
+    """The registry's own flags beat the file: an explicit choice."""
+    from tokirecur.ggufmeta import GgufMeta
+    gguf = env / "m.gguf"
+    gguf.write_bytes(b"")
+    monkeypatch.setattr(ctl, "read_gguf_meta", lambda p: GgufMeta(
+        n_embd=1024, n_layer=16, n_head=16, n_head_kv=8,
+        context_length=262144))
+    spec = ctl.ModelSpec(
+        name="m", label="m", gguf=str(gguf), llama_port=1, daemon_port=2,
+        ctx_size=1000000, parallel=2, kv="f16", max_tokens=100000,
+        model_id="m",
+        extra_args=["--rope-scaling", "yarn", "--rope-scale", "4",
+                    "--yarn-orig-ctx", "262144"])
+    assert ctl._model_max_ctx(spec) == 1048576
 
 
 def test_clamp_ctx_caps_at_model_max(env, monkeypatch):

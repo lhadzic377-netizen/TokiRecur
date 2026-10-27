@@ -42,7 +42,7 @@ except ImportError:  # pragma: no cover - Python 3.10
 
 import tomli_w
 
-from ..ggufmeta import read_gguf_meta
+from ..ggufmeta import GgufRope, read_gguf_meta
 
 logger = logging.getLogger(__name__)
 
@@ -698,6 +698,63 @@ def _gguf_context_length(spec: ModelSpec) -> int | None:
     return None
 
 
+def _gguf_rope(spec: ModelSpec):
+    """The position-encoding configuration the model's own file carries.
+
+    Empty for a model that ships none — most GGUFs do not, and the
+    window is then the trained one.
+    """
+    gguf = getattr(spec, "gguf", None)
+    if not gguf:
+        return GgufRope()
+    meta = read_gguf_meta(gguf)
+    return meta.rope if meta else GgufRope()
+
+
+def _model_window(spec: ModelSpec) -> int | None:
+    """The window the model can actually address, before RAM is asked.
+
+    Two ways a model reaches past the window its weights were trained
+    for, and they are different in kind:
+
+    * the registry forces YaRN on it (``--rope-scaling yarn
+      --rope-scale N --yarn-orig-ctx M``) — an explicit choice, and the
+      ceiling is ``M × N``;
+    * the GGUF itself carries the scaling (a model converted from a
+      YaRN-trained one) — llama.cpp applies that with no flags at all,
+      and the ceiling is the trained window × the model's own factor.
+
+    Either way, capping the launch at the GGUF's ``context_length``
+    throws the extension away.
+    """
+    trained = _gguf_context_length(spec)
+    forced = _rope_scaled_max_ctx(spec, trained)
+    if forced:
+        return forced
+    own = _gguf_rope(spec).effective_context(trained)
+    if own:
+        return own
+    return trained
+
+
+def rope_note(spec: ModelSpec) -> str:
+    """One line about the model's position encoding. Empty for a plain one.
+
+    Two different things wear the same name, and the difference matters:
+    a model that *ships* YaRN was trained for the stretched window, while
+    a model the registry *forces* it on was not — the window is
+    extrapolation there, mitigated rather than supported.
+    """
+    rope = _gguf_rope(spec)
+    if rope.is_yarn and rope.factor:
+        return f"yarn {rope.factor:g}\u00d7"
+    extra = list(getattr(spec, "extra_args", None) or [])
+    if (_rope_arg_value(extra, "--rope-scaling") or "").strip().lower() == "yarn":
+        scale = _rope_arg_value(extra, "--rope-scale")
+        return f"yarn {scale}\u00d7 (forced)" if scale else "yarn (forced)"
+    return ""
+
+
 def _rope_arg_value(extra_args: list[str], flag: str) -> str | None:
     """Value of ``flag`` inside an ``extra_args`` list.
 
@@ -765,11 +822,7 @@ def _model_max_ctx(spec: ModelSpec) -> int | None:
     window — that is the whole point of the flag — so it wins over the
     metadata. Without it, the cap is the GGUF's ``context_length``.
     """
-    trained = _gguf_context_length(spec)
-    scaled = _rope_scaled_max_ctx(spec, trained)
-    if scaled:
-        return scaled
-    return trained
+    return _model_window(spec)
 
 
 def _clamp_ctx(spec: ModelSpec, avail_gb: float | None = None,
@@ -1727,24 +1780,30 @@ def _expand_gguf_patterns(filename: str, mmproj: str | None = None) -> list[str]
 def _auto_ctx_size(gguf: Path, *, parallel: int, kv: str) -> int:
     """Pick a context for a fresh pull that fits this machine.
 
-    Uses the same RAM budget as ``_clamp_ctx`` (weights * 1.2 + 4 GB
-    headroom), capped at the model's own max context and a sane 64k
-    ceiling — a small model on a modest machine should never request
-    a KV cache it cannot serve, and 64k is already far beyond chat
-    use. When the GGUF metadata is unreadable the KV cannot be sized,
-    so the conservative 16k default applies instead of the old flat
-    200k (still capped at the model max when that IS known).
+    The request is the window the model can actually address — its
+    trained one, or the larger one its own YaRN metadata buys it —
+    clamped to what the RAM holds. A flat 64k ceiling used to sit on
+    top of this, so a model that could address a million arrived asking
+    for 64k: the capability was in the file and the system would not
+    use it. The RAM fit is the honest limit, so it is the only one now.
+
+    When the GGUF metadata is unreadable the KV cannot be sized, so the
+    conservative 16k default applies instead of the old flat 200k (still
+    capped at the model max when that IS known).
     """
     meta = read_gguf_meta(gguf)
     model_max = meta.context_length if (meta and meta.context_length) else None
+    own = meta.rope.effective_context(model_max) if meta else None
+    window = own or model_max
     if not (meta and meta.complete):
-        return max(_CTX_FLOOR, min(16384, model_max or 16384))
+        return max(_CTX_FLOOR, min(16384, window or 16384))
     placeholder = ModelSpec(
         name="_auto", label="_auto", gguf=str(gguf), llama_port=0,
-        daemon_port=0, ctx_size=200000, parallel=parallel, kv=kv,
+        daemon_port=0, ctx_size=max(window or _CTX_FLOOR, _CTX_FLOOR),
+        parallel=parallel, kv=kv,
         max_tokens=1, model_id="_auto",
     )
-    return max(_CTX_FLOOR, min(_clamp_ctx(placeholder), 65536))
+    return max(_CTX_FLOOR, _clamp_ctx(placeholder))
 
 
 def pull_model(

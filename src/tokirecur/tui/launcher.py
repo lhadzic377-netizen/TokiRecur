@@ -902,6 +902,11 @@ class LauncherApp(App[dict | None]):
                     f"      :{spec.llama_port}/:{spec.daemon_port}  "
                     f"ctx={st.get('ctx', spec.ctx_size)}  {spec.label}"
                 )
+                from .. import ctl as ctl_mod
+
+                rope = ctl_mod.rope_note(spec)
+                if rope:
+                    detail += f"  ·  {rope}"
                 if variant.effort is not None:
                     detail += f"  ·  reasoning {variant.effort}"
                 if gone:

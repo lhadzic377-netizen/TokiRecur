@@ -15,11 +15,67 @@ import os
 import struct
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 _MAGIC = b"GGUF"
 
 # GGUF value types (v3): https://github.com/ggerganov/ggml/blob/master/docs/gguf.md
 _U8, _I8, _U16, _I16, _U32, _I32, _F32, _BOOL, _STRING, _ARRAY, _U64, _I64, _F64 = range(13)
+
+
+@dataclass(frozen=True)
+class GgufRope:
+    """The position-encoding configuration the model carries itself.
+
+    A GGUF converted from a model trained with YaRN keeps the scaling in
+    its metadata: the type, the factor the positions are stretched by,
+    and the window the model was actually trained at. llama.cpp reads
+    those and applies them by itself — no ``--rope-scaling`` on the
+    command line — so a model with this metadata can address
+    ``base × factor`` positions on its own.
+
+    The same keys also appear on models that ship *linear* or *dynamic*
+    scaling. Those stretch the positions too, but they are not YaRN: the
+    distinction matters because YaRN is the one that also rescales the
+    attention, and the one the rest of the system can reason about.
+    """
+
+    scaling_type: str | None = None
+    factor: float | None = None
+    original_context_length: int | None = None
+    yarn_log_multiplier: float | None = None
+    yarn_ext_factor: float | None = None
+    yarn_attn_factor: float | None = None
+    yarn_beta_fast: float | None = None
+    yarn_beta_slow: float | None = None
+
+    @property
+    def is_yarn(self) -> bool:
+        return (self.scaling_type or "").strip().lower() == "yarn"
+
+    @property
+    def stretches(self) -> bool:
+        """True when the model's own metadata extends its own window."""
+        return self.is_yarn and self.factor is not None and self.factor > 1.0
+
+    def effective_context(self, base: int | None) -> int | None:
+        """The window the model's own rope configuration gives it.
+
+        ``base`` is the GGUF's own ``context_length`` — the window the
+        weights were trained for. The factor stretches the positions by
+        that much, so the model can address ``base × factor`` of them.
+        """
+        if not self.stretches or not base:
+            return None
+        return int(base * float(self.factor or 1.0))
+
+    def describe(self) -> str:
+        """One line for a launcher row: what the model does with its rope."""
+        if not self.scaling_type:
+            return ""
+        if self.is_yarn and self.factor:
+            return f"yarn {self.factor:g}×"
+        return str(self.scaling_type)
 
 
 @dataclass(frozen=True)
@@ -29,6 +85,7 @@ class GgufMeta:
     n_head: int | None = None
     n_head_kv: int | None = None
     context_length: int | None = None
+    rope: GgufRope = GgufRope()
 
     @property
     def complete(self) -> bool:
@@ -130,7 +187,35 @@ _META_SUFFIXES = (
     ".attention.head_count_kv",
     ".context_length",
     ".max_position_embeddings",
+    # The position encoding the model ships with. A model trained with
+    # YaRN carries the factor and the window it was trained at, and
+    # llama.cpp applies them without being told to — so reading them
+    # is what lets a pulled model use the window it actually has.
+    ".rope.scaling.type",
+    ".rope.scaling.factor",
+    ".rope.scaling.original_context_length",
+    ".rope.scaling.yarn_log_multiplier",
+    ".rope.scaling.yarn_ext_factor",
+    ".rope.scaling.yarn_attn_factor",
+    ".rope.scaling.yarn_beta_fast",
+    ".rope.scaling.yarn_beta_slow",
 )
+
+
+#: GGUF rope keys -> the GgufRope field they fill. The GGUF names them
+#: after llama.cpp's own key list (src/llama-arch.cpp), so a model
+#: converted from a YaRN-trained one carries the factor and the trained
+#: window and llama.cpp applies them with no flags.
+_ROPE_KEYS: dict[str, str] = {
+    "rope.scaling.type": "type",
+    "rope.scaling.factor": "factor",
+    "rope.scaling.original_context_length": "orig_ctx",
+    "rope.scaling.yarn_log_multiplier": "log_mul",
+    "rope.scaling.yarn_ext_factor": "ext_factor",
+    "rope.scaling.yarn_attn_factor": "attn_factor",
+    "rope.scaling.yarn_beta_fast": "beta_fast",
+    "rope.scaling.yarn_beta_slow": "beta_slow",
+}
 
 
 def _read_gguf_meta(path: Path | str) -> GgufMeta:
@@ -162,6 +247,7 @@ def _read_gguf_meta(path: Path | str) -> GgufMeta:
             prefixes = [f"{arch}."] if arch else []
             prefixes.append("llama.")
             n_embd = n_layer = n_head = n_head_kv = context_length = None
+            rope: dict[str, Any] = {}
             for pref in prefixes:
                 if n_embd is None:
                     v = meta.get(f"{pref}embedding_length")
@@ -180,9 +266,49 @@ def _read_gguf_meta(path: Path | str) -> GgufMeta:
                     if not isinstance(v, (int, float)):
                         v = meta.get(f"{pref}max_position_embeddings")
                     context_length = int(v) if isinstance(v, (int, float)) else None
+                if not rope:
+                    for key, name in _ROPE_KEYS.items():
+                        v = meta.get(f"{pref}{key}")
+                        if v is not None:
+                            rope[name] = v
                 if n_embd is not None and n_layer is not None:
                     break
-            return GgufMeta(n_embd, n_layer, n_head, n_head_kv, context_length)
+            return GgufMeta(
+                n_embd, n_layer, n_head, n_head_kv, context_length,
+                GgufRope(
+                    scaling_type=(
+                        str(rope["type"]) if rope.get("type") is not None else None
+                    ),
+                    factor=(
+                        float(rope["factor"]) if isinstance(rope.get("factor"), (int, float))
+                        else None
+                    ),
+                    original_context_length=(
+                        int(rope["orig_ctx"])
+                        if isinstance(rope.get("orig_ctx"), (int, float)) else None
+                    ),
+                    yarn_log_multiplier=(
+                        float(rope["log_mul"])
+                        if isinstance(rope.get("log_mul"), (int, float)) else None
+                    ),
+                    yarn_ext_factor=(
+                        float(rope["ext_factor"])
+                        if isinstance(rope.get("ext_factor"), (int, float)) else None
+                    ),
+                    yarn_attn_factor=(
+                        float(rope["attn_factor"])
+                        if isinstance(rope.get("attn_factor"), (int, float)) else None
+                    ),
+                    yarn_beta_fast=(
+                        float(rope["beta_fast"])
+                        if isinstance(rope.get("beta_fast"), (int, float)) else None
+                    ),
+                    yarn_beta_slow=(
+                        float(rope["beta_slow"])
+                        if isinstance(rope.get("beta_slow"), (int, float)) else None
+                    ),
+                ),
+            )
     except (OSError, struct.error, UnicodeDecodeError, ValueError):
         return GgufMeta()
 

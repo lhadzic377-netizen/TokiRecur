@@ -6,7 +6,10 @@ import pytest
 
 from tokirecur.ggufmeta import GgufMeta, read_gguf_meta
 
-_I32, _F32, _STRING = 5, 7, 8
+# GGUF value types: int32 = 5, float32 = 6, string = 8. The float type
+# was wrong here (7 is bool) and no test used a float, so the mistake
+# stayed invisible until the rope metadata needed one.
+_I32, _F32, _STRING = 5, 6, 8
 
 
 def _gguf_bytes(kv: dict[str, object]) -> bytes:
@@ -60,6 +63,76 @@ def test_reads_context_length(tmp_path):
         "qwen2.context_length": 128000,
     })
     assert read_gguf_meta(p).context_length == 128000
+
+
+def test_reads_the_rope_configuration_a_model_ships(tmp_path):
+    """A GGUF converted from a YaRN-trained model carries the scaling.
+
+    llama.cpp applies it with no command-line flags, so the window the
+    model can address is its trained one times its own factor — and the
+    only way to know that is to read the file.
+    """
+    p = _write(tmp_path, {
+        "general.architecture": "llama",
+        "llama.embedding_length": 1024,
+        "llama.block_count": 16,
+        "llama.attention.head_count": 16,
+        "llama.attention.head_count_kv": 8,
+        "llama.context_length": 32768,
+        "llama.rope.scaling.type": "yarn",
+        "llama.rope.scaling.factor": 4.0,
+        "llama.rope.scaling.original_context_length": 32768,
+        "llama.rope.scaling.yarn_log_multiplier": 0.25,
+        "llama.rope.scaling.yarn_ext_factor": 0.5,
+        "llama.rope.scaling.yarn_attn_factor": 1.1386,
+        "llama.rope.scaling.yarn_beta_fast": 32.0,
+        "llama.rope.scaling.yarn_beta_slow": 1.0,
+    })
+    meta = read_gguf_meta(p)
+    rope = meta.rope
+    assert rope.is_yarn
+    assert rope.stretches
+    assert rope.factor == 4.0
+    assert rope.original_context_length == 32768
+    assert rope.yarn_log_multiplier == 0.25
+    assert rope.yarn_beta_fast == 32.0
+    # 32768 trained, stretched 4x.
+    assert rope.effective_context(meta.context_length) == 131072
+    assert rope.describe() == "yarn 4×"
+
+
+def test_a_model_without_rope_metadata_stays_untouched(tmp_path):
+    p = _write(tmp_path, {
+        "general.architecture": "qwen2",
+        "qwen2.embedding_length": 1024,
+        "qwen2.block_count": 16,
+        "qwen2.attention.head_count": 16,
+        "qwen2.attention.head_count_kv": 8,
+        "qwen2.context_length": 262144,
+    })
+    meta = read_gguf_meta(p)
+    assert meta.rope.scaling_type is None
+    assert not meta.rope.stretches
+    assert meta.rope.effective_context(meta.context_length) is None
+    assert meta.rope.describe() == ""
+
+
+def test_a_stretch_of_one_is_not_an_extension(tmp_path):
+    """yarn with factor 1 is the trained window, not a bigger one."""
+    p = _write(tmp_path, {
+        "general.architecture": "llama",
+        "llama.embedding_length": 1024,
+        "llama.block_count": 16,
+        "llama.attention.head_count": 16,
+        "llama.attention.head_count_kv": 8,
+        "llama.context_length": 32768,
+        "llama.rope.scaling.type": "yarn",
+        "llama.rope.scaling.factor": 1.0,
+    })
+    rope = read_gguf_meta(p).rope
+    assert rope.is_yarn
+    assert not rope.stretches
+    assert rope.effective_context(32768) is None
 
 
 def test_max_position_embeddings_fallback(tmp_path):

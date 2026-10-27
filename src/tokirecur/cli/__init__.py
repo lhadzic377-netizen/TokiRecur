@@ -1145,7 +1145,7 @@ def list_models(as_json: bool) -> None:
     """List the models in the registry."""
     import json as _json
 
-    from ..ctl import load_registry, read_active
+    from ..ctl import load_registry, read_active, rope_note
     if as_json:
         # A flat, stable shape: enough to find a stack and talk to it, and
         # deliberately no secrets (the auth token is read from the auth file
@@ -1168,8 +1168,10 @@ def list_models(as_json: bool) -> None:
             flags.append("vision" if Path(spec.mmproj).exists() else "VISION, projector missing")
         extra = f" ({', '.join(flags)})" if flags else ""
         click.echo(f"  {spec.name.ljust(8)} {spec.label}{extra}")
+        rope = rope_note(spec)
+        rope_text = f"  ·  {rope}" if rope else ""
         click.echo(f"            llama :{spec.llama_port}  daemon :{spec.daemon_port}  "
-                   f"ctx {spec.ctx_size}  kv {spec.kv}  -> {spec.gguf}")
+                   f"ctx {spec.ctx_size}  kv {spec.kv}{rope_text}  -> {spec.gguf}")
 
 
 @model.command("status")
