@@ -444,8 +444,10 @@ toki tap clear                  # delete the recordings
 `--format sft` writes the plain `{"messages": [...]}` shape a trainer accepts,
 one completed turn per line; `--with-reasoning/--no-reasoning` decides whether
 the reasoning rides beside the answer. The TUI shows `● rec` while the switch
-is on (`Ctrl+T` in the launcher toggles it), and the desktop app has the same
-switch in Settings → Recording.
+is on; the launcher's settings pane carries it as the first row ("record
+turns", with the live state and how much is on the shelf) and `Ctrl+T`
+toggles it from the launcher; the desktop app has the same switch in
+Settings → Recording.
 
 Honest limits: images are recorded as the captions the text-only model was
 shown, not as pixels; token ids are not recorded (the engine does not return
