@@ -976,7 +976,9 @@ def create_app(
             return entries
         served = _served_model_id()
         for variant in expand_variants(specs):
-            if variant.effort is None or variant.spec.model_id != served:
+            if variant.effort is None:
+                continue
+            if served and not _same_model(variant.spec, served):
                 continue
             sibling = dict(entry)
             sibling["id"] = variant.model_id

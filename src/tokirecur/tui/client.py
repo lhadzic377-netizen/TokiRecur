@@ -273,6 +273,11 @@ class DaemonClient:
                 # can hang on the KV-reuse path on second messages).
                 "cache_prompt": cache_prompt_enabled(),
             }
+            # llama-server reads the effort itself and hands it to the
+            # chat template, so the raw path can carry it too.
+            effort = _active_effort()
+            if effort:
+                payload["reasoning_effort"] = effort
             target_label = "raw"
         elif mode == "cached":
             endpoint = f"{self.daemon_url}/v1/chat/completions"
