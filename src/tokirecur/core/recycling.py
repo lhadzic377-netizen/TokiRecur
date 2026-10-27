@@ -115,15 +115,29 @@ def _content_text(content: Any) -> str:
     return str(content)
 
 
-def _last_routing_text(messages: list[dict]) -> str:
+def _last_routing_text(
+    messages: list[dict], reasoning_effort: str | None = None,
+) -> str:
     """Routing key for a message list: the last user message's text
-    (normalized), falling back to the final message's content."""
+    (normalized), falling back to the final message's content.
+
+    The reasoning effort is part of the key when there is one. The
+    effort changes the prompt the template renders — the level's
+    instruction goes into the system message — so the same messages at
+    two levels are two different prefixes. Without it in the key, the
+    daemon would call the second one a hit while the engine re-prefilled
+    every token of it: the reuse would be reported and not happen.
+    """
+    body = ""
     for m in reversed(messages):
         if m.get("role") == "user" and m.get("content"):
-            return _content_text(m["content"])
-    if messages:
-        return _content_text(messages[-1].get("content", ""))
-    return ""
+            body = _content_text(m["content"])
+            break
+    if not body and messages:
+        body = _content_text(messages[-1].get("content", ""))
+    if reasoning_effort:
+        return f"[effort:{reasoning_effort}]\n{body}"
+    return body
 
 
 @dataclass
@@ -354,7 +368,7 @@ class RecyclingEngine:
         # last user message's text as the routing key — it's what future
         # turns are most likely to share with. Content is normalized to
         # a string (clients may send multi-part arrays).
-        routing_text = _last_routing_text(messages)
+        routing_text = _last_routing_text(messages, reasoning_effort)
 
         return self._serve_with_backend(
             prompt=routing_text,
@@ -604,7 +618,7 @@ class RecyclingEngine:
         """
         # Index the joined user content for prefix matching (mirrors
         # serve_chat).
-        routing_text = _last_routing_text(messages)
+        routing_text = _last_routing_text(messages, reasoning_effort)
 
         started = time.perf_counter()
         new_tokens, new_embedding, slot_id, reuse_depth, spilled, cache_prompt, cache_id = (
