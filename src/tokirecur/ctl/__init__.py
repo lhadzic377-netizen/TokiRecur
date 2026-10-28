@@ -2475,6 +2475,59 @@ def _pid_on_port(port: int) -> int | None:
     return pid
 
 
+def stack_listening(spec: ModelSpec) -> bool:
+    """Is anything holding one of the model's ports?
+
+    ``model_status`` deliberately calls a daemon unreachable when its
+    backend is dead (so clients are not sent through a broken proxy),
+    which left ``toki down`` reporting "nothing to stop" while the
+    daemon was still bound. Stopping cares about the socket, not health.
+    """
+    return bool(_pid_on_port(spec.llama_port) or _pid_on_port(spec.daemon_port))
+
+
+def _gpu_backend_of_process(pid: int) -> str | None:
+    """Which GPU backend a live llama-server has loaded, from /proc.
+
+    Newer llama.cpp builds print their device and offload lines only at
+    ``-lv 4``, so a run that is using the GPU can leave a log that looks
+    CPU-only — and doctor then tells the user to reinstall a build that
+    is already working. The process itself is the evidence: a GPU build
+    dlopens ``libggml-vulkan``/``libggml-cuda``/``libggml-hip``, and its
+    command line still carries a positive ``-ngl``.
+    """
+    if not sys.platform.startswith("linux"):
+        return None
+    try:
+        argv = [
+            part.decode(errors="replace")
+            for part in Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+            if part
+        ]
+    except OSError:
+        return None
+    ngl = 99
+    for i, arg in enumerate(argv):
+        if arg in ("-ngl", "--n-gpu-layers") and i + 1 < len(argv):
+            try:
+                ngl = int(argv[i + 1])
+            except ValueError:
+                pass
+    if ngl <= 0:
+        return None
+    try:
+        maps = Path(f"/proc/{pid}/maps").read_text(errors="replace").lower()
+    except OSError:
+        return None
+    if "libggml-vulkan" in maps:
+        return "Vulkan"
+    if "libggml-cuda" in maps:
+        return "CUDA"
+    if "libggml-hip" in maps or "libggml-rocm" in maps:
+        return "ROCm"
+    return None
+
+
 def model_status(spec: ModelSpec) -> dict[str, Any]:
     lp, dp = llama_pid(spec), daemon_pid(spec)
     llama_up = llama_reachable(spec)
@@ -2548,6 +2601,12 @@ def gpu_state(spec: ModelSpec) -> dict[str, str | None]:
             name = m.group(1)
             result["backend"] = name.rstrip("0123456789")
             result["device"] = m.group(2).strip()
+    if result["backend"] is None:
+        pid = _pid_on_port(spec.llama_port)
+        if pid:
+            backend = _gpu_backend_of_process(pid)
+            if backend:
+                result["backend"] = backend
     return result
 
 

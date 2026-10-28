@@ -276,3 +276,27 @@ def test_run_includes_sections(monkeypatch, iso_env):
     assert f"model: {spec.name}" in out
     assert "llama-server (state bin)" in out
     assert "model gpu: CUDA" in out
+
+
+def test_binary_backend_asks_the_binary_before_ldd(monkeypatch, tmp_path):
+    """A GPU build dlopens its backend; ldd alone reads it as CPU.
+
+    llama.cpp ships libggml-vulkan/cuda/hip as separate libraries that
+    are loaded at runtime, so a working Vulkan build links only the CPU
+    core. install-llama used the link table as proof and rejected a
+    correct download while the binary itself enumerated Vulkan0.
+    """
+    monkeypatch.setattr(os, "name", "posix")
+    exe = tmp_path / "llama-server"
+    exe.write_bytes(b"x")
+
+    def fake_run(argv, timeout=5.0):
+        if argv[-1] == "--list-devices":
+            return (
+                "Available devices:\n"
+                "  Vulkan0: Intel(R) Graphics (MTL) (11615 MiB, 7091 MiB free)"
+            )
+        return "libggml-base.so\nlibggml-cpu.so"
+
+    monkeypatch.setattr(diagnose, "_run", fake_run)
+    assert diagnose.binary_backend(str(exe)) == "Vulkan"

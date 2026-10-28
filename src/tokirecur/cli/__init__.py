@@ -903,6 +903,7 @@ def up(
                 alias=(
                     ",".join(ctl_mod.model_aliases(spec)) if spec is not None else None
                 ),
+                parallel=spec.parallel if spec is not None else 4,
             )
             click.echo(f"llama-server started (pid={pid})  http://127.0.0.1:{llama_port}")
         except Exception as e:
@@ -916,23 +917,22 @@ def up(
             host="127.0.0.1",
             port=daemon_port,
             backend_url=f"http://127.0.0.1:{llama_port}",
+            reasoning=spec.reasoning if spec is not None else "auto",
             wait=True,
         )
         click.echo(f"toki daemon started (pid={pid})  http://127.0.0.1:{daemon_port}")
         click.echo(f"logs: {lifecycle.LLAMA_LOG}  {lifecycle.DAEMON_LOG}")
         return
 
-    # Foreground: run uvicorn in this process so Ctrl+C works cleanly.
-    try:
-        lifecycle.start_daemon(
-            host="127.0.0.1",
-            port=daemon_port,
-            backend_url=f"http://127.0.0.1:{llama_port}",
-            wait=False,
-        )
-    except Exception as e:
-        click.echo(f"failed to spawn toki daemon: {e}", err=True)
-        raise SystemExit(1) from None
+    # Foreground: run uvicorn in this process so Ctrl+C works cleanly. It
+    # must be told which llama-server it fronts, the same way the detached
+    # path tells the child: without it the app falls back to the default
+    # backend (:8088) and every request proxies the wrong stack. Spawning
+    # a second daemon first only raced this one for the port and left a
+    # dead pid behind.
+    os.environ["TOKI_BACKEND_URL"] = f"http://127.0.0.1:{llama_port}"
+    if spec is not None:
+        os.environ["TOKI_REASONING"] = spec.reasoning
     click.echo(f"toki daemon  http://127.0.0.1:{daemon_port}")
     click.echo(f"logs: {lifecycle.LLAMA_LOG}  {lifecycle.DAEMON_LOG}")
     click.echo("Ctrl+C to stop everything.")
@@ -958,14 +958,18 @@ def down(yes: bool) -> None:
     """Stop everything: every model stack (llama-server + daemon) and
     the legacy stack."""
     from .. import lifecycle
-    from ..ctl import load_registry, model_status, stop_model
+    from ..ctl import load_registry, model_status, stack_listening, stop_model
     s = lifecycle.status()
     targets: list[str] = []
     if s["llama_server"]["alive"] or s["toki_daemon"]["alive"]:
         targets.append("legacy stack")
     for spec in load_registry():
         st = model_status(spec)
-        if st["llama"]["reachable"] or st["daemon"]["reachable"]:
+        if (
+            st["llama"]["reachable"]
+            or st["daemon"]["reachable"]
+            or stack_listening(spec)
+        ):
             targets.append(f"{spec.name} (llama :{spec.llama_port}, daemon :{spec.daemon_port})")
     if not targets:
         click.echo("nothing to stop (all stacks are down).")
@@ -982,7 +986,11 @@ def down(yes: bool) -> None:
         stopped.append("legacy stack")
     for spec in load_registry():
         st = model_status(spec)
-        if st["llama"]["reachable"] or st["daemon"]["reachable"]:
+        if (
+            st["llama"]["reachable"]
+            or st["daemon"]["reachable"]
+            or stack_listening(spec)
+        ):
             try:
                 stop_model(spec, force=True)
                 stopped.append(spec.name)

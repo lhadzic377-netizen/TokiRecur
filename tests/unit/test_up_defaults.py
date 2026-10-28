@@ -60,3 +60,18 @@ def test_nothing_is_hard_coded_any_more(option):
         f"--{option.replace('_', '-')} still defaults to "
         f"{defaults[option]!r} instead of the active model"
     )
+
+
+def test_the_unified_cache_and_registry_parallel_reach_the_command_line():
+    """`-c` is the window the model gets, not a budget split by slots.
+
+    Without ``-kvu`` llama.cpp divides ``-c`` across ``--parallel``
+    slots: a registry saying 131072 was served as 4x32768, and the
+    stack advertised a context it did not have. The slot count is the
+    registry's, not a hard-coded 4.
+    """
+    args = lifecycle.llama_default_args(
+        "/models/m/m.gguf", 8088, 131072, 99, parallel=2
+    )
+    assert "-kvu" in args
+    assert args[args.index("--parallel") + 1] == "2"

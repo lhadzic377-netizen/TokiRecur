@@ -100,6 +100,7 @@ def llama_default_args(
     ctx_size: int,
     n_gpu_layers: int,
     alias: str | None = None,
+    parallel: int = 4,
 ) -> list[str]:
     # Ensure required dirs exist before llama-server validates them.
     slot_save_dir = STATE_DIR / "slot-save"
@@ -112,7 +113,13 @@ def llama_default_args(
         "--port", str(port),
         "-c", str(ctx_size),
         "-ngl", str(n_gpu_layers),
-        "--parallel", "4",
+        "--parallel", str(parallel),
+        # One KV buffer shared by every slot, the same window the
+        # registry and the launcher path give the model. Without it
+        # llama.cpp splits -c across slots (131072 became 4x32768) and
+        # the stack silently served a quarter of the context.
+        "-kvu",
+        "-lv", "3",
         "--slot-save-path", str(slot_save_dir),
         "--embedding",
     ]
@@ -141,6 +148,7 @@ def start_llama_server(
     extra_args: list[str] | None = None,
     wait: bool = True,
     alias: str | None = None,
+    parallel: int = 4,
 ) -> int:
     """Start llama-server. Returns the PID. If already running, returns
     the existing PID without restarting."""
@@ -153,7 +161,9 @@ def start_llama_server(
             logger.info("llama-server already running on :%d (pid=%d)", port, existing)
             return existing
 
-    args = llama_default_args(model, port, ctx_size, n_gpu_layers, alias=alias)
+    args = llama_default_args(
+        model, port, ctx_size, n_gpu_layers, alias=alias, parallel=parallel
+    )
     if extra_args:
         args.extend(extra_args)
     logger.info("starting: %s", " ".join(args))

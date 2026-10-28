@@ -150,6 +150,21 @@ def binary_backend(binary: str | None) -> str | None:
         if "vulkan-1" in dlls:
             return "Vulkan"
         return "CPU"
+    # Ask the binary what it can see before trusting its link table: a
+    # GPU build loads its backend as a separate libggml-*.so at runtime,
+    # so `ldd` lists only the CPU core and a working Vulkan/CUDA/ROCm
+    # build reads as CPU. That wrong answer made install-llama reject a
+    # correct download ("expected backend vulkan but this build is cpu")
+    # while the same binary happily enumerated Vulkan0.
+    out = _run([binary, "--list-devices"])
+    if out:
+        low = out.lower()
+        if "vulkan" in low:
+            return "Vulkan"
+        if "cuda" in low:
+            return "CUDA"
+        if "rocm" in low or "hip" in low:
+            return "ROCm"
     out = _run(["ldd", binary])
     if not out:
         return None
