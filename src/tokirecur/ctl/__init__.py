@@ -2871,7 +2871,10 @@ def _binary_supports(binary: str, flag: str) -> bool:
             timeout=15,
         )
         text = (out.stdout or "") + (out.stderr or "")
-        for probe in ("--slot-save-path", "--alias", "--reasoning"):
+        for probe in (
+            "--slot-save-path", "--alias", "--reasoning",
+            "--mlock", "--load-mode", "--device",
+        ):
             if probe in text:
                 found.add(probe)
     except Exception:
@@ -2976,6 +2979,12 @@ def _llama_args(spec: ModelSpec, ctx_override: int | None = None,
     if ngl is not None:
         _warn_gpu_offload_without_gpu_binary(binary, ngl)
         args += ["-ngl", str(ngl)]
+    if ngl == 0 and _binary_supports(binary, "--device"):
+        # Newer llama.cpp fits the model onto any visible device and
+        # treats -ngl 0 as a hint, not an order: a "CPU" launch silently
+        # ran on the Intel iGPU at 0.43 tok/s where the CPU does 25.
+        # --device none is the only way to tell that fitter "no GPU".
+        args += ["--device", "none"]
 
     # CPU-mode tuning: when no GPU is in play (ngl == 0), use every
     # physical core, plus mlock and batch sizes. None of these are
@@ -3005,7 +3014,13 @@ def _llama_args(spec: ModelSpec, ctx_override: int | None = None,
                 threads = 4
         args += ["-t", str(max(2, threads))]
         threads_added = True
-        args += ["--mlock"]
+        # Newer llama.cpp dropped the bare --mlock flag in favour of
+        # --load-mode; passing the old one is a fatal "invalid argument"
+        # on every CPU-mode start. Ask the binary which spelling it has.
+        if _binary_supports(binary, "--mlock"):
+            args += ["--mlock"]
+        elif _binary_supports(binary, "--load-mode"):
+            args += ["--load-mode", "mmap+mlock"]
         # Batch sizes — only set if the registry didn't already.
         if not any(a in ("-b", "--batch-size") for a in spec.extra_args):
             args += ["-b", "2048"]

@@ -1614,6 +1614,37 @@ def test_llama_args_ngl_zero_runs_cpu(seeded_env, monkeypatch):
     assert args[args.index("-ngl") + 1] == "0"
 
 
+def test_llama_args_cpu_mode_disables_gpu_device_on_new_build(
+    seeded_env, monkeypatch,
+):
+    """New llama.cpp fits the model onto any visible device and treats
+    -ngl 0 as a hint: a "CPU" launch ran on the iGPU at 0.43 tok/s
+    where the CPU does 25. --device none is the only way to opt out."""
+    monkeypatch.setenv("TOKI_NGL", "0")
+    supported = {"--load-mode", "--device"}
+    monkeypatch.setattr(ctl, "_binary_supports", lambda b, f: f in supported)
+    args = ctl._llama_args(_ngl_spec(seeded_env))
+    assert args[args.index("--device") + 1] == "none"
+    assert args[args.index("--load-mode") + 1] == "mmap+mlock"
+    assert "--mlock" not in args
+
+
+def test_llama_args_cpu_mode_keeps_legacy_mlock(seeded_env, monkeypatch):
+    """Older builds have bare --mlock and no --device; keep them working."""
+    monkeypatch.setenv("TOKI_NGL", "0")
+    monkeypatch.setattr(ctl, "_binary_supports", lambda b, f: f == "--mlock")
+    args = ctl._llama_args(_ngl_spec(seeded_env))
+    assert "--mlock" in args
+    assert "--device" not in args
+
+
+def test_llama_args_gpu_mode_does_not_disable_devices(seeded_env, monkeypatch):
+    monkeypatch.setenv("TOKI_NGL", "99")
+    monkeypatch.setattr(ctl, "_binary_supports", lambda b, f: True)
+    args = ctl._llama_args(_ngl_spec(seeded_env))
+    assert "--device" not in args
+
+
 def test_llama_args_ngl_skipped_when_pinned_in_extra_args(seeded_env):
     """Registry `extra_args` already pinning -ngl is not duplicated."""
     spec = _ngl_spec(seeded_env)
