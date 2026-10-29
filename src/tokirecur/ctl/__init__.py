@@ -4024,6 +4024,31 @@ def use_model(
                 except RuntimeError as e:
                     logger.warning("could not stop '%s': %s", other.name, e)
 
+    # A wedged backend answers /health with 200 while serving nothing:
+    # llama-server keeps a cancelled task's slot flagged busy, and every
+    # completion queues forever. start_model() is idempotent (it skips
+    # when the port answers), so without this the switch would leave the
+    # dead stack in place — and `toki model use` is exactly what the
+    # daemon's 503 tells the user to run.
+    if llama_reachable(target):
+        from ..diagnose import backend_wedged
+        try:
+            wedged = backend_wedged(target.llama_url)
+        except Exception:
+            wedged = None
+        if wedged:
+            logger.warning(
+                "backend for '%s' is %s — restarting the stack",
+                target.name, wedged,
+            )
+            try:
+                # force: the point is to replace a stack that cannot
+                # serve, and a stack toki did not start is exactly the
+                # one that needs replacing.
+                stop_model(target, force=True)
+            except RuntimeError as e:
+                logger.warning("could not stop '%s': %s", target.name, e)
+
     # Settings edits: the target's own stack is already running with the
     # OLD settings. start_model() is idempotent (skips when the server is
     # reachable), so without this stop the new -c/-kvu/--parallel never

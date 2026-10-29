@@ -245,6 +245,47 @@ def test_opencode_config_writer_only_advertises_reachable_daemons(
     assert cfg["model"] == "tokirecur-35b/qwen3.6-35b-a3b"
 
 
+def test_model_use_restarts_a_wedged_backend(env, with_pulled_model, monkeypatch):
+    """`toki model use` is what the daemon's 503 tells the user to run, so
+    it must heal a stack that answers but cannot serve."""
+    spec = with_pulled_model["35b"]
+    stopped = []
+    started = []
+
+    monkeypatch.setattr(ctl, "llama_reachable", lambda s: True)
+    monkeypatch.setattr(ctl, "daemon_reachable", lambda s: False)
+    monkeypatch.setattr(
+        "tokirecur.diagnose.backend_wedged",
+        lambda url: "wedged: 2/2 slots busy with no progress",
+    )
+    monkeypatch.setattr(
+        ctl, "stop_model",
+        lambda s, force=False: stopped.append((s.name, force)),
+    )
+    monkeypatch.setattr(
+        ctl, "start_model", lambda s, **k: started.append(s.name)
+    )
+    monkeypatch.setattr(ctl, "sync_cli_configs", lambda spec, mode=None: {})
+
+    ctl.use_model(spec.name, stop_others=False)
+    assert stopped == [(spec.name, True)]  # force: replace the dead stack
+    assert started == [spec.name]
+
+
+def test_model_use_leaves_a_healthy_backend_alone(env, with_pulled_model, monkeypatch):
+    spec = with_pulled_model["35b"]
+    stopped = []
+    monkeypatch.setattr(ctl, "llama_reachable", lambda s: True)
+    monkeypatch.setattr(ctl, "daemon_reachable", lambda s: False)
+    monkeypatch.setattr("tokirecur.diagnose.backend_wedged", lambda url: None)
+    monkeypatch.setattr(ctl, "stop_model", lambda s: stopped.append(s.name))
+    monkeypatch.setattr(ctl, "start_model", lambda s, **k: None)
+    monkeypatch.setattr(ctl, "sync_cli_configs", lambda spec, mode=None: {})
+
+    ctl.use_model(spec.name, stop_others=False)
+    assert stopped == []
+
+
 def test_sync_only_refuses_to_point_configs_at_a_model_with_no_weights(
         env, with_pulled_model, monkeypatch):
     """A config-only sync of a model whose weights are gone would point
