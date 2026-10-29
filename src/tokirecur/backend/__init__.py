@@ -19,6 +19,7 @@ Endpoint reference (upstream llama.cpp >= b3524):
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -104,6 +105,15 @@ def _merge_sampling(payload: dict, sampling: dict | None) -> dict:
     return payload
 
 
+def _swallow_task_result(task: "asyncio.Task[Any]") -> None:
+    """Retrieve a finished task's exception so asyncio does not warn that
+    it was never retrieved — the task outlives its consumer on purpose."""
+    try:
+        task.exception()
+    except asyncio.CancelledError:
+        pass
+
+
 class LlamaServerBackend(LlamaBackend):
     """HTTP backend against llama-server (upstream).
 
@@ -122,6 +132,45 @@ class LlamaServerBackend(LlamaBackend):
         self.base_url = base_url.rstrip("/")
         self.cache_dir = Path(cache_dir) if cache_dir else None
         self._client = httpx.Client(timeout=timeout)
+
+    async def slot_snapshot(self) -> list[dict[str, Any]] | None:
+        """Current llama-server slot states, or None if unreachable.
+
+        Each entry carries the slot id, whether it is busy, the task id
+        llama-server assigned it and how many prompt tokens that task
+        has processed. The last two are what distinguishes a slot that is
+        genuinely generating from one left flagged busy by a cancelled
+        task — the latter never advances.
+        """
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                r = await client.get(f"{self.base_url}/slots")
+                r.raise_for_status()
+                raw = r.json()
+        except Exception:
+            return None
+        out: list[dict[str, Any]] = []
+        for slot in raw or []:
+            if not isinstance(slot, dict):
+                continue
+            # next_token[0].n_decoded is the only counter that moves while
+            # a slot generates — n_prompt_tokens_processed freezes once the
+            # prompt is in, so it cannot tell "generating" from "stuck".
+            decoded = 0
+            remaining = 0
+            next_token = slot.get("next_token") or []
+            if isinstance(next_token, list) and next_token and isinstance(next_token[0], dict):
+                decoded = int(next_token[0].get("n_decoded") or 0)
+                remaining = int(next_token[0].get("n_remain") or 0)
+            out.append({
+                "id": slot.get("id"),
+                "busy": bool(slot.get("is_processing")),
+                "task": slot.get("id_task"),
+                "processed": slot.get("n_prompt_tokens_processed"),
+                "decoded": decoded,
+                "remaining": remaining,
+            })
+        return out
 
     def _post(self, path: str, payload: dict) -> dict[str, Any]:
         r = self._client.post(f"{self.base_url}{path}", json=payload)
@@ -673,6 +722,16 @@ class LlamaServerBackend(LlamaBackend):
 
         Raises ``RuntimeError`` if llama-server answers with an error
         status before streaming begins.
+
+        The upstream HTTP stream is owned by a producer task, not by this
+        generator. A harness that goes away mid-turn (timeout, Ctrl+C, an
+        aborted tool call) cancels this generator — and a cancelled httpx
+        stream closes the connection, which llama-server reads as "cancel
+        this task". It then leaves the slot flagged busy *forever*, so
+        after two such cancellations the whole server is wedged: health
+        checks stay green and every later request hangs until someone
+        restarts the backend. Letting the producer finish lets the task
+        complete and the slot be released.
         """
         payload = {
             "messages": messages,
@@ -693,107 +752,137 @@ class LlamaServerBackend(LlamaBackend):
         if reasoning_effort:
             payload["reasoning_effort"] = reasoning_effort
         started = time.perf_counter()
-        first_token_at: float | None = None
-        text_parts: list[str] = []
-        reasoning_parts: list[str] = []
-        timings: dict = {}
-        usage: dict = {}
-        finish_reason: str | None = None
-        # Assembled tool calls, keyed by index: {"id", "type",
-        # "function": {"name", "arguments"}} with arguments accumulated
-        # across delta chunks.
-        tool_calls_by_index: dict[int, dict] = {}
-        async with httpx.AsyncClient(timeout=httpx.Timeout(600.0, connect=10.0)) as client:
-            async with client.stream(
-                "POST",
-                f"{self.base_url}/v1/chat/completions",
-                json=payload,
-            ) as r:
-                if r.status_code != 200:
-                    body = await r.aread()
-                    raise RuntimeError(
-                        f"llama-server {r.status_code}: "
-                        f"{body[:300].decode('utf-8', errors='replace')}"
-                    )
-                async for line in r.aiter_lines():
-                    line = line.strip()
-                    if not line.startswith("data:"):
-                        continue
-                    data = line[5:].strip()
-                    if not data or data == "[DONE]":
-                        continue
-                    try:
-                        obj = json.loads(data)
-                    except json.JSONDecodeError:
-                        continue
-                    choices = obj.get("choices") or []
-                    if choices and isinstance(choices[0], dict):
-                        choice = choices[0]
-                        delta = choice.get("delta") or {}
-                        content = delta.get("content")
-                        if content:
-                            if first_token_at is None:
-                                first_token_at = time.perf_counter()
-                            text_parts.append(content)
-                            yield {"kind": "delta", "delta": content}
-                        reasoning = delta.get("reasoning_content")
-                        if reasoning:
-                            if first_token_at is None:
-                                first_token_at = time.perf_counter()
-                            reasoning_parts.append(reasoning)
-                            yield {"kind": "reasoning", "delta": reasoning}
-                        tcs = delta.get("tool_calls")
-                        if tcs:
-                            # Forward the delta verbatim (OpenAI format)
-                            # and accumulate fragments for the result.
-                            yield {"kind": "tool_calls", "tool_calls": tcs}
-                            for tc in tcs:
-                                if not isinstance(tc, dict) or "index" not in tc:
-                                    continue
-                                idx = tc["index"]
-                                acc = tool_calls_by_index.setdefault(idx, {"index": idx})
-                                if tc.get("id"):
-                                    acc["id"] = tc["id"]
-                                if tc.get("type"):
-                                    acc["type"] = tc["type"]
-                                fn = tc.get("function") or {}
-                                if fn:
-                                    f_acc = acc.setdefault("function", {})
-                                    if fn.get("name"):
-                                        f_acc["name"] = fn["name"]
-                                    if fn.get("arguments"):
-                                        f_acc["arguments"] = (
-                                            f_acc.get("arguments", "") + fn["arguments"]
-                                        )
-                        fr = choice.get("finish_reason")
-                        if fr:
-                            finish_reason = fr
-                            yield {"kind": "finish", "finish_reason": fr}
-                    if obj.get("usage"):
-                        usage = obj["usage"]
-                    if obj.get("timings"):
-                        timings = obj["timings"]
-        elapsed = (time.perf_counter() - started) * 1000.0
-        ttft_ms = (
-            (first_token_at - started) * 1000.0
-            if first_token_at is not None
-            else float(timings.get("prompt_ms", 0.0))
-        )
-        tool_calls = [tool_calls_by_index[i] for i in sorted(tool_calls_by_index)] or None
-        yield {
-            "kind": "result",
-            "result": {
-                "text": "".join(text_parts),
-                "reasoning": "".join(reasoning_parts),
-                "tool_calls": tool_calls,
-                "finish_reason": finish_reason,
-                "tokens_generated": int(
-                    usage.get("completion_tokens", len(text_parts))
-                    or len(text_parts)
-                ),
-                "prefill_tokens": int(usage.get("prompt_tokens", 0) or 0),
-                "ttft_ms": float(ttft_ms),
-                "total_ms": elapsed,
-                "prefill_tokens_per_sec": 0.0,
-            },
-        }
+
+        queue: asyncio.Queue = asyncio.Queue()
+        _END = object()
+
+        async def _produce() -> None:
+            first_token_at: float | None = None
+            text_parts: list[str] = []
+            reasoning_parts: list[str] = []
+            timings: dict = {}
+            usage: dict = {}
+            finish_reason: str | None = None
+            # Assembled tool calls, keyed by index: {"id", "type",
+            # "function": {"name", "arguments"}} with arguments accumulated
+            # across delta chunks.
+            tool_calls_by_index: dict[int, dict] = {}
+            try:
+                async with httpx.AsyncClient(timeout=httpx.Timeout(600.0, connect=10.0)) as client:
+                    async with client.stream(
+                        "POST",
+                        f"{self.base_url}/v1/chat/completions",
+                        json=payload,
+                    ) as r:
+                        if r.status_code != 200:
+                            body = await r.aread()
+                            raise RuntimeError(
+                                f"llama-server {r.status_code}: "
+                                f"{body[:300].decode('utf-8', errors='replace')}"
+                            )
+                        async for line in r.aiter_lines():
+                            line = line.strip()
+                            if not line.startswith("data:"):
+                                continue
+                            data = line[5:].strip()
+                            if not data or data == "[DONE]":
+                                continue
+                            try:
+                                obj = json.loads(data)
+                            except json.JSONDecodeError:
+                                continue
+                            choices = obj.get("choices") or []
+                            if choices and isinstance(choices[0], dict):
+                                choice = choices[0]
+                                delta = choice.get("delta") or {}
+                                content = delta.get("content")
+                                if content:
+                                    if first_token_at is None:
+                                        first_token_at = time.perf_counter()
+                                    text_parts.append(content)
+                                    queue.put_nowait({"kind": "delta", "delta": content})
+                                reasoning = delta.get("reasoning_content")
+                                if reasoning:
+                                    if first_token_at is None:
+                                        first_token_at = time.perf_counter()
+                                    reasoning_parts.append(reasoning)
+                                    queue.put_nowait({"kind": "reasoning", "delta": reasoning})
+                                tcs = delta.get("tool_calls")
+                                if tcs:
+                                    # Forward the delta verbatim (OpenAI format)
+                                    # and accumulate fragments for the result.
+                                    queue.put_nowait({"kind": "tool_calls", "tool_calls": tcs})
+                                    for tc in tcs:
+                                        if not isinstance(tc, dict) or "index" not in tc:
+                                            continue
+                                        idx = tc["index"]
+                                        acc = tool_calls_by_index.setdefault(idx, {"index": idx})
+                                        if tc.get("id"):
+                                            acc["id"] = tc["id"]
+                                        if tc.get("type"):
+                                            acc["type"] = tc["type"]
+                                        fn = tc.get("function") or {}
+                                        if fn:
+                                            f_acc = acc.setdefault("function", {})
+                                            if fn.get("name"):
+                                                f_acc["name"] = fn["name"]
+                                            if fn.get("arguments"):
+                                                f_acc["arguments"] = (
+                                                    f_acc.get("arguments", "") + fn["arguments"]
+                                                )
+                                fr = choice.get("finish_reason")
+                                if fr:
+                                    finish_reason = fr
+                                    queue.put_nowait({"kind": "finish", "finish_reason": fr})
+                            if obj.get("usage"):
+                                usage = obj["usage"]
+                            if obj.get("timings"):
+                                timings = obj["timings"]
+                elapsed = (time.perf_counter() - started) * 1000.0
+                ttft_ms = (
+                    (first_token_at - started) * 1000.0
+                    if first_token_at is not None
+                    else float(timings.get("prompt_ms", 0.0))
+                )
+                tool_calls = [tool_calls_by_index[i] for i in sorted(tool_calls_by_index)] or None
+                queue.put_nowait({
+                    "kind": "result",
+                    "result": {
+                        "text": "".join(text_parts),
+                        "reasoning": "".join(reasoning_parts),
+                        "tool_calls": tool_calls,
+                        "finish_reason": finish_reason,
+                        "tokens_generated": int(
+                            usage.get("completion_tokens", len(text_parts))
+                            or len(text_parts)
+                        ),
+                        "prefill_tokens": int(usage.get("prompt_tokens", 0) or 0),
+                        "ttft_ms": float(ttft_ms),
+                        "total_ms": elapsed,
+                        "prefill_tokens_per_sec": 0.0,
+                    },
+                })
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # surfaced to the consumer below
+                queue.put_nowait(exc)
+            finally:
+                queue.put_nowait(_END)
+
+        producer = asyncio.create_task(_produce())
+        try:
+            while True:
+                item = await queue.get()
+                if item is _END:
+                    break
+                if isinstance(item, Exception):
+                    raise item
+                yield item
+        except BaseException:
+            # The client went away (CancelledError from a disconnect,
+            # GeneratorExit from aclose()). Let the producer keep
+            # draining upstream so llama-server finishes the task and
+            # releases the slot instead of leaving it wedged.
+            producer.add_done_callback(_swallow_task_result)
+            raise
+

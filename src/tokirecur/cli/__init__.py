@@ -485,6 +485,19 @@ def doctor(fix: bool) -> None:
         rows.append((f"llama-server :{llama_port}", "ok" if r.status_code == 200 else "down"))
     except Exception:
         rows.append((f"llama-server :{llama_port}", "not reachable"))
+    # A wedged backend answers /health with 200 while serving nothing:
+    # llama-server keeps a cancelled task's slot flagged busy, and after
+    # two cancellations no request can be served again. Say so, with the
+    # fix, instead of reporting a green stack that hangs every harness.
+    try:
+        wedged = diagnose.backend_wedged(f"http://127.0.0.1:{llama_port}")
+    except Exception:
+        wedged = None
+    if wedged:
+        rows.append((
+            f"llama-server :{llama_port} slots",
+            f"{wedged} - restart with `toki model use <model>`",
+        ))
     try:
         r = httpx.get(f"http://127.0.0.1:{daemon_port}/healthz", timeout=2.0)
         rows.append((f"toki daemon :{daemon_port}", "ok" if r.status_code == 200 else "down"))
@@ -1262,6 +1275,15 @@ def use(name: str, keep_others: bool, wait: bool, sync_only: bool,
         click.echo(f"error: {e}", err=True)
         raise SystemExit(1) from None
     paths = sync_cli_configs(spec)
+    if spec.name != name:
+        # A config-only sync of a model that cannot serve keeps the
+        # clients on the model that can — say so, instead of claiming a
+        # switch that did not happen.
+        click.echo(
+            f"note: '{name}' cannot serve (no weights on disk) — the "
+            f"client configs stay on '{spec.name}'",
+            err=True,
+        )
     effective = _effective_ctx(spec)
     if not sync_only:
         try:

@@ -3962,6 +3962,32 @@ def use_model(
         # config sync — opencode must keep pointing at the chat daemon.
         if _spec_is_image(target):
             return target
+        # A config-only sync of a model whose weights are missing points
+        # every harness at a port nothing can ever serve: the clients fail
+        # with "connection refused" and the user has no idea why. The
+        # desktop app restores its remembered previous model this way, and
+        # that memory goes stale. A model whose weights ARE on disk is
+        # fine to point at — the installer heals configs before the stack
+        # is up — so only the impossible case is refused.
+        if model_file_missing(target):
+            current_name = read_active(registry)
+            current = get_model(current_name, registry) if current_name else None
+            if current is not None and not model_file_missing(current):
+                logger.warning(
+                    "'%s' has no weights on disk — keeping the client "
+                    "configs on '%s'",
+                    target.name, current.name,
+                )
+                try:
+                    sync_cli_configs(current)
+                except Exception as e:
+                    logger.warning("could not sync CLI configs: %s", e)
+                return current
+            raise RuntimeError(
+                f"'{target.name}' has no weights on disk — a config-only "
+                f"sync would point every client at a port nothing can "
+                f"serve. Pull it with `toki model pull {target.model_id}`."
+            )
         set_active(target.name, registry)
         try:
             sync_cli_configs(target)
@@ -4991,7 +5017,15 @@ def _advertised_specs(
 def _small_model_ref(
     specs: list[ModelSpec], active: ModelSpec | None = None,
 ) -> str:
-    """Legacy opencode `small_model` field — `tokirecur/<short_name>` form.
+    """opencode's `small_model` field — a reference the config resolves.
+
+    opencode parses this as ``provider/model`` and reports the field as
+    *unsupported* when the provider is missing from the config. The
+    legacy ``tokirecur/<name>`` form named a provider key this writer
+    deliberately removes (it served a dead port), so every opencode
+    config toki wrote advertised a small_model that could not resolve —
+    and the cheap title task fell over. The reference must name a
+    provider the config actually defines.
 
     Picks the cheapest spec with a live endpoint for cheap tasks like
     titles: an always-on spec first, otherwise the first advertised
@@ -5008,8 +5042,8 @@ def _small_model_ref(
             )
         if primary is None:
             primary = specs[0]
-        return f"tokirecur/{primary.name}"
-    return "tokirecur/qwen3.5-9b"
+        return f"tokirecur-{primary.name}/{primary.model_id or primary.name}"
+    return "tokirecur-9b/qwen3.5-9b"
 
 
 MIMO_SCHEMA = "https://mimo.xiaomi.com/mimocode/config.json"

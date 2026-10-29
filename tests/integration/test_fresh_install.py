@@ -182,13 +182,20 @@ def test_switching_models_reselects_every_client(fresh_home, model):
         assert f'"model": "{stale_id}"' not in text, f"{client} still selects the old model"
 
 
-def test_a_model_removed_from_the_registry_loses_its_provider_entry(fresh_home, model):
+def test_a_model_removed_from_the_registry_loses_its_provider_entry(fresh_home, model, monkeypatch):
     """The other half of drift, and codex already guards it.
 
     Use 9b, switch to 35b, then uninstall 9b. A client that keeps offering
     9b after it is gone has a menu entry pointing at a dead port, and picking
     it is a request to a server that is not running.
+
+    Both models are advertised while their daemons answer; a client config
+    only ever points at endpoints that are up (a dead port in a model menu
+    is the bug this guards), so the reachability probe is stubbed here to
+    put both on the menu and let the removal be the thing under test.
     """
+    monkeypatch.setattr(ctl, "daemon_reachable", lambda spec: True)
+    monkeypatch.setattr(ctl, "llama_reachable", lambda spec: True)
     other_raw = dict(ctl.DEFAULT_MODELS[1])
     other_raw.update(
         name="35b", model_id="qwen3.6-35b", label="Second",

@@ -922,6 +922,46 @@ def create_app(
             pass
         return {"status": "unreachable", "backend": backend.base_url}
 
+    async def _backend_wedged() -> str | None:
+        """Why the backend cannot serve anything, or None if it can.
+
+        llama-server leaves a slot flagged busy when a task is cancelled
+        mid-flight: the client disconnected, so the server cancels the
+        task but never releases the slot. Two such cancellations wedge
+        the whole server — ``/health`` still answers 200, every
+        completion queues forever, and the only cure is restarting the
+        stack. The tell is slots that are busy while nothing about them
+        moves: same task id, same prompt count, same decoded count.
+        """
+        snapshot = getattr(backend, "slot_snapshot", None)
+        if snapshot is None:
+            return None
+        first = await snapshot()
+        if not first or not all(s["busy"] for s in first):
+            return None
+        await asyncio.sleep(1.5)
+        second = await snapshot()
+        if not second or len(second) != len(first):
+            return None
+        if not all(s["busy"] for s in second):
+            return None
+
+        def signature(snap):
+            return [
+                (s["id"], s["task"], s["processed"], s["decoded"], s["remaining"])
+                for s in snap
+            ]
+
+        if signature(first) != signature(second):
+            return None
+        tasks = ", ".join(str(s["task"]) for s in second)
+        return (
+            f"llama-server ({backend.base_url}) is wedged: "
+            f"{len(second)}/{len(second)} slots busy with no progress "
+            f"(task ids {tasks}). A cancelled request left the slots "
+            f"flagged busy. Restart the stack: `toki model use <model>`."
+        )
+
     # ---- OpenAI model metadata (context discovery) ----
 
     def _served_model_id() -> str | None:
@@ -1763,6 +1803,9 @@ def create_app(
 
     @app.post("/v1/completions")
     async def completions(req: CompletionRequest) -> Response:
+        wedged = await _backend_wedged()
+        if wedged:
+            raise HTTPException(status_code=503, detail=wedged)
         temperature, sampling = _resolve_sampling(
             temperature=req.temperature,
             repeat_penalty=req.repeat_penalty,
@@ -1863,6 +1906,9 @@ def create_app(
 
     @app.post("/v1/chat/completions")
     async def chat_completions(req: ChatCompletionRequest) -> Response:
+        wedged = await _backend_wedged()
+        if wedged:
+            raise HTTPException(status_code=503, detail=wedged)
         # Resolve the model name the client sent. hermes/openclaw/etc.
         # can ship a model id that doesn't match the active spec (e.g.
         # the historical "unsloth/<repo>-GGUF" form vs the spec's
@@ -2077,6 +2123,9 @@ def create_app(
     @app.post("/anthropic/v1/messages")
     @app.post("/v1/messages")
     async def anthropic_messages(req: AnthropicMessagesRequest) -> Response:
+        wedged = await _backend_wedged()
+        if wedged:
+            raise HTTPException(status_code=503, detail=wedged)
         # Same honesty rule as chat_completions: name the model this
         # daemon serves, not whatever the global marker currently says.
         active_model = _served_model_id()

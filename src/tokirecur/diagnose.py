@@ -17,6 +17,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 
 from . import ctl
 
@@ -339,3 +340,60 @@ def active_stack_ports() -> tuple[int, int]:
     if spec is None:
         return 8080, 8787
     return spec.llama_port, spec.daemon_port
+
+
+def backend_wedged(base_url: str, *, gap: float = 1.5) -> str | None:
+    """Why llama-server can serve nothing, or None if it can.
+
+    llama-server keeps a cancelled task's slot flagged busy: the client
+    disconnected, the server cancelled the task and never released the
+    slot. Two such cancellations wedge the whole server — ``/health``
+    still answers 200 while every completion queues forever. The tell is
+    slots that are busy while nothing about them moves (same task id,
+    same prompt count, same decoded count) across two samples.
+    """
+    try:
+        import httpx
+    except Exception:
+        return None
+
+    def sample() -> list[tuple] | None:
+        try:
+            r = httpx.get(f"{base_url.rstrip('/')}/slots", timeout=2.0)
+            r.raise_for_status()
+            slots = r.json()
+        except Exception:
+            return None
+        if not slots or not isinstance(slots, list):
+            return None
+        out = []
+        for s in slots:
+            if not isinstance(s, dict):
+                continue
+            nxt = s.get("next_token") or []
+            decoded = 0
+            if isinstance(nxt, list) and nxt and isinstance(nxt[0], dict):
+                decoded = int(nxt[0].get("n_decoded") or 0)
+            out.append((
+                s.get("id"),
+                bool(s.get("is_processing")),
+                s.get("id_task"),
+                s.get("n_prompt_tokens_processed"),
+                decoded,
+            ))
+        return out or None
+
+    first = sample()
+    if not first or not all(row[1] for row in first):
+        return None
+    time.sleep(gap)
+    second = sample()
+    if not second or first != second:
+        return None
+    if not all(row[1] for row in second):
+        return None
+    tasks = ", ".join(str(row[2]) for row in second)
+    return (
+        f"wedged: {len(second)}/{len(second)} slots busy with no progress "
+        f"(task ids {tasks})"
+    )

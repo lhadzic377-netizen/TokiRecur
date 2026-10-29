@@ -116,7 +116,7 @@ def test_opencode_config_writer(env, with_pulled_model, monkeypatch):
     # Active spec is selected.
     assert cfg["model"] == "tokirecur-35b/qwen3.6-35b-a3b"
     # small_model points at the always-on spec (9b in the default registry).
-    assert cfg["small_model"] == "tokirecur/9b"
+    assert cfg["small_model"] == "tokirecur-9b/qwen3.5-9b"
     # Pulled model has its own provider entry.
     pulled = with_pulled_model["pulled"]
     assert cfg["provider"][f"tokirecur-{pulled.name}"]["options"]["baseURL"] == \
@@ -241,8 +241,56 @@ def test_opencode_config_writer_only_advertises_reachable_daemons(
     # Only the active spec's provider survives; dead daemons are gone.
     assert set(cfg["provider"]) == {"tokirecur-35b"}
     # small_model falls back to the active spec — never a dead one.
-    assert cfg["small_model"] == "tokirecur/35b"
+    assert cfg["small_model"] == "tokirecur-35b/qwen3.6-35b-a3b"
     assert cfg["model"] == "tokirecur-35b/qwen3.6-35b-a3b"
+
+
+def test_sync_only_refuses_to_point_configs_at_a_model_with_no_weights(
+        env, with_pulled_model, monkeypatch):
+    """A config-only sync of a model whose weights are gone would point
+    every harness at a port nothing can ever serve."""
+    monkeypatch.setattr(ctl, "sync_cli_configs", lambda spec, mode=None: {})
+    gone = with_pulled_model["35b"]
+    monkeypatch.setattr(ctl, "model_file_missing", lambda spec: True)
+    with pytest.raises(RuntimeError, match="no weights on disk"):
+        ctl.use_model(gone.name, sync_only=True)
+
+
+def test_sync_only_keeps_configs_on_a_model_that_can_answer(
+        env, with_pulled_model, monkeypatch):
+    """When the requested model has no weights but the active one does,
+    the configs stay where they can actually be used."""
+    target = with_pulled_model["35b"]
+    active = with_pulled_model["9b"]
+    ctl.set_active(active.name)
+    missing = {target.name}
+    monkeypatch.setattr(
+        ctl, "model_file_missing",
+        lambda spec: spec.name in missing,
+    )
+    written = []
+    monkeypatch.setattr(
+        ctl, "sync_cli_configs",
+        lambda spec, mode=None: written.append(spec.name),
+    )
+    out = ctl.use_model(target.name, sync_only=True)
+    assert out.name == active.name
+    assert written == [active.name]
+
+
+def test_opencode_config_writer_small_model_resolves_to_a_written_provider(
+        env, with_pulled_model, monkeypatch):
+    """opencode reports `small_model` as unsupported when the provider it
+    names is missing from the config. The reference must resolve."""
+    monkeypatch.setattr(ctl, "daemon_reachable", lambda spec: True)
+    monkeypatch.setattr(ctl, "llama_reachable", lambda spec: True)
+    spec = with_pulled_model["35b"]
+    cfg_path = env / "opencode.json"
+    cfg_path.write_text(json.dumps({"provider": {}}))
+    cfg = json.loads(ctl.write_opencode_config(spec, path=cfg_path).read_text())
+    provider, _, model = cfg["small_model"].partition("/")
+    assert provider in cfg["provider"], cfg["small_model"]
+    assert model in cfg["provider"][provider]["models"]
 
 
 def test_opencode_config_writer_small_model_prefers_reachable_always_on(
@@ -256,7 +304,7 @@ def test_opencode_config_writer_small_model_prefers_reachable_always_on(
     cfg_path = env / "opencode.json"
     cfg_path.write_text(json.dumps({"provider": {}}))
     cfg = json.loads(ctl.write_opencode_config(spec, path=cfg_path).read_text())
-    assert cfg["small_model"] == "tokirecur/9b"
+    assert cfg["small_model"] == "tokirecur-9b/qwen3.5-9b"
 
 
 def test_opencode_config_writer_skips_user_instructions(env, with_pulled_model):
@@ -2710,8 +2758,10 @@ def test_use_model_sync_only_never_touches_stack(env, monkeypatch):
 
     from tokirecur import ctl
 
+    gguf = env / "m1.gguf"
+    gguf.write_bytes(b"dummy")
     env.joinpath("models.yaml").write_text(yaml.safe_dump({"models": [
-        {"name": "m1", "gguf": "/tmp/m1.gguf", "llama_port": 18001,
+        {"name": "m1", "gguf": str(gguf), "llama_port": 18001,
          "daemon_port": 18002, "ctx_size": 100, "max_tokens": 90,
          "model_id": "m1-model"},
     ]}))
@@ -2942,8 +2992,10 @@ def test_model_use_sync_only_cli(env, monkeypatch):
     from tokirecur.cli import cli
 
     reg = env / "models.yaml"
+    gguf = env / "m1.gguf"
+    gguf.write_bytes(b"dummy")
     reg.write_text(yaml.safe_dump({"models": [
-        {"name": "m1", "gguf": "/tmp/m1.gguf", "llama_port": 18001,
+        {"name": "m1", "gguf": str(gguf), "llama_port": 18001,
          "daemon_port": 18002, "ctx_size": 100, "max_tokens": 90,
          "model_id": "m1-model"},
     ]}))
