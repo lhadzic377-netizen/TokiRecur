@@ -342,15 +342,20 @@ def active_stack_ports() -> tuple[int, int]:
     return spec.llama_port, spec.daemon_port
 
 
-def backend_wedged(base_url: str, *, gap: float = 1.5) -> str | None:
+def backend_wedged(base_url: str, *, gap: float = 60.0) -> str | None:
     """Why llama-server can serve nothing, or None if it can.
 
     llama-server keeps a cancelled task's slot flagged busy: the client
     disconnected, the server cancelled the task and never released the
     slot. Two such cancellations wedge the whole server — ``/health``
-    still answers 200 while every completion queues forever. The tell is
-    slots that are busy while nothing about them moves (same task id,
-    same prompt count, same decoded count) across two samples.
+    still answers 200 while every completion queues forever.
+
+    The stall has to be total to call it: every slot busy, none of them
+    having produced a single token or prompt block, and nothing changing
+    across the whole window. A server prefilling a long prompt reports
+    no progress either — its prompt counter moves in 2048-token blocks,
+    which on a slow CPU is minutes apart — so a short sample would call
+    a working backend wedged.
     """
     try:
         import httpx
@@ -378,7 +383,7 @@ def backend_wedged(base_url: str, *, gap: float = 1.5) -> str | None:
                 s.get("id"),
                 bool(s.get("is_processing")),
                 s.get("id_task"),
-                s.get("n_prompt_tokens_processed"),
+                int(s.get("n_prompt_tokens_processed") or 0),
                 decoded,
             ))
         return out or None
@@ -392,8 +397,12 @@ def backend_wedged(base_url: str, *, gap: float = 1.5) -> str | None:
         return None
     if not all(row[1] for row in second):
         return None
+    # Nothing produced, by any slot: a live server has decoded tokens or
+    # processed prompt blocks by now.
+    if any(row[3] or row[4] for row in second):
+        return None
     tasks = ", ".join(str(row[2]) for row in second)
     return (
         f"wedged: {len(second)}/{len(second)} slots busy with no progress "
-        f"(task ids {tasks})"
+        f"for {int(gap)}s (task ids {tasks})"
     )

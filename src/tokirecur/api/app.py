@@ -752,6 +752,43 @@ def _get_rate_key(request: Request, session_id: str | None) -> str:
     return f"ip:{request.client.host if request.client else 'unknown'}"
 
 
+# How long a stream may stay silent before the daemon says something.
+# A backend prefilling a long prompt can be quiet for minutes; a client
+# with a stream-idle timeout reads that as a dead connection.
+STREAM_HEARTBEAT_SECONDS = 15.0
+
+
+async def _aiter_with_heartbeat(source, interval: float | None = None):
+    """Iterate ``source``, yielding ``None`` when it goes quiet.
+
+    A backend prefilling a long prompt says nothing for minutes. A
+    client with a stream-idle timeout — codex, most SDKs — reads that
+    silence as a dead connection and reconnects, so on a machine that
+    needs a minute to prefill the harness can never finish a turn.
+
+    The pending ``__anext__`` is never cancelled while waiting: a
+    timeout here must not tear down the upstream request (a cancelled
+    upstream leaves llama-server's slot flagged busy).
+    """
+    if interval is None:
+        interval = STREAM_HEARTBEAT_SECONDS
+    iterator = source.__aiter__()
+    pending: asyncio.Future | None = None
+    while True:
+        if pending is None:
+            pending = asyncio.ensure_future(iterator.__anext__())
+        done, _ = await asyncio.wait({pending}, timeout=interval)
+        if not done:
+            yield None
+            continue
+        try:
+            item = pending.result()
+        except StopAsyncIteration:
+            return
+        pending = None
+        yield item
+
+
 def create_app(
     *,
     backend: LlamaBackend,
@@ -776,7 +813,11 @@ def create_app(
                 "requests only. Set TOKI_AUTH_TOKEN (or "
                 "~/.config/tokirecur/auth) before exposing it beyond localhost",
             )
-        yield
+        watcher = asyncio.create_task(_watch_slots())
+        try:
+            yield
+        finally:
+            watcher.cancel()
         logger.info("Toki Recur daemon shutting down")
 
     app = FastAPI(title="Toki Recur", version="0.2.0", lifespan=lifespan)
@@ -922,44 +963,72 @@ def create_app(
             pass
         return {"status": "unreachable", "backend": backend.base_url}
 
-    async def _backend_wedged() -> str | None:
+    # A wedged backend answers /health with 200 while serving nothing:
+    # llama-server keeps a cancelled task's slot flagged busy, so every
+    # completion queues forever.
+    #
+    # Telling "wedged" from "busy" is harder than it looks. llama-server
+    # reports no live progress for a slot that is prefilling — its
+    # prompt counter moves in 2048-token blocks, which on a slow CPU is
+    # minutes apart — so a short sample cannot tell the two apart, and
+    # guessing wrong refuses valid requests. So the daemon watches the
+    # backend in the background, remembers when it last produced
+    # anything, and only calls a stall a wedge when every slot has
+    # produced NOTHING at all for a long time.
+    WEDGE_AFTER_SECONDS = 90.0
+    _SLOT_POLL_SECONDS = 15.0
+
+    async def _watch_slots() -> None:
+        """Track the backend's slots in the background."""
+        state = getattr(app.state, "slot_watch", None)
+        if state is None:
+            state = {"snapshot": [], "last_progress": time.time()}
+            app.state.slot_watch = state
+        previous = None
+        while True:
+            try:
+                snapshot = await backend.slot_snapshot()
+            except Exception:
+                snapshot = None
+            if snapshot:
+                busy = [s for s in snapshot if s.get("busy")]
+                marks = [(s.get("processed"), s.get("decoded")) for s in busy]
+                if not busy or marks != previous:
+                    # Anything moving at all — a token decoded, a prompt
+                    # block processed, a slot freed — counts as progress.
+                    state["last_progress"] = time.time()
+                previous = marks
+                state["snapshot"] = snapshot
+            await asyncio.sleep(_SLOT_POLL_SECONDS)
+
+    def _backend_wedged() -> str | None:
         """Why the backend cannot serve anything, or None if it can.
 
-        llama-server leaves a slot flagged busy when a task is cancelled
-        mid-flight: the client disconnected, so the server cancels the
-        task but never releases the slot. Two such cancellations wedge
-        the whole server — ``/health`` still answers 200, every
-        completion queues forever, and the only cure is restarting the
-        stack. The tell is slots that are busy while nothing about them
-        moves: same task id, same prompt count, same decoded count.
+        The stall must be total: every slot busy, none of them having
+        produced a single token, and no movement for the whole window.
+        A backend that is merely prefilling a long prompt is working.
         """
-        snapshot = getattr(backend, "slot_snapshot", None)
-        if snapshot is None:
+        state = getattr(app.state, "slot_watch", None)
+        if not state:
             return None
-        first = await snapshot()
-        if not first or not all(s["busy"] for s in first):
+        snapshot = state.get("snapshot") or []
+        if not snapshot:
             return None
-        await asyncio.sleep(1.5)
-        second = await snapshot()
-        if not second or len(second) != len(first):
+        busy = [s for s in snapshot if s.get("busy")]
+        if not busy or len(busy) != len(snapshot):
             return None
-        if not all(s["busy"] for s in second):
+        if any(s.get("processed") or s.get("decoded") for s in busy):
             return None
-
-        def signature(snap):
-            return [
-                (s["id"], s["task"], s["processed"], s["decoded"], s["remaining"])
-                for s in snap
-            ]
-
-        if signature(first) != signature(second):
+        idle_for = time.time() - float(state.get("last_progress", time.time()))
+        if idle_for < WEDGE_AFTER_SECONDS:
             return None
-        tasks = ", ".join(str(s["task"]) for s in second)
+        tasks = ", ".join(str(s.get("task")) for s in busy)
         return (
             f"llama-server ({backend.base_url}) is wedged: "
-            f"{len(second)}/{len(second)} slots busy with no progress "
-            f"(task ids {tasks}). A cancelled request left the slots "
-            f"flagged busy. Restart the stack: `toki model use <model>`."
+            f"{len(busy)}/{len(snapshot)} slots busy with no progress "
+            f"for {int(idle_for)}s (task ids {tasks}). A cancelled request "
+            f"left the slots flagged busy. Restart the stack: "
+            f"`toki model use <model>`."
         )
 
     # ---- OpenAI model metadata (context discovery) ----
@@ -1004,8 +1073,17 @@ def create_app(
         llama.cpp's own `meta.n_ctx` field is ignored by those probes.
         """
         ctx = _max_context_ceiling()
+        # The id a client is CONFIGURED with is the registry's model_id
+        # (that is what the writers put in every client config), while
+        # the backend reports the id of the weights it loaded. They
+        # differ — "minicpm5-1b-q4_k_m" vs "MiniCPM5-1B-Q4_K_M" — and a
+        # harness that looks up its configured id in /v1/models (codex
+        # does) then finds nothing and falls back to guessed metadata.
+        # Advertise the registry id; the served id stays listed too.
+        registry_id = _active_model_id()
+        served_id = _served_model_id()
         entry: dict[str, Any] = {
-            "id": _served_model_id() or "default",
+            "id": registry_id or served_id or "default",
             "object": "model",
             "created": int(app.state.started_at),
             "owned_by": "tokirecur",
@@ -1034,6 +1112,13 @@ def create_app(
         """
         entry = _model_info_entry()
         entries = [entry]
+        # The id of the weights themselves, when it differs from the id
+        # the clients are configured with.
+        served = _served_model_id()
+        if served and served != entry["id"]:
+            alias = dict(entry)
+            alias["id"] = served
+            entries.append(alias)
         try:
             from ..ctl import expand_variants, load_registry
             specs = load_registry()
@@ -1248,18 +1333,26 @@ def create_app(
                 chat_template_kwargs = _default_chat_template_kwargs(default_reasoning)
             try:
                 result = None
-                async for item in engine.serve_chat_stream(
-                    messages,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    max_slots=max_slots,
-                    session_id=session_id,
-                    chat_template_kwargs=chat_template_kwargs,
-                    reasoning_effort=reasoning_effort,
-                    tools=tools,
-                    tool_choice=tool_choice,
-                    sampling=sampling,
+                async for item in _aiter_with_heartbeat(
+                    engine.serve_chat_stream(
+                        messages,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                        max_slots=max_slots,
+                        session_id=session_id,
+                        chat_template_kwargs=chat_template_kwargs,
+                        reasoning_effort=reasoning_effort,
+                        tools=tools,
+                        tool_choice=tool_choice,
+                        sampling=sampling,
+                    )
                 ):
+                    if item is None:
+                        # The backend is busy (a long prefill). Say so on
+                        # the wire so the client's idle timer does not
+                        # fire and reconnect mid-turn.
+                        yield chunk_with({})
+                        continue
                     kind = item["kind"]
                     if kind == "delta":
                         yield chunk_with({"content": item["delta"]})
@@ -1602,18 +1695,29 @@ def create_app(
         reasoning_parts: list[str] = []
         tool_state: dict[int, dict] = {}  # index → accumulated tool call
         try:
-            async for item in engine.serve_chat_stream(
-                messages,
-                max_tokens=_resolve_max_tokens(max_tokens,
-                                               reasoning=reasoning_mode),
-                temperature=temperature,
-                max_slots=_resolve_max_slots(req.max_slots),
-                session_id=req.session_id,
-                chat_template_kwargs=ctk,
-                tools=_normalize_responses_tools(req.tools),
-                tool_choice=_normalize_responses_tool_choice(req.tool_choice),
-                sampling=sampling,
+            async for item in _aiter_with_heartbeat(
+                engine.serve_chat_stream(
+                    messages,
+                    max_tokens=_resolve_max_tokens(max_tokens,
+                                                   reasoning=reasoning_mode),
+                    temperature=temperature,
+                    max_slots=_resolve_max_slots(req.max_slots),
+                    session_id=req.session_id,
+                    chat_template_kwargs=ctk,
+                    tools=_normalize_responses_tools(req.tools),
+                    tool_choice=_normalize_responses_tool_choice(
+                        req.tool_choice),
+                    sampling=sampling,
+                )
             ):
+                if item is None:
+                    # Still prefilling: keep the stream visibly alive.
+                    yield event("response.in_progress", {
+                        "id": resp_id, "object": "response",
+                        "created_at": created,
+                        "status": "in_progress", "model": req.model,
+                    })
+                    continue
                 kind = item["kind"]
                 if kind == "delta":
                     text_parts.append(item["delta"])
@@ -1803,7 +1907,7 @@ def create_app(
 
     @app.post("/v1/completions")
     async def completions(req: CompletionRequest) -> Response:
-        wedged = await _backend_wedged()
+        wedged = _backend_wedged()
         if wedged:
             raise HTTPException(status_code=503, detail=wedged)
         temperature, sampling = _resolve_sampling(
@@ -1906,7 +2010,7 @@ def create_app(
 
     @app.post("/v1/chat/completions")
     async def chat_completions(req: ChatCompletionRequest) -> Response:
-        wedged = await _backend_wedged()
+        wedged = _backend_wedged()
         if wedged:
             raise HTTPException(status_code=503, detail=wedged)
         # Resolve the model name the client sent. hermes/openclaw/etc.
@@ -2123,7 +2227,7 @@ def create_app(
     @app.post("/anthropic/v1/messages")
     @app.post("/v1/messages")
     async def anthropic_messages(req: AnthropicMessagesRequest) -> Response:
-        wedged = await _backend_wedged()
+        wedged = _backend_wedged()
         if wedged:
             raise HTTPException(status_code=503, detail=wedged)
         # Same honesty rule as chat_completions: name the model this
