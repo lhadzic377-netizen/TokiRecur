@@ -55,6 +55,16 @@ cp "$ROOT/scripts/windows/install.ps1" \
    "$STAGE/$NAME/"
 cp "$ROOT/LICENSE" "$STAGE/$NAME/" 2>/dev/null || true
 
+# Batch files want CRLF; the rest of the zip is fine either way.
+"$PY" - "$STAGE/$NAME/toki.cmd" <<'PYEOF'
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+data = path.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+path.write_bytes(data)
+PYEOF
+
 if [[ -n "$OFFLINE_PY" ]]; then
     echo "downloading win_amd64 dependency wheels for CPython $OFFLINE_PY"
     mkdir -p "$STAGE/$NAME/wheelhouse"

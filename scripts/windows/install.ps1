@@ -12,7 +12,7 @@
 
 .PARAMETER Python
     Python launcher to use, e.g. "py -3.12" or "C:\Python312\python.exe".
-    Default: the first of py -3.13 … py -3.10, py -3, python that is
+    Default: the first of py -3.13 ... py -3.10, py -3, python that is
     3.10 or newer.
 
 .PARAMETER InstallDir
