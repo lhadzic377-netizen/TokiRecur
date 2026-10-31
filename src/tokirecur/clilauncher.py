@@ -1,13 +1,14 @@
-"""Ollama-style CLI launcher for Windows.
+"""Plain CLI fallback for the Textual launcher.
 
-The Textual launcher renders slowly and glitches on the classic
-Windows console, so on Windows bare ``toki`` opens this plain CLI
-menu instead. It keeps the Textual launcher's capabilities: pick an
-app, switch the active model, and see live stack + GPU status.
-Linux and macOS keep the Textual launcher unchanged.
+Bare ``toki`` opens the full-screen Textual launcher on every
+platform. This numbered menu is the fallback: ``TOKI_CLI=1`` selects
+it explicitly (remote shell, screen reader, a console that cannot host
+a full-screen app), and it is used automatically when Textual cannot
+be imported. It keeps the launcher's capabilities: pick an app, switch
+the active model, and see live stack + GPU status.
 
 The app catalog comes from ``launch_catalog`` and is kept as plain
- data here so this module needs no Textual import.
+data here so this module needs no Textual import.
 
 """
 
@@ -18,6 +19,7 @@ import shutil
 import subprocess
 import webbrowser
 
+from . import winproc
 from .launch_catalog import LAUNCH_APPS, get_launch_app, unavailable_reason
 
 _AGENT_APPS = tuple(
@@ -294,7 +296,7 @@ def _open_web_dashboards() -> None:
             if binary:
                 try:
                     subprocess.Popen(
-                        [binary] + argv[1:],
+                        winproc.resolve_argv(argv),
                         stdin=subprocess.DEVNULL,
                         env=plan.get("env"),
                         creationflags=_NEW_CONSOLE,
@@ -417,14 +419,10 @@ def _launch_agent(app: str) -> None:
         print(f"not found in PATH: {launch.command or app} — install it, or pick another entry.")
         return
     args = argv[1:]
-    if os.name == "nt":
+    if winproc.IS_WINDOWS:
         try:
-            if binary.lower().endswith((".cmd", ".bat")):
-                argv = ["cmd.exe", "/c", binary] + args
-            else:
-                argv = [binary] + args
             proc = subprocess.Popen(
-                argv,
+                winproc.resolve_argv([binary, *args]),
                 stdin=subprocess.DEVNULL,
                 env=plan.get("env"),
                 creationflags=_NEW_CONSOLE,

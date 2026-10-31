@@ -15,6 +15,8 @@ import httpx
 from rich.console import Console
 from rich.panel import Panel
 
+from .. import winproc
+
 
 @click.group()
 @click.option(
@@ -253,16 +255,17 @@ def _active_urls() -> tuple[str, str]:
     help="Bearer token for the daemon. Defaults to $TOKI_AUTH_TOKEN.",
 )
 def tui(daemon_url: str, raw_url: str, auth_token: str | None) -> None:
-    """Launch the TUI chat client (Windows: the CLI chat instead).
+    """Launch the TUI chat client.
 
     A terminal-based chat interface for talking to a local LLM through
     the toki daemon. Three modes (raw / cached / compare), live metrics,
     session pinning, and precision-check panel.
 
-    On Windows the Textual TUI is replaced by the plain Ollama-style
-    CLI chat (``clichat``): the classic Windows console renders TUIs
-    slowly and glitches. Linux and macOS keep the full TUI. (Bare
-    ``toki`` on Windows opens the CLI launcher menu — ``clilauncher``.)
+    The full-screen TUI runs on every platform, Windows included.
+    Set ``TOKI_CLI=1`` for the plain Ollama-style CLI chat
+    (``clichat``) instead — a remote shell, a screen reader, or a
+    console that cannot host a full-screen app. If Textual cannot be
+    imported, the CLI chat is used automatically.
 
     \b
     Keys (TUI):
@@ -280,29 +283,30 @@ def tui(daemon_url: str, raw_url: str, auth_token: str | None) -> None:
         click.echo("error: toki tui requires an interactive terminal (TTY).", err=True)
         click.echo("hint: run from an interactive terminal.", err=True)
         raise SystemExit(2)
-    if os.name == "nt":
+    if os.environ.get("TOKI_CLI") == "1":
+        from ..clichat import run_cli_chat
+
+        click.echo("note: TOKI_CLI=1 — using the plain CLI chat.", err=True)
+        raise SystemExit(run_cli_chat(
+            daemon_url=daemon_url, raw_url=raw_url, auth_token=auth_token,
+        ))
+    try:
+        from ..tui.app import run as tui_run
+    except ImportError as e:
         from ..clichat import run_cli_chat
 
         click.echo(
-            "note: the TUI needs a capable terminal; on Windows you get "
-            "the CLI chat instead (Linux/macOS keep the full TUI).",
+            f"warning: full-screen TUI unavailable ({e}); using the CLI chat.",
             err=True,
         )
-        try:
-            raise SystemExit(run_cli_chat(
-                daemon_url=daemon_url, raw_url=raw_url, auth_token=auth_token,
-            ))
-        except SystemExit:
-            raise
-    try:
-        from ..tui.app import run as tui_run
-        tui_run(
+        raise SystemExit(run_cli_chat(
             daemon_url=daemon_url, raw_url=raw_url, auth_token=auth_token,
-        )
-    except ImportError as e:
-        click.echo(f"error: {e}", err=True)
-        click.echo("hint: install textual with `pip install textual`.", err=True)
-        raise SystemExit(1) from None
+        )) from None
+    tui_run(
+        daemon_url=daemon_url, raw_url=raw_url, auth_token=auth_token,
+    )
+
+
 @cli.command("diff")
 @click.option("--raw-url", default=None)
 @click.option("--daemon-url", default=None)
@@ -386,6 +390,7 @@ def hardware(as_json: bool) -> None:
     """Show what this box can hold: RAM, GPU, and every registered model's footprint."""
     import json
     import socket
+
     from ..ctl import _available_gb, _estimate_need, _spec_is_image, load_registry
     from ..hardware import profile_box
     try:
@@ -767,14 +772,14 @@ def web(host: str, port: int, raw_url: str, daemon_url: str,
         if tls_cert:
             cmd += ["--ssl-certfile", str(tls_cert), "--ssl-keyfile", str(tls_key)]
         proc = subprocess.Popen(
-            cmd,
+            winproc.resolve_argv(cmd),
             env={**os.environ,
                  "TOKI_WEB_RAW_URL": raw_url,
                  "TOKI_WEB_DAEMON_URL": daemon_url},
             stdout=open(log_path, "ab"),
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
-            start_new_session=True,
+            **winproc.detach_kwargs(),
         )
         click.echo(f"toki web started (pid={proc.pid})  {scheme}://{host}:{port}")
         click.echo(f"log: {log_path}")
@@ -832,13 +837,12 @@ def up(
     default was a hard-coded path to a starter download that most machines
     no longer have, so the command failed for everyone who had not kept it.
     """
-    from .. import lifecycle
-
     # No --model, no --ports: take the active model from the registry, the
     # way the launcher and `toki model use` do. The old default was a
     # hard-coded path to a starter download that most machines no longer
     # have, so the command failed for everyone who had not kept it.
     from .. import ctl as ctl_mod
+    from .. import lifecycle
 
     spec = None
     if model is None:
@@ -2852,7 +2856,7 @@ def main() -> int:
     # `--help` must show the full command reference, not the legacy
     # benchmark parser's help.
     if len(sys.argv) > 1 and sys.argv[1] in ("--help", "-h"):
-        click.echo(cli.get_help(click.Context(cli)))
+        click.echo(cli.get_help(click.Context(cli, info_name="toki")))
         return 0
     # Known subcommands. Anything else (no args, or a flag) prints help
     # and shows stack status instead of running a multi-minute benchmark.
@@ -2862,7 +2866,7 @@ def main() -> int:
         if sys.stdin.isatty() and sys.stdout.isatty():
             from ..selector import run as selector_run
             return selector_run()
-        click.echo(cli.get_help(click.Context(cli)))
+        click.echo(cli.get_help(click.Context(cli, info_name="toki")))
         click.echo("")
         from rich.console import Console
 
@@ -2890,7 +2894,7 @@ def main() -> int:
         return run_default_benchmark()
     if sys.argv[1] not in cli.commands:
         # Truly unknown subcommand — show help.
-        click.echo(cli.get_help(click.Context(cli)))
+        click.echo(cli.get_help(click.Context(cli, info_name="toki")))
         return 0 if sys.argv[1] in ("--help", "-h") else 2
     return cli(obj={})
 

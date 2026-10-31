@@ -7,10 +7,9 @@ Windows (process signalling, port->pid lookup, browser opening).
 from __future__ import annotations
 
 import signal
-import subprocess
 from types import SimpleNamespace
 
-from tokirecur import ctl, lifecycle, selector
+from tokirecur import ctl, lifecycle, selector, winproc
 
 
 def _clear_port_cache() -> None:
@@ -44,16 +43,17 @@ def test_detach_kwargs_windows_uses_new_process_group(monkeypatch):
     """start_new_session is a no-op on Windows, so spawned services must
     get CREATE_NEW_PROCESS_GROUP instead — otherwise Ctrl+C in the
     launching console kills llama-server/daemon with it (reported as
-    "exited during startup")."""
-    monkeypatch.setattr(ctl.os, "name", "nt")
-    if not hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
-        monkeypatch.setattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200, raising=False)
+    "exited during startup"). CREATE_NO_WINDOW also keeps a console app
+    from flashing a window and from dying with the launching console."""
+    monkeypatch.setattr(winproc, "IS_WINDOWS", True)
     kw = ctl._detach_kwargs()
-    assert kw == {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    assert kw == {
+        "creationflags": winproc.CREATE_NEW_PROCESS_GROUP | winproc.CREATE_NO_WINDOW
+    }
 
 
 def test_detach_kwargs_posix_uses_start_new_session(monkeypatch):
-    monkeypatch.setattr(ctl.os, "name", "posix")
+    monkeypatch.setattr(winproc, "IS_WINDOWS", False)
     monkeypatch.setattr(ctl, "_DETACH", True)
     assert ctl._detach_kwargs() == {"start_new_session": True}
     monkeypatch.setattr(ctl, "_DETACH", False)
@@ -158,7 +158,7 @@ def test_stop_pidfile_hard_kill_windows_style(monkeypatch, tmp_path):
 
 
 def test_lifecycle_stop_pid_hard_kill_windows(monkeypatch, tmp_path):
-    monkeypatch.setattr(lifecycle.os, "name", "nt")
+    monkeypatch.setattr(winproc, "IS_WINDOWS", True)
     monkeypatch.delattr(lifecycle.os, "killpg", raising=False)
     monkeypatch.delattr(lifecycle.os, "getpgid", raising=False)
     monkeypatch.setattr(lifecycle, "_read_pid", lambda path: 12345)
@@ -174,7 +174,7 @@ def test_lifecycle_stop_pid_hard_kill_windows(monkeypatch, tmp_path):
 
     assert lifecycle.stop_pid(pidfile, "toki daemon", grace=0.01) is True
     assert seen == [signal.SIGTERM]
-    assert tasks == [["taskkill", "/pid", "12345", "/f"]]
+    assert tasks == [["taskkill", "/pid", "12345", "/f", "/t"]]
     assert not pidfile.exists()
 
 
@@ -377,8 +377,8 @@ class _Ref:
 
 def test_is_alive_windows_uses_open_process(monkeypatch):
     """On Windows the probe must use OpenProcess + GetExitCodeProcess,
-    not os.kill(pid, 0), which can raise SystemError."""
-    monkeypatch.setattr(ctl.os, "name", "nt")
+    not os.kill(pid, 0), which terminates the process there."""
+    monkeypatch.setattr(winproc, "IS_WINDOWS", True)
 
     calls = []
 
@@ -404,7 +404,7 @@ def test_is_alive_windows_uses_open_process(monkeypatch):
 
 def test_is_alive_windows_returns_false_when_open_process_fails(monkeypatch):
     """OpenProcess returns 0 when the pid is gone or we lack access."""
-    monkeypatch.setattr(ctl.os, "name", "nt")
+    monkeypatch.setattr(winproc, "IS_WINDOWS", True)
     _patch_fake_ctypes(monkeypatch,
                        lambda *a, **k: 0,
                        lambda *a, **k: True,
@@ -413,7 +413,7 @@ def test_is_alive_windows_returns_false_when_open_process_fails(monkeypatch):
 
 
 def test_is_alive_windows_returns_false_on_get_exit_code_failure(monkeypatch):
-    monkeypatch.setattr(ctl.os, "name", "nt")
+    monkeypatch.setattr(winproc, "IS_WINDOWS", True)
     _patch_fake_ctypes(monkeypatch,
                        lambda *a, **k: 0xCAFE,
                        lambda *a, **k: False,

@@ -21,6 +21,7 @@ from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.table import Table
 
+from . import winproc
 from .ctl import (
     _effective_ctx,
     _resolve_mode,
@@ -197,7 +198,11 @@ def _bound_env(spec: Any, client: str) -> dict[str, str]:
     if client == "cline":
         config_dir = cline_config_dir()
         env["CLINE_DATA_DIR"] = str(config_dir / "data")
-        preload = f"--preload={shlex.quote(str(_CLINE_AI_SDK_PRELOAD))}"
+        preload_path = str(_CLINE_AI_SDK_PRELOAD)
+        if winproc.IS_WINDOWS:
+            preload = f'--preload="{preload_path}"'
+        else:
+            preload = f"--preload={shlex.quote(preload_path)}"
         existing = env.get("BUN_OPTIONS", "").strip()
         env["BUN_OPTIONS"] = f"{existing} {preload}".strip()
     return env
@@ -428,18 +433,27 @@ def _gateway_up() -> bool:
 def run() -> int:
     """Open the launcher and run the chosen client.
 
-    On Linux/macOS this is the Ollama-style Textual launcher. The
-    classic Windows console renders Textual TUIs slowly and glitches,
-    so on Windows bare ``toki`` opens the plain CLI launcher menu
-    (``clilauncher``) instead — same apps, numbered pick, with Chat
-    running the CLI chat; Linux and macOS are unchanged.
+    The full-screen Textual launcher is the launcher on every platform,
+    Windows included (Windows Terminal and the Windows 10+ console both
+    host it). Set ``TOKI_CLI=1`` for the plain numbered menu
+    (``clilauncher``) — a remote shell, a screen reader, or a console
+    that cannot host a full-screen app. If Textual cannot be imported,
+    the plain menu is used automatically.
     """
-    if os.name == "nt":
+    if os.environ.get("TOKI_CLI") == "1":
         from .clilauncher import run_cli_launcher
 
         return run_cli_launcher()
+    try:
+        from .tui.launcher import run as launcher_run
+    except ImportError as e:
+        console.print(
+            f"[yellow]full-screen launcher unavailable ({e}); "
+            f"using the plain menu[/yellow]"
+        )
+        from .clilauncher import run_cli_launcher
 
-    from .tui.launcher import run as launcher_run
+        return run_cli_launcher()
     return launcher_run()
 
 
@@ -458,8 +472,11 @@ def start_companion(companion: dict, env: dict) -> None:
     log_path = str(log_dir / f"{client}-companion.log")
     try:
         with open(log_path, "ab") as log:
-            proc = subprocess.Popen(argv, env=env, stdout=log, stderr=subprocess.STDOUT,
-                                    stdin=subprocess.DEVNULL, start_new_session=True)
+            proc = subprocess.Popen(
+                winproc.resolve_argv(argv), env=env, stdout=log,
+                stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                **winproc.detach_kwargs(),
+            )
     except OSError as e:
         console.print(f"[yellow]could not start the {client} web UI: {e}[/yellow]")
         return
@@ -477,9 +494,22 @@ def start_companion(companion: dict, env: dict) -> None:
 
 
 def _launch_foreground(argv: list[str], env: dict) -> int:
-    console.print(Panel(" ".join(shlex.quote(a) for a in argv),
+    console.print(Panel(winproc.format_cmdline(argv),
                         title="launching", border_style="green", expand=False))
     restore_now()
+    if winproc.IS_WINDOWS:
+        # os.execvpe exists on Windows but cannot run a .cmd shim and
+        # does not replace the process the way it does on POSIX, so run
+        # the client as a child and return its exit code.
+        resolved = winproc.resolve_argv(argv)
+        try:
+            return subprocess.call(resolved, env=env)
+        except FileNotFoundError:
+            console.print(f"[red]client not found: {argv[0]}[/red]")
+            return 1
+        except OSError as e:
+            console.print(f"[red]could not launch {argv[0]}: {e}[/red]")
+            return 1
     try:
         os.execvpe(argv[0], argv, env)
     except FileNotFoundError:
@@ -495,17 +525,23 @@ def _launch_detached(interface: str, client: str, argv: list[str],
             _open_browser(url or "http://127.0.0.1:18789")
         else:
             console.print("[yellow]OpenClaw gateway is not running.[/yellow]")
-            console.print("  start it with:  systemctl --user start openclaw-gateway.service")
-            console.print("  then re-run:    toki")
+            if winproc.IS_WINDOWS:
+                console.print("  start the OpenClaw gateway from its own app, then re-run: toki")
+            else:
+                console.print("  start it with:  systemctl --user start openclaw-gateway.service")
+                console.print("  then re-run:    toki")
         return 0
-    console.print(Panel(" ".join(shlex.quote(a) for a in argv),
+    console.print(Panel(winproc.format_cmdline(argv),
                         title="launching in background", border_style="green", expand=False))
     log_dir = Path.home() / ".local/state/tokirecur"
     log_path = str(log_dir / f"{client}-{interface}.log")
     log_dir.mkdir(parents=True, exist_ok=True)
     with open(log_path, "ab") as log:
-        proc = subprocess.Popen(argv, env=env, stdout=log, stderr=subprocess.STDOUT,
-                                stdin=subprocess.DEVNULL, start_new_session=True)
+        proc = subprocess.Popen(
+            winproc.resolve_argv(argv), env=env, stdout=log,
+            stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+            **winproc.detach_kwargs(),
+        )
     console.print(f"[dim]pid={proc.pid}  log: {log_path}[/dim]")
     if interface == "web" and client == "dsh":
         start = _log_size(log_path)

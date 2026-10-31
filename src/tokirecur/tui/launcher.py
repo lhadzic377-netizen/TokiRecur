@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from rich.text import Text
+from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
@@ -175,7 +176,7 @@ class LauncherApp(App[dict | None]):
             self._error = "no models in registry — run `toki model list`"
         self._refresh_pinned()
         self._client_modes = read_client_modes()
-        self.set_interval(3.0, self._poll_statuses)
+        self.set_interval(3.0, self._poll_statuses_bg)
         # install.sh writes this marker before killing any running toki.
         # If we got here with the marker still on disk, our process
         # somehow survived the pgrep (a wrapper script, a tmux session
@@ -227,19 +228,54 @@ class LauncherApp(App[dict | None]):
         except Exception:
             return None
 
-    def _poll_statuses(self) -> None:
-        now = time.monotonic()
-        changed = False
+    def _collect_statuses(self) -> dict[str, dict[str, Any]]:
+        """Probe every model's stack — the slow part of the poll.
+
+        Runs in a worker thread (see ``_poll_statuses_bg``): each probe
+        is two HTTP requests, and doing them inline stalled the event
+        loop for seconds on a machine with many stopped models. A
+        stalled loop is what makes a full-screen TUI feel broken,
+        especially on Windows where a closed port can take longer to
+        refuse.
+        """
+        statuses: dict[str, dict[str, Any]] = {}
         for spec in self.specs:
             try:
                 st = model_status(spec)
-                self._statuses[spec.name] = {
+                statuses[spec.name] = {
                     "llama": st["llama"]["reachable"],
                     "daemon": st["daemon"]["reachable"],
                     "ctx": st["llama"].get("slot_ctx") or spec.ctx_size,
                 }
             except Exception:
-                self._statuses[spec.name] = {}
+                statuses[spec.name] = {}
+        return statuses
+
+    def _poll_statuses(self) -> None:
+        """Synchronous poll (tests and the worker's apply step)."""
+        self._apply_statuses(self._collect_statuses())
+
+    @work(thread=True, exclusive=True, group="status-poll")
+    def _poll_statuses_bg(self) -> None:
+        """Poll off the event loop; apply on it.
+
+        ``exclusive=True`` means a slow probe (a model still booting)
+        is replaced by the next tick instead of piling up.
+        """
+        try:
+            statuses = self._collect_statuses()
+        except Exception:
+            return
+        try:
+            self.call_from_thread(self._apply_statuses, statuses)
+        except Exception:
+            # The app exited while the probe was in flight.
+            pass
+
+    def _apply_statuses(self, statuses: dict[str, dict[str, Any]]) -> None:
+        now = time.monotonic()
+        changed = False
+        self._statuses.update(statuses)
         # Clear any restart markers that have landed: the live value
         # agrees with the registry now, OR the 8 s hard ceiling expired
         # (the restart either succeeded silently or the poll stalled —

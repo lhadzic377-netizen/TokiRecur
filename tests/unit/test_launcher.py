@@ -917,3 +917,33 @@ def test_settings_restart_required_confirm_proceed_triggers_apply(monkeypatch):
     # sync_cli_configs was NOT called separately (use_model calls it
     # internally); the TUI relies on use_model's existing sync.
     assert sync_calls == []
+
+
+def test_status_poll_runs_off_the_event_loop():
+    """Each status probe is two HTTP requests per model; inline, a
+    machine with many stopped models stalls the event loop for seconds
+    (the "TUI feels broken on Windows" symptom). The poll must collect
+    in a worker thread and apply on the app thread."""
+    import threading
+
+    async def run_app():
+        async with LauncherApp().run_test(size=(100, 34)) as pilot:
+            await pilot.pause()
+            app = pilot.app
+            main_thread = threading.current_thread()
+            seen: dict[str, object] = {}
+
+            def fake_collect():
+                seen["thread"] = threading.current_thread()
+                return {"9b": {"llama": True, "daemon": True, "ctx": 4096}}
+
+            app._collect_statuses = fake_collect  # type: ignore[method-assign]
+            app._poll_statuses_bg()
+            for _ in range(100):
+                await asyncio.sleep(0.02)
+                if app._statuses.get("9b", {}).get("llama") is True:
+                    break
+            assert seen["thread"] is not main_thread
+            assert app._statuses["9b"]["llama"] is True
+
+    asyncio.run(run_app())

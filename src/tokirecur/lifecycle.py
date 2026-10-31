@@ -18,6 +18,8 @@ from pathlib import Path
 
 import httpx
 
+from . import winproc
+
 logger = logging.getLogger(__name__)
 
 STATE_DIR = Path(os.environ.get("TOKI_STATE_DIR", str(Path.home() / ".local/state/tokirecur")))
@@ -51,15 +53,9 @@ def _read_pid(path: Path) -> int | None:
 
 
 def _is_alive(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-        return True
-    except (ProcessLookupError, PermissionError):
-        return False
-    except OSError:
-        return False
+    # os.kill(pid, 0) is the POSIX idiom; on Windows it would terminate
+    # the process instead of probing it (see winproc.pid_alive).
+    return winproc.pid_alive(pid)
 
 
 def _wait_for(url: str, timeout: float = 180.0) -> bool:
@@ -175,7 +171,7 @@ def start_llama_server(
         stdout=log,
         stderr=subprocess.STDOUT,
         stdin=subprocess.DEVNULL,
-        start_new_session=_DETACH,
+        **winproc.detach_kwargs(start_new_session=_DETACH),
     )
     LLAMA_PID.write_text(str(proc.pid))
     logger.info("llama-server pid=%d log=%s", proc.pid, LLAMA_LOG)
@@ -231,7 +227,7 @@ def start_daemon(
         stderr=subprocess.STDOUT,
         stdin=subprocess.DEVNULL,
         env=daemon_env,
-        start_new_session=_DETACH,
+        **winproc.detach_kwargs(start_new_session=_DETACH),
     )
     DAEMON_PID.write_text(str(proc.pid))
     logger.info("toki daemon pid=%d log=%s", proc.pid, DAEMON_LOG)
@@ -263,10 +259,10 @@ def _signal_proc(pid: int, sig: int) -> None:
 def _hard_kill(pid: int) -> None:
     """Best-effort hard kill: ``taskkill /F`` on Windows (where Python's
     ``signal`` module has no SIGKILL), ``os.kill(SIGKILL)`` on POSIX."""
-    if os.name == "nt":
+    if winproc.IS_WINDOWS:
         try:
             subprocess.run(
-                ["taskkill", "/pid", str(pid), "/f"],
+                ["taskkill", "/pid", str(pid), "/f", "/t"],
                 capture_output=True, text=True, timeout=10,
             )
         except (OSError, subprocess.SubprocessError):

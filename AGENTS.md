@@ -23,18 +23,27 @@
   `nohup .venv/bin/toki serve --host 127.0.0.1 --port 8799 --backend-url http://127.0.0.1:8094 >/tmp/opencode/toki-serve-smoke.log 2>&1 &`
   then point `DaemonClient` at `http://127.0.0.1:8799` / raw `http://127.0.0.1:8094`.
 
-## Windows fallback
+## Windows
 
-- On Windows, the Textual TUIs are replaced by plain CLIs because the classic
-  Windows console renders TUIs slowly and glitches:
-  - bare `toki` → **CLI launcher menu** (`src/tokirecur/clilauncher.py`):
-    Chat, Switch model (lists models + GPU, calls `ctl.use_model`), agents
-    (marked `[not installed]` when missing, launched via cmd.exe for .cmd
-    shims), Web, Doctor. Wired in `src/tokirecur/selector.py`.
-  - `toki tui` → **CLI chat** (`src/tokirecur/clichat.py`, ollama-style REPL,
-    `/bye`, `"""` multiline, `TOKI_MAX_TOKENS`). Wired in
-    `src/tokirecur/cli/__init__.py` (`tui` command).
-- Linux/macOS keep the full Textual TUI + launcher.
+- The full-screen Textual launcher and TUI chat run on Windows (Windows
+  Terminal or the Windows 10+ console). Bare `toki` → `selector.run()` →
+  `tui.launcher`; `toki tui` → `tui.app`.
+- `TOKI_CLI=1` selects the plain fallbacks: `clilauncher.py` (numbered
+  menu) for bare `toki`, `clichat.py` (ollama-style REPL) for `toki tui`.
+  They are also used automatically when Textual cannot be imported.
+- All process/launch differences live in `src/tokirecur/winproc.py`:
+  `pid_alive` (OpenProcess, never `os.kill(pid, 0)`), `detach_kwargs`
+  (CREATE_NEW_PROCESS_GROUP + CREATE_NO_WINDOW), `resolve_argv`
+  (self-launch via `python -m tokirecur.cli`, `.cmd`/`.bat` through
+  `cmd.exe /c`), and `format_cmdline`. Do not reintroduce raw
+  `start_new_session=True`, `os.execvpe`, or `os.kill(pid, 0)` in
+  cross-platform code.
+- Status polling in the launcher collects in a Textual worker thread
+  (`_poll_statuses_bg`); keep blocking probes out of the event loop.
+- Windows package: `scripts/package-windows.sh` builds
+  `dist/toki-windows-<version>.zip` (wheel + `scripts/windows/install.ps1`
+  + wrappers). `--offline 3.12` adds a win_amd64 wheelhouse; the installer
+  refuses a wheelhouse built for a different Python.
 
 ## GPU / diagnosis
 

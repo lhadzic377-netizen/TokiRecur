@@ -296,7 +296,7 @@ def test_agent_launch_cmd_wrapper(monkeypatch, capsys):
     monkeypatch.setattr("tokirecur.ctl.daemon_reachable", lambda spec: True)
     monkeypatch.setattr(cl.shutil, "which", lambda _: r"C:\npm\opencode.cmd")
     monkeypatch.setattr(cl, "_active_spec", _stub_spec)
-    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setattr(cl.winproc, "IS_WINDOWS", True)
     captured = {}
 
     class FakeProc:
@@ -319,7 +319,7 @@ def test_agent_launch_exe(monkeypatch, capsys):
     monkeypatch.setattr(cl.shutil, "which", lambda _: r"C:\bin\codex.exe")
     monkeypatch.setattr(cl, "_active_spec", _stub_spec)
     monkeypatch.setenv("TOKI_AUTH_TOKEN", "test-token")
-    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setattr(cl.winproc, "IS_WINDOWS", True)
     captured = {}
 
     class FakeProc:
@@ -400,19 +400,62 @@ def test_switch_model_blank_keeps_active(monkeypatch, tmp_path):
     assert used == []
 
 
-def test_windows_routing_in_selector(monkeypatch):
-    """selector.run() on Windows must route to the CLI launcher."""
+def test_selector_prefers_textual_launcher_on_windows(monkeypatch):
+    """The full-screen launcher is the launcher on Windows too; the
+    plain menu is an explicit fallback, not the default."""
     from tokirecur import selector
-    monkeypatch.setattr(os, "name", "nt")
-    ran = {"called": False}
 
-    def fake_launcher():
-        ran["called"] = True
-        return 0
+    monkeypatch.delenv("TOKI_CLI", raising=False)
+    monkeypatch.setattr(selector.winproc, "IS_WINDOWS", True)
+    ran = {"tui": False, "cli": False}
 
-    monkeypatch.setattr("tokirecur.clilauncher.run_cli_launcher", fake_launcher)
+    monkeypatch.setattr(
+        "tokirecur.tui.launcher.run",
+        lambda: ran.__setitem__("tui", True) or 0,
+    )
+    monkeypatch.setattr(
+        "tokirecur.clilauncher.run_cli_launcher",
+        lambda: ran.__setitem__("cli", True) or 0,
+    )
     assert selector.run() == 0
-    assert ran["called"]
+    assert ran == {"tui": True, "cli": False}
+
+
+def test_selector_toki_cli_selects_plain_menu(monkeypatch):
+    from tokirecur import selector
+
+    monkeypatch.setenv("TOKI_CLI", "1")
+    ran = {"tui": False, "cli": False}
+    monkeypatch.setattr(
+        "tokirecur.tui.launcher.run",
+        lambda: ran.__setitem__("tui", True) or 0,
+    )
+    monkeypatch.setattr(
+        "tokirecur.clilauncher.run_cli_launcher",
+        lambda: ran.__setitem__("cli", True) or 0,
+    )
+    assert selector.run() == 0
+    assert ran == {"tui": False, "cli": True}
+
+
+def test_selector_falls_back_when_textual_missing(monkeypatch):
+    """A missing/broken Textual import must not strand the user."""
+    import sys
+
+    from tokirecur import selector
+
+    monkeypatch.delenv("TOKI_CLI", raising=False)
+    ran = {"cli": False}
+    monkeypatch.setattr(
+        "tokirecur.clilauncher.run_cli_launcher",
+        lambda: ran.__setitem__("cli", True) or 0,
+    )
+    # A None entry makes ``from .tui.launcher import run`` raise ImportError,
+    # which is exactly what a machine without textual (or a broken
+    # install) sees.
+    monkeypatch.setitem(sys.modules, "tokirecur.tui.launcher", None)
+    assert selector.run() == 0
+    assert ran["cli"]
 
 
 def test_launch_agent_boots_stack_when_daemon_down(monkeypatch, capsys):
