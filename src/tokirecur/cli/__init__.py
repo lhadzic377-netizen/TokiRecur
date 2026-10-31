@@ -2733,8 +2733,12 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
                 encoding="utf-8", errors="replace",
             )
             text = (probe.stdout or "") + "\n" + (probe.stderr or "")
+            # A device line (CUDA0: ...), not an init error that
+            # happens to contain the word CUDA.
             device = next(
-                (ln.strip() for ln in text.splitlines() if "CUDA" in ln), "",
+                (ln.strip() for ln in text.splitlines()
+                 if re.search(r"\bCUDA\d+\b", ln)),
+                "",
             )
             if device:
                 click.echo(f"verify: {device}")
