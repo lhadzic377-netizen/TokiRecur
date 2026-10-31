@@ -103,7 +103,7 @@ pwsh -File "$env:TEMP\toki-install.ps1"</code></pre>
     <h2>Fetch the llama-server binary</h2>
     <p>One command installs the matching official build, it auto-detects the best backend for your machine. Pass <code>--backend</code> to override.</p>
     <pre><code>toki model install-llama                 # auto-detect backend, latest release
-toki model install-llama --backend rocm  # force a backend (rocm|cuda|vulkan|metal|cpu)
+toki model install-llama --backend rocm  # force a backend (rocm|cuda|sycl|vulkan|metal|cpu)
 toki model install-llama --backend rocm --gfx 11.5.1  # set HSA_OVERRIDE_GFX_VERSION
 toki model install-llama --tag b6400     # pin a release tag
 toki model install-llama --name 35b      # ...and point a registry model at it</code></pre>
@@ -116,11 +116,11 @@ toki model install-llama --name 35b      # ...and point a registry model at it</
         <tr><td>Linux</td><td>x86_64</td><td>ROCm (auto if HIP present), Vulkan, CPU</td></tr>
         <tr><td>Linux</td><td>aarch64</td><td>Vulkan, CPU</td></tr>
         <tr><td>macOS</td><td>x86_64, arm64</td><td>Metal (also runs CPU-only)</td></tr>
-        <tr><td>Windows</td><td>x86_64</td><td>CUDA (auto if NVIDIA), ROCm/HIP, Vulkan, CPU</td></tr>
-        <tr><td>Windows</td><td>aarch64</td><td>CPU, Adreno OpenCL</td></tr>
+        <tr><td>Windows</td><td>x86_64</td><td>CUDA (auto NVIDIA), SYCL (auto Intel Arc), Vulkan (auto AMD), ROCm/HIP (explicit AMD), CPU</td></tr>
+        <tr><td>Windows</td><td>aarch64</td><td>Vulkan, CPU</td></tr>
       </tbody>
     </table>
-    <p>The GPU backends are provided by the llama-server binary itself, Toki Recur talks to it over HTTP and is backend-agnostic.</p>
+    <p>The GPU backends are provided by the llama-server binary itself, Toki Recur talks to it over HTTP and is backend-agnostic. On Windows every GPU install verifies the vendor runtime DLLs and a real device line from <code>llama-server --list-devices</code> before reporting success, so a missing driver cannot silently degrade to CPU.</p>
 
     <h2>System daemon installers</h2>
     <p>Optional, run as a system daemon (dedicated user + service manager unit + log rotation, auto-start at boot). <code>install.sh</code>/<code>install.ps1</code> bootstrap the full stack themselves (own venv at <code>/opt/toki-recur</code>, package + llama-server + service unit), so they work standalone, they don't need the pipx install above:</p>

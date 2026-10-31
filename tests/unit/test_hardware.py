@@ -1187,3 +1187,98 @@ def test_windows_gpu_enumeration_powershell_fallback(monkeypatch):
     gpus = hardware._enumerate_gpus_windows()
     vendors = sorted(g.vendor for g in gpus)
     assert vendors == ["AMD", "Intel"]
+
+
+def test_windows_registry_vram_overrides_adapterram(monkeypatch):
+    """AdapterRAM caps at 4 GB; the registry QWORD carries the real size.
+
+    An RX 7900 XTX or Arc A770 must not be profiled as a 4 GB card, or
+    every memory-fit decision (and the doctor's VRAM line) is wrong.
+    """
+    wmic_csv = (
+        "Node,AdapterRAM,Name\n"
+        "DESKTOP,4293918720,AMD Radeon RX 7900 XTX\n"
+        "DESKTOP,4293918720,Intel(R) Arc(TM) A770 Graphics\n"
+    )
+
+    def fake_run(cmd, **kw):
+        return type("R", (), {"returncode": 0, "stdout": wmic_csv})()
+
+    monkeypatch.setattr(hardware.shutil, "which", lambda name: None)
+    monkeypatch.setattr(hardware.subprocess, "run", fake_run)
+    monkeypatch.setattr(hardware, "_windows_registry_vram", lambda: {
+        "amd radeon rx 7900 xtx": 24.0,
+        "intel(r) arc(tm) a770 graphics": 16.0,
+    })
+    gpus = {g.name: g for g in hardware._enumerate_gpus_windows()}
+    amd = gpus["AMD Radeon RX 7900 XTX"]
+    arc = gpus["Intel(R) Arc(TM) A770 Graphics"]
+    assert amd.vram_gb == 24.0
+    assert arc.vram_gb == 16.0
+    assert arc.shared_ram is False
+    assert arc.use_for_llm is True
+
+
+def test_windows_arc_igpu_is_shared_ram(monkeypatch):
+    """Meteor Lake's iGPU is "Intel(R) Arc(TM) Graphics", not HD/UHD/Iris.
+
+    A discrete Arc always carries a model number (A770, B580), so the
+    bare phrase must be treated as an iGPU and kept on the CPU build.
+    """
+    wmic_csv = (
+        "Node,AdapterRAM,Name\n"
+        "DESKTOP,4293918720,Intel(R) Arc(TM) Graphics\n"
+    )
+
+    def fake_run(cmd, **kw):
+        return type("R", (), {"returncode": 0, "stdout": wmic_csv})()
+
+    monkeypatch.setattr(hardware.shutil, "which", lambda name: None)
+    monkeypatch.setattr(hardware.subprocess, "run", fake_run)
+    monkeypatch.setattr(hardware, "_windows_registry_vram", lambda: {})
+    arc = hardware._enumerate_gpus_windows()[0]
+    assert arc.shared_ram is True
+    assert arc.use_for_llm is False
+
+
+def test_windows_registry_vram_reads_display_class(monkeypatch):
+    import sys
+    import types
+
+    fake = types.ModuleType("winreg")
+    fake.HKEY_LOCAL_MACHINE = object()
+
+    class Key:
+        def __init__(self, sub):
+            self.sub = sub
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    fake.OpenKey = lambda root, sub: Key(sub)
+    fake.QueryInfoKey = lambda key: (1, 0, 0)
+    fake.EnumKey = lambda key, i: "0000"
+
+    def query_value(key, name):
+        if name == "DriverDesc":
+            return "AMD Radeon RX 7600", 1
+        if name == "HardwareInformation.qwMemorySize":
+            return 8589934592, 1
+        raise FileNotFoundError(name)
+
+    fake.QueryValueEx = query_value
+    monkeypatch.setitem(sys.modules, "winreg", fake)
+    monkeypatch.setattr(hardware.sys, "platform", "win32")
+    assert hardware._windows_registry_vram() == {"amd radeon rx 7600": 8.0}
+
+
+def test_registry_vram_matches_adapter_name():
+    table = {"intel(r) arc(tm) a770 graphics": 16.0}
+    assert hardware._registry_vram_for(
+        "Intel(R) Arc(TM) A770 Graphics", table) == 16.0
+    assert hardware._registry_vram_for(
+        "Intel(R) Arc(TM) A770 Graphics (driver 32.0)", table) == 16.0
+    assert hardware._registry_vram_for("NVIDIA GeForce RTX 4070", table) is None

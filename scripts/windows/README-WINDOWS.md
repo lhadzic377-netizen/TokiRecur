@@ -68,13 +68,28 @@ gated ones (`hf auth login` first). `toki model use` starts the stack
 the registry describes and rewrites the client configs so the same
 model is selected in every client.
 
-On an NVIDIA box, `install-llama` picks the CUDA build (13.x on a
-580.65+ driver, 12.4 on 551.61–580.64) and downloads the matching
-cudart runtime archive (~400 MB) with it — the CUDA build does not load
-without those DLLs. If the driver is older than 551.61, update it
-first; the installer says so and `toki doctor` prints the verdict.
-Installing a GPU build while a model is running fails with a "stop the
-model stack" message; `toki model stop --force` then re-run.
+`install-llama` picks the build from the hardware profile:
+
+- **NVIDIA** → CUDA (13.x on a 580.65+ driver, 12.4 on 551.61–580.64)
+  plus the matching cudart runtime archive (~400 MB). The CUDA build
+  does not load without those DLLs.
+- **Intel discrete Arc** → SYCL, the vendor-native build. The zip is
+  self-contained (SYCL + oneMKL + Unified Runtime); no oneAPI install
+  is needed. Intel iGPUs stay on the CPU build by policy.
+- **AMD** → Vulkan, which works on every supported Radeon. ROCm is an
+  explicit choice for supported cards:
+  `toki model install-llama --backend rocm` (the zip bundles the HIP
+  runtime).
+- **No usable GPU** → CPU.
+
+Every Windows GPU install verifies its runtime DLLs **and** a real
+device line from `llama-server --list-devices` before reporting
+success. If the runtime is missing, the launcher refuses `-ngl 99`
+rather than silently running on CPU. If the driver is too old (CUDA
+below 551.61, no Vulkan loader, no Level Zero device), update the GPU
+driver; `toki doctor` prints the verdict. Installing a GPU build while
+a model is running fails with a "stop the model stack" message; `toki
+model stop --force` then re-run.
 
 ## The launcher
 
@@ -119,9 +134,10 @@ Every path can be overridden: `TOKI_MODEL_REGISTRY`, `TOKI_STATE_DIR`,
 
 - **`toki` is not recognised** — the installer added the bin folder to
   the *user* PATH; open a new terminal (or sign out and back in).
-- **`toki doctor` says CPU only** — install the GPU driver (NVIDIA CUDA
-  or Vulkan). `toki model install-llama` picks the matching build; the
-  doctor names the build's backend.
+- **`toki doctor` says CPU only** — install the GPU driver (NVIDIA,
+  AMD Adrenalin, or Intel Arc). `toki model install-llama` picks the
+  matching build (CUDA / Vulkan / SYCL); the doctor names the build's
+  backend. An Intel iGPU is intentionally kept on the CPU build.
 - **The launcher looks garbled** — run it in Windows Terminal
   (`winget install Microsoft.WindowsTerminal`), or use `TOKI_CLI=1`.
 - **A model will not start** — read

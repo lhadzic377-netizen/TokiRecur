@@ -42,7 +42,7 @@
 
   <main class="doc">
     <h1 class="reveal">Toki Recur documentation</h1>
-    <p class="reveal">A standalone KV cache reuse system for LLM inference. Drop-in prefix caching that works across CUDA, ROCm, Vulkan, Metal, and CPU without any model modifications.</p>
+    <p class="reveal">A standalone KV cache reuse system for LLM inference. Drop-in prefix caching that works across CUDA, ROCm, SYCL, Vulkan, Metal, and CPU without any model modifications.</p>
 
     <div class="callout reveal">
       <strong>What it does.</strong> When a new prompt arrives at an LLM server, the KV cache is rebuilt from scratch, even if 90% of the prompt is identical to one we just processed. Toki Recur detects exact prefix matches, reuses the saved KV state, and skips redundant prefill compute.

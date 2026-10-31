@@ -1670,14 +1670,38 @@ def test_check_gpu_offload_returns_true_when_ngl_zero(monkeypatch):
 
 
 def test_check_gpu_offload_returns_true_when_gpu_binary(monkeypatch):
-    """A ROCm/CUDA/Vulkan/Metal build with -ngl 99 is fine."""
-    for kind in ("CUDA", "ROCm", "Vulkan", "Metal"):
+    """A ROCm/CUDA/Vulkan/SYCL/Metal build with -ngl 99 is fine."""
+    for kind in ("CUDA", "ROCm", "Vulkan", "SYCL", "OpenVINO", "Metal"):
         monkeypatch.setattr(
             "tokirecur.diagnose.binary_backend", lambda b, k=kind: k,
         )
         assert ctl._check_gpu_offload_binary_match(
             "/nope/llama-server", 99, strict=True
         ) is True
+
+
+@pytest.mark.parametrize(
+    "kind,ready_fn,dll",
+    [
+        ("ROCm", "rocm_runtime_ready", "amdhip64"),
+        ("Vulkan", "vulkan_runtime_ready", "vulkan-1.dll"),
+        ("SYCL", "sycl_runtime_ready", "sycl"),
+        ("OpenVINO", "openvino_runtime_ready", "openvino.dll"),
+    ],
+)
+def test_check_gpu_offload_refuses_windows_missing_runtime(
+    monkeypatch, kind, ready_fn, dll,
+):
+    """A Windows GPU build without its runtime would silently run on CPU."""
+    monkeypatch.setattr(
+        "tokirecur.diagnose.binary_backend", lambda b: kind,
+    )
+    monkeypatch.setattr(ctl.winproc, "IS_WINDOWS", True)
+    monkeypatch.setattr(f"tokirecur.diagnose.{ready_fn}", lambda b: False)
+    with pytest.raises(RuntimeError, match=dll):
+        ctl._check_gpu_offload_binary_match(
+            "/nope/llama-server", 99, strict=True,
+        )
 
 
 def test_warn_gpu_offload_silent_when_ngl_zero(monkeypatch, capsys):

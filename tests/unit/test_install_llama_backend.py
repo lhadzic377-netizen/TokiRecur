@@ -64,6 +64,7 @@ def _assets() -> list[dict]:
         ("ubuntu", "arm64", "cpu", "llama-b10289-bin-ubuntu-arm64.tar.gz"),
         ("windows", "x64", "cuda", "llama-b10289-bin-win-cuda-13.3-x64.zip"),
         ("windows", "x64", "rocm", "llama-b10289-bin-win-hip-radeon-x64.zip"),
+        ("windows", "x64", "sycl", "llama-b10289-bin-win-sycl-x64.zip"),
         ("windows", "x64", "vulkan", "llama-b10289-bin-win-vulkan-x64.zip"),
         ("windows", "x64", "cpu", "llama-b10289-bin-win-cpu-x64.zip"),
         ("windows", "arm64", "cpu", "llama-b10289-bin-win-cpu-arm64.zip"),
@@ -167,7 +168,7 @@ def test_asset_patterns_cover_every_os_arch(os_name, arch):
     patterns = _asset_patterns(os_name, arch)
     assert patterns, f"no patterns for {os_name}/{arch}"
     for backend, frag in patterns:
-        assert frag and backend in ("rocm", "cuda", "vulkan", "metal", "cpu")
+        assert frag and backend in ("rocm", "cuda", "vulkan", "sycl", "metal", "cpu")
 
 
 def test_set_binary_merges_env(tmp_path, monkeypatch):
@@ -414,12 +415,48 @@ def test_prune_foreign_gpu_libs_cpu_removes_all(tmp_path):
     from tokirecur.cli import _prune_foreign_gpu_libs
     for name in (
         "ggml-cuda.dll", "cudart64_13.dll", "ggml-vulkan.dll",
-        "ggml-hip.dll", "amdhip64_7.dll", "ggml-cpu-x64.dll",
+        "ggml-hip.dll", "amdhip64_7.dll", "ggml-sycl.dll",
+        "sycl9.dll", "ggml-openvino.dll", "openvino.dll",
+        "ggml-cpu-x64.dll",
     ):
         (tmp_path / name).write_bytes(b"x")
     _prune_foreign_gpu_libs(tmp_path, "cpu")
     left = {p.name for p in tmp_path.iterdir()}
     assert left == {"ggml-cpu-x64.dll"}
+
+
+def test_prune_foreign_gpu_libs_sycl(tmp_path):
+    from tokirecur.cli import _prune_foreign_gpu_libs
+    for name in (
+        "ggml-sycl.dll", "sycl9.dll", "mkl_sycl_blas.6.dll",
+        "ur_loader.dll", "dnnl.dll", "ggml-vulkan.dll", "ggml-hip.dll",
+        "amdhip64_7.dll", "ggml-openvino.dll", "openvino.dll",
+        "tbb12.dll", "ggml-cpu-x64.dll",
+    ):
+        (tmp_path / name).write_bytes(b"x")
+    _prune_foreign_gpu_libs(tmp_path, "sycl")
+    left = {p.name for p in tmp_path.iterdir()}
+    assert {"ggml-sycl.dll", "sycl9.dll", "tbb12.dll"} <= left
+    assert "ggml-vulkan.dll" not in left
+    assert "ggml-hip.dll" not in left
+    assert "ggml-openvino.dll" not in left
+
+
+def test_prune_foreign_gpu_libs_openvino(tmp_path):
+    from tokirecur.cli import _prune_foreign_gpu_libs
+    for name in (
+        "ggml-openvino.dll", "openvino.dll",
+        "openvino_intel_gpu_plugin.dll", "tbb12.dll", "tbbmalloc.dll",
+        "ggml-sycl.dll", "sycl9.dll", "ggml-vulkan.dll",
+        "ggml-cpu-x64.dll",
+    ):
+        (tmp_path / name).write_bytes(b"x")
+    _prune_foreign_gpu_libs(tmp_path, "openvino")
+    left = {p.name for p in tmp_path.iterdir()}
+    assert {"ggml-openvino.dll", "openvino.dll", "tbb12.dll"} <= left
+    assert "ggml-sycl.dll" not in left
+    assert "sycl9.dll" not in left
+    assert "ggml-vulkan.dll" not in left
 
 
 def test_install_pulls_cudart_runtime_for_cuda_13_4(tmp_path, monkeypatch):
@@ -1590,3 +1627,170 @@ def test_install_force_downgrade_env_overrides_gpu_to_cpu_guard(tmp_path, monkey
     # and the rest of the install runs against the fake download).
     assert "refusing to overwrite" not in result.output.lower()
 
+
+
+def test_probe_windows_gpu_device_prints_real_device(monkeypatch, capsys):
+    from tokirecur.cli import _probe_windows_gpu_device
+
+    def fake_run(argv, **kw):
+        return type("R", (), {
+            "returncode": 0,
+            "stdout": "  - SYCL0 : Intel(R) Arc(TM) A770 Graphics "
+                      "(16384 MiB, 15000 MiB free)\n",
+            "stderr": "",
+        })()
+
+    monkeypatch.setattr("tokirecur.cli.subprocess.run", fake_run)
+    _probe_windows_gpu_device(
+        Path("/tmp/llama-server.exe"), r"\bSYCL\d+\b", "SYCL", "hint",
+    )
+    out = capsys.readouterr().out
+    assert "verify: - SYCL0 : Intel(R) Arc(TM) A770 Graphics" in out
+
+
+def test_probe_windows_gpu_device_warns_when_no_device(monkeypatch, capsys):
+    from tokirecur.cli import _probe_windows_gpu_device
+
+    def fake_run(argv, **kw):
+        return type("R", (), {
+            "returncode": 0, "stdout": "ggml_vulkan: no devices\n",
+            "stderr": "",
+        })()
+
+    monkeypatch.setattr("tokirecur.cli.subprocess.run", fake_run)
+    _probe_windows_gpu_device(
+        Path("/tmp/llama-server.exe"), r"\bVulkan\d+\b", "Vulkan", "update",
+    )
+    err = capsys.readouterr().err
+    assert "did not enumerate a Vulkan device" in err
+    assert "update" in err
+
+
+@pytest.mark.parametrize(
+    "backend,asset_name,files,device_line",
+    [
+        (
+            "sycl",
+            "llama-b12020-bin-win-sycl-x64.zip",
+            {
+                "llama-server.exe": b"MZ",
+                "ggml-sycl.dll": b"sycl",
+                "sycl9.dll": b"rt",
+                "mkl_sycl_blas.6.dll": b"mkl",
+                "dnnl.dll": b"dnnl",
+            },
+            "  - SYCL0 : Intel(R) Arc(TM) A770 Graphics "
+            "(16384 MiB, 15000 MiB free)",
+        ),
+        (
+            "rocm",
+            "llama-b12020-bin-win-rocm-10.0-x64.zip",
+            {
+                "llama-server.exe": b"MZ",
+                "ggml-hip.dll": b"hip",
+                "amdhip64_7.dll": b"hiprt",
+                "amd_comgr.dll": b"comgr",
+                "rocm_kpack.dll": b"kpack",
+            },
+            "  - ROCm0 : AMD Radeon RX 7900 XTX (24576 MiB, 24000 MiB free)",
+        ),
+        (
+            "vulkan",
+            "llama-b12020-bin-win-vulkan-x64.zip",
+            {
+                "llama-server.exe": b"MZ",
+                "ggml-vulkan.dll": b"vk",
+            },
+            "  - Vulkan0 : AMD Radeon RX 7600 (8192 MiB, 8000 MiB free)",
+        ),
+    ],
+)
+def test_install_windows_gpu_backend_verifies_runtime(
+    tmp_path, monkeypatch, backend, asset_name, files, device_line,
+):
+    """Each Windows GPU path must land its build, keep its runtime, prune
+    the others, and prove a real device line before reporting success."""
+    import io
+    import types
+    import zipfile
+
+    from tokirecur import cli as cli_mod
+    from tokirecur import diagnose
+    from tokirecur.cli import install_llama
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for stale in ("ggml-cuda.dll", "cudart64_13.dll", "ggml-vulkan.dll",
+                  "ggml-hip.dll", "amdhip64_7.dll", "ggml-sycl.dll",
+                  "sycl9.dll", "ggml-openvino.dll", "openvino.dll"):
+        (bin_dir / stale).write_bytes(b"old")
+    (bin_dir / "llama-server.exe").write_bytes(b"old")
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for name, data in files.items():
+            zf.writestr(name, data)
+    payload = buf.getvalue()
+
+    RELEASE = {
+        "tag_name": "b12020",
+        "assets": [{
+            "name": asset_name,
+            "size": len(payload),
+            "browser_download_url": "https://example.test/gpu.zip",
+        }],
+    }
+
+    class FakeClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get(self, url, headers=None):
+            class _Resp:
+                def json(self_inner):
+                    return RELEASE
+
+                def raise_for_status(self_inner):
+                    pass
+
+            return _Resp()
+
+    def fake_download(api, url, dest, label=""):
+        Path(dest).write_bytes(payload)
+
+    def fake_run(argv, **kw):
+        if "--list-devices" in argv:
+            return types.SimpleNamespace(
+                returncode=0,
+                stdout="Available devices:\n" + device_line + "\n",
+                stderr="",
+            )
+        return types.SimpleNamespace(returncode=0, stdout="v1\n", stderr="")
+
+    import httpx as _httpx
+    monkeypatch.setattr(_httpx, "Client", FakeClient)
+    monkeypatch.setattr(cli_mod, "_stream_download_with_retry", fake_download)
+    monkeypatch.setattr(cli_mod.subprocess, "run", fake_run)
+    monkeypatch.setattr("sys.platform", "win32")
+    monkeypatch.setattr("platform.machine", lambda: "AMD64")
+    monkeypatch.setattr("shutil.which", lambda n: None)
+    if backend == "vulkan":
+        monkeypatch.setattr(diagnose, "vulkan_runtime_ready", lambda b: True)
+
+    install_llama.callback(
+        tag="b12020", dest=str(bin_dir), name=None, backend=backend,
+        gfx=None, profile=False, force_cpu=False,
+    )
+
+    names = {p.name for p in bin_dir.iterdir()}
+    assert set(files) <= names
+    assert "ggml-openvino.dll" not in names
+    assert not any(n.endswith(".zip") for n in names)
+    landed = diagnose.binary_backend(str(bin_dir / "llama-server.exe"))
+    assert landed.lower() == backend

@@ -528,19 +528,25 @@ def doctor(fix: bool) -> None:
     hw = gpu_hardware()
     builds = installed_build()
     state_bin = builds.get("state_bin")
-    if hw.get("backend") == "CUDA" and state_bin and binary_backend(state_bin) == "CPU":
+    gpu_backend = (hw.get("backend") or "").lower()
+    if (gpu_backend in ("cuda", "rocm", "vulkan", "sycl")
+            and state_bin and binary_backend(state_bin) == "CPU"):
         from ..ctl import read_active
         from . import install_llama
         active = read_active()
         try:
             if active:
-                install_llama.callback(tag=None, dest=None, name=active,
-                                       backend="cuda", gfx=None)
-                actions.append(f"installed CUDA build for {active}")
+                install_llama.callback(
+                    tag=None, dest=None, name=active, backend=gpu_backend,
+                    gfx=None, profile=False, force_cpu=False,
+                )
+                actions.append(f"installed {gpu_backend} build for {active}")
             else:
-                install_llama.callback(tag=None, dest=None, name=None,
-                                       backend="cuda", gfx=None)
-                actions.append("installed CUDA build into state bin")
+                install_llama.callback(
+                    tag=None, dest=None, name=None, backend=gpu_backend,
+                    gfx=None, profile=False, force_cpu=False,
+                )
+                actions.append(f"installed {gpu_backend} build into state bin")
         except (RuntimeError, OSError, SystemExit) as e:
             click.echo(f"fix: install-llama failed: {e}", err=True)
 
@@ -1586,7 +1592,7 @@ def _force_cpu_when_no_usable_gpu(os_name: str, arch: str, backend: str) -> str:
     The rule is generic: any box where no GPU is usable gets the CPU
     build. No per-vendor special-casing.
     """
-    if backend not in ("vulkan", "cuda", "rocm"):
+    if backend not in ("vulkan", "cuda", "rocm", "sycl"):
         return backend
     try:
         from ..hardware import profile_box
@@ -1604,7 +1610,7 @@ def _force_cpu_when_no_usable_gpu(os_name: str, arch: str, backend: str) -> str:
     return "cpu"
 
 
-_KNOWN_BACKENDS = ("cuda", "rocm", "vulkan", "metal", "mlx", "cpu")
+_KNOWN_BACKENDS = ("cuda", "rocm", "vulkan", "sycl", "metal", "mlx", "cpu")
 
 
 def _env_backend_override() -> str | None:
@@ -1676,6 +1682,9 @@ def _asset_patterns(os_name: str, arch: str) -> list[tuple[str, str]]:
                 # new releases resolve to the ROCm build.
                 ("rocm", "win-rocm-"),
                 ("rocm", "win-hip-radeon-x64"),
+                # Intel's vendor-native build: self-contained SYCL +
+                # oneMKL + UR runtime, no oneAPI install required.
+                ("sycl", "win-sycl-x64"),
                 ("vulkan", "win-vulkan-x64"),
                 ("cpu", "win-cpu-x64"),
             ]
@@ -1686,7 +1695,10 @@ def _asset_patterns(os_name: str, arch: str) -> list[tuple[str, str]]:
             ("cuda", r"win-cuda-12\.4-arm64\.zip$"),
             ("cuda", r"win-cuda-[\d.]+-arm64\.zip$"),
             ("vulkan", "win-vulkan-arm64"),
-            ("vulkan", "win-opencl-adreno-arm64"),
+            # win-opencl-adreno-arm64 ships ggml-opencl.dll, not a
+            # Vulkan module; it used to be mislabeled as Vulkan here,
+            # which made the install verify fail. OpenCL is not a
+            # supported backend, so fall through to CPU instead.
             ("cpu", "win-cpu-arm64"),
         ]
     if arch == "x64":
@@ -1823,6 +1835,18 @@ _GPU_BACKEND_FILES: dict[str, tuple[str, ...]] = {
         "ggml-rocm.dll", "ggml-hip.dll", "libggml-rocm.so",
         "amdhip64*.dll", "amd_comgr*.dll", "rocm_kpack*.dll",
         "hipblas*.dll", "rocblas*.dll",
+    ),
+    "sycl": (
+        "ggml-sycl.dll", "libggml-sycl.so",
+        "sycl*.dll", "mkl_*.dll", "ur_*.dll", "dnnl.dll",
+        "libmmd.dll", "svml_dispmd.dll", "libiomp5md.dll",
+        "libhwloc-15.dll", "tcm.dll", "umf.dll",
+    ),
+    "openvino": (
+        "ggml-openvino.dll", "libggml-openvino.so", "openvino*.dll",
+        "tbb12_debug.dll", "tbbbind_2_5.dll", "tbbbind_2_5_debug.dll",
+        "tbbmalloc.dll", "tbbmalloc_debug.dll",
+        "tbbmalloc_proxy.dll", "tbbmalloc_proxy_debug.dll",
     ),
     "metal": (
         "ggml-metal.dll", "libggml-metal.so",
@@ -2277,6 +2301,42 @@ def _rocm_env(gfx: str | None) -> dict[str, str]:
     return env
 
 
+def _probe_windows_gpu_device(
+    dst: Path, pattern: str, label: str, driver_hint: str,
+) -> None:
+    """Run ``--list-devices`` and print the real device line.
+
+    Runtime DLLs being present is necessary but not sufficient: the
+    vendor driver must also enumerate a device. A missing device is a
+    warning (the build is installed and a driver update can fix it),
+    never a silent success.
+    """
+    try:
+        probe = subprocess.run(
+            [str(dst), "--list-devices"],
+            capture_output=True, text=True, timeout=60,
+            encoding="utf-8", errors="replace",
+        )
+        text = (probe.stdout or "") + "\n" + (probe.stderr or "")
+        device = next(
+            (ln.strip() for ln in text.splitlines()
+             if re.search(pattern, ln)),
+            "",
+        )
+        if device:
+            click.echo(f"verify: {device}")
+        else:
+            click.echo(
+                f"warning: the {label} runtime is in place but the binary "
+                f"did not enumerate a {label} device. {driver_hint}",
+                err=True,
+            )
+    except (OSError, subprocess.SubprocessError) as e:
+        click.echo(
+            f"warning: could not list {label} devices: {e}", err=True,
+        )
+
+
 @model.command("install-llama")
 @click.option("--tag", default=None,
               help="llama.cpp release tag to install, e.g. b6400 "
@@ -2287,7 +2347,7 @@ def _rocm_env(gfx: str | None) -> dict[str, str]:
               help="Registry model to point at the installed binary, e.g. 35b.")
 @click.option("--backend", default="auto",
               type=click.Choice(["auto", "rocm", "cuda", "vulkan",
-                                 "metal", "mlx", "cpu"]),
+                                 "sycl", "metal", "mlx", "cpu"]),
               help="GPU backend to install (default: auto-detect from "
                    "the cached hardware profile).")
 @click.option("--gfx", "gfx", default=None,
@@ -2314,11 +2374,12 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
     ``binary`` (plus the ROCm env block) to point at it.
 
     ``--backend`` defaults to auto-detect: Linux prefers ROCm when a
-    HIP toolchain is present, then Vulkan, then CPU; Windows prefers
-    CUDA, then ROCm/HIP, then Vulkan, then CPU; macOS always uses the
-    Metal build. When the requested backend has no asset for this arch
-    (e.g. ROCm on arm64 Linux), the next available backend is used and
-    a note is printed.
+    HIP toolchain is present, then Vulkan, then CPU; Windows picks CUDA
+    on NVIDIA, SYCL on discrete Intel Arc, and Vulkan on AMD (ROCm/HIP
+    is opt-in via ``--backend rocm``); macOS always uses the Metal
+    build. When the requested backend has no asset for this arch (e.g.
+    ROCm on arm64 Linux), the next available backend is used and a note
+    is printed.
     """
     import platform
     import tempfile
@@ -2378,7 +2439,7 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
             else:
                 backend = _detect_gpu_backend(os_name)
                 click.echo(f"backend: auto-detected {backend} ({os_name}/{arch})")
-        if force_cpu and backend in ("cuda", "rocm", "vulkan", "metal"):
+        if force_cpu and backend in ("cuda", "rocm", "vulkan", "sycl", "metal"):
             click.echo(
                 f"note: --force-cpu requested; ignoring profile's "
                 f"recommendation ({backend}) and installing CPU instead"
@@ -2394,6 +2455,11 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
     elif backend == "cuda" and os_name != "windows":
         click.echo("error: --backend cuda is only available on Windows "
                    "(llama.cpp ships no Linux CUDA assets)", err=True)
+        raise SystemExit(1) from None
+    elif backend == "sycl" and (os_name != "windows" or arch != "x64"):
+        click.echo("error: --backend sycl is only available on Windows "
+                   "x64 (llama.cpp ships no SYCL asset for this OS/arch)",
+                   err=True)
         raise SystemExit(1) from None
     elif backend == "mlx" and os_name != "macos":
         click.echo("error: --backend mlx is only available on macOS "
@@ -2451,7 +2517,7 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
         if local:
             from ..diagnose import binary_backend
             local_kind = (binary_backend(local) or "").lower()
-            if local_kind in ("cuda", "rocm", "vulkan", "metal"):
+            if local_kind in ("cuda", "rocm", "vulkan", "sycl", "openvino", "metal"):
                 click.echo(
                     f"backend: local {local_kind} build at {local} "
                     f"(overrides profile's CPU recommendation; "
@@ -2473,7 +2539,7 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
     if existing.exists():
         from ..diagnose import binary_backend
         existing_kind = (binary_backend(str(existing)) or "").lower()
-        if (existing_kind in ("cuda", "rocm", "vulkan", "metal")
+        if (existing_kind in ("cuda", "rocm", "vulkan", "sycl", "openvino", "metal")
                 and backend == "cpu"
                 and os.environ.get("TOKI_INSTALL_LLAMA_FORCE_DOWNGRADE") != "1"):
             raise click.ClickException(
@@ -2754,6 +2820,68 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
             click.echo(
                 f"warning: could not list CUDA devices: {e}", err=True,
             )
+
+    # The Windows ROCm zip bundles its HIP runtime; without it
+    # ggml-hip.dll fails to load and llama.cpp runs on CPU.
+    if matched_backend == "rocm" and os_name == "windows":
+        from ..diagnose import rocm_runtime_dlls
+
+        runtime = rocm_runtime_dlls(bin_dir)
+        if not any(n.lower().startswith("amdhip64") for n in runtime):
+            raise click.ClickException(
+                f"the ROCm build is installed but its HIP runtime "
+                f"(amdhip64*.dll, amd_comgr.dll, rocm_kpack.dll) is "
+                f"missing from {bin_dir} — llama-server would silently "
+                f"fall back to CPU. Re-run "
+                f"`toki model install-llama --backend rocm`."
+            )
+        click.echo(f"verify: ROCm runtime {', '.join(runtime)}")
+        _probe_windows_gpu_device(
+            dst, r"\bROCm\d+\b", "ROCm",
+            "Usually the AMD driver is older than this build needs — "
+            "update Adrenalin and run `toki doctor`.",
+        )
+
+    # The Windows SYCL zip is self-contained (sycl9.dll + oneMKL + UR),
+    # so a missing runtime means the install did not unpack correctly.
+    if matched_backend == "sycl" and os_name == "windows":
+        from ..diagnose import sycl_runtime_dlls
+
+        runtime = sycl_runtime_dlls(bin_dir)
+        if not runtime:
+            raise click.ClickException(
+                f"the SYCL build is installed but its runtime "
+                f"(sycl*.dll) is missing from {bin_dir} — llama-server "
+                f"would silently fall back to CPU. Re-run "
+                f"`toki model install-llama --backend sycl`."
+            )
+        click.echo(f"verify: SYCL runtime {', '.join(runtime)}")
+        _probe_windows_gpu_device(
+            dst, r"\bSYCL\d+\b", "SYCL",
+            "Usually the Intel GPU driver / Level Zero runtime is "
+            "missing or older than this build needs — update the Intel "
+            "Arc driver.",
+        )
+
+    # The Vulkan zip does not bundle vulkan-1.dll; it comes from the
+    # GPU driver. Missing it is a silent CPU fallback, so refuse.
+    if matched_backend == "vulkan" and os_name == "windows":
+        from ..diagnose import vulkan_runtime_ready
+
+        if not vulkan_runtime_ready(str(dst)):
+            raise click.ClickException(
+                "the Vulkan build is installed but the Vulkan loader "
+                "(vulkan-1.dll) is missing from this system — "
+                "llama-server would silently fall back to CPU. Install "
+                "or repair the AMD/Intel GPU driver, then re-run "
+                "`toki model install-llama --backend vulkan`."
+            )
+        click.echo("verify: Vulkan loader vulkan-1.dll")
+        _probe_windows_gpu_device(
+            dst, r"\bVulkan\d+\b", "Vulkan",
+            "Usually the GPU driver is older than this build needs — "
+            "update the AMD/Intel driver.",
+        )
 
     # Post-install verification: what backend actually landed? A CPU
     # box must have zero GPU libs; a GPU box must have its libs. This

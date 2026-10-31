@@ -53,7 +53,8 @@ pip install -e .[embeddings]
 ```bash
 # 1. Fetch the llama-server binary matching your OS/arch and GPU.
 #    Auto-detects the best backend: ROCm (AMD/HIP), CUDA (NVIDIA),
-#    Vulkan, Metal (macOS), CPU. Pass --backend to override.
+#    SYCL (Intel Arc), Vulkan, Metal (macOS), CPU. Pass --backend
+#    to override.
 toki model install-llama
 
 # 2. Install a model — nothing is preloaded on a fresh install; you
@@ -86,28 +87,31 @@ On machines with limited RAM (8–16 GB), `toki model use` automatically reduces
 
 ## Platforms
 
-Toki Recur is pure Python over the llama-server HTTP API — it runs on **any x86_64 or aarch64 device** running Linux, macOS or Windows, with whatever GPU backend your llama-server build has (ROCm, CUDA, Vulkan, Metal, CPU). The only per-platform piece is the llama-server binary itself:
+Toki Recur is pure Python over the llama-server HTTP API — it runs on **any x86_64 or aarch64 device** running Linux, macOS or Windows, with whatever GPU backend your llama-server build has (ROCm, CUDA, SYCL, Vulkan, Metal, CPU). The only per-platform piece is the llama-server binary itself:
 
 | Platform | Architecture | llama-server builds | install-llama asset | Support |
 |---|---|---|---|---|
 | Linux | x86_64 | ROCm (auto if HIP present), Vulkan, CPU | `ubuntu-rocm-7.14-x64`, `ubuntu-vulkan-x64`, `ubuntu-x64` | stable |
 | Linux | aarch64 | Vulkan, CPU | `ubuntu-vulkan-arm64`, `ubuntu-arm64` | stable |
 | macOS | x86_64, arm64 | Metal (also runs CPU-only) | `macos-x64`, `macos-arm64` | stable |
-| Windows | x86_64 | CUDA (auto if NVIDIA), ROCm/HIP, Vulkan, CPU | `win-cuda-13.3-x64`, `win-rocm-7.14-x64`, `win-vulkan-x64`, `win-cpu-x64` | beta |
-| Windows | aarch64 | CPU, Adreno OpenCL | `win-cpu-arm64` | beta |
+| Windows | x86_64 | CUDA (auto NVIDIA), SYCL (auto Intel Arc), Vulkan (auto AMD), ROCm/HIP (explicit AMD), CPU | `win-cuda-13.4-x64`, `win-sycl-x64`, `win-vulkan-x64`, `win-rocm-10.0-x64`, `win-cpu-x64` | beta |
+| Windows | aarch64 | Vulkan, CPU | `win-vulkan-arm64`, `win-cpu-arm64` | beta |
 
 > **Linux ROCm note (mid-2026):** llama.cpp stopped publishing Linux ROCm
 > release assets after **b10375**. `install-llama --backend rocm` still finds
 > that last build, but brand-new model support lands on master first — on a
 > Linux ROCm box, build the latest source instead:
 > `scripts/build_llama_cpp.sh` (ROCm for the host GPU, gfx1151 on Strix
-> Halo APUs). Windows ROCm keeps shipping as `win-rocm-7.14-x64`.
+> Halo APUs). Windows ROCm keeps shipping as `win-rocm-<ver>-x64`
+> (currently 10.0); its HIP runtime is bundled in the zip, so no ROCm
+> toolkit install is needed.
 
 CI runs the test suite on all three OSes (x86_64 + aarch64) and executes the
 Linux and macOS system installers end-to-end. The GPU backends are provided by
 the llama-server binary itself — Toki Recur talks to it over HTTP and is
-backend-agnostic. Windows is **beta**: installs and chats end-to-end, but
-continues to receive platform-specific fixes that never touch the stable
+backend-agnostic. Windows is **beta**: the launcher, chat, tap, and the CUDA /
+SYCL / Vulkan / ROCm install paths are implemented and unit-tested, with
+real-hardware verification ongoing; fixes here never touch the stable
 Linux/macOS code paths.
 
 One command installs the matching official build:

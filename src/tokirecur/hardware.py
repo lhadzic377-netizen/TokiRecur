@@ -41,9 +41,11 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Bumped to 4 for the AMD iGPU carve fix: sub-2 GB ROCm carves now
-# report shared_ram=True so fit is judged on system RAM, not the carve.
-PROFILE_VERSION = 4
+# Bumped to 5 for Windows GPU coverage: Intel discrete now recommends
+# the SYCL build, and AMD/Intel VRAM comes from the 64-bit driver
+# registry value instead of WMI's 4 GB-capped AdapterRAM. The cached
+# recommendation must be rebuilt, not reused.
+PROFILE_VERSION = 5
 # Cache the profile for 30 days; after that, re-profile.
 # How long a cached hardware profile is trusted before re-profiling.
 # TOKI_PROFILE_TTL (seconds) overrides. 30 days is long because the
@@ -690,14 +692,71 @@ def _enumerate_gpus_macos() -> list[GPUProfile]:
     return out
 
 
-def _enumerate_gpus_windows() -> list[GPUProfile]:
-    """Windows GPU enumeration — partial.
+def _windows_registry_vram() -> dict[str, float]:
+    """Real VRAM from the display driver's 64-bit registry value.
 
-    NVIDIA: nvidia-smi (present on any CUDA install) reports name +
-    VRAM. AMD/Intel on Windows would need WMI or DXGI enumeration
-    (no /sys/class/drm, no rocm-smi); TODO: implement via
-    wmic path win32_VideoController or dxgi. Until then AMD/Intel
-    boxes on Windows fall back to CPU — safe, never wrong.
+    WMI's ``AdapterRAM`` is a uint32: a card with more than 4 GB
+    reports the 0xffffffff sentinel, so an RX 7900 XTX or an Arc A770
+    looks like a 4 GB card and every memory-fit estimate is wrong.
+    ``HardwareInformation.qwMemorySize`` is a QWORD with the real
+    size. Returns ``{driver_desc_lower: GB}``; empty when the registry
+    is unreadable (non-Windows, locked-down policy, no display class).
+    """
+    if not sys.platform.startswith("win"):
+        return {}
+    try:
+        import winreg
+    except ImportError:
+        return {}
+    base = (r"SYSTEM\CurrentControlSet\Control\Class"
+            r"\{4d36e968-e325-11ce-bfc1-08002be10318}")
+    out: dict[str, float] = {}
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, base) as root:
+            for i in range(winreg.QueryInfoKey(root)[0]):
+                try:
+                    with winreg.OpenKey(root, winreg.EnumKey(root, i)) as key:
+                        try:
+                            desc = winreg.QueryValueEx(key, "DriverDesc")[0]
+                        except OSError:
+                            continue
+                        try:
+                            size = winreg.QueryValueEx(
+                                key, "HardwareInformation.qwMemorySize",
+                            )[0]
+                        except OSError:
+                            continue
+                        if not isinstance(size, int) or size <= 0:
+                            continue
+                        gb = size / (1024 ** 3)
+                        if 0.1 <= gb <= 1024:
+                            out[str(desc).strip().lower()] = gb
+                except OSError:
+                    continue
+    except OSError:
+        return {}
+    return out
+
+
+def _registry_vram_for(name: str, table: dict[str, float]) -> float | None:
+    """Match a WMI adapter name to a DriverDesc in ``table``."""
+    key = name.strip().lower()
+    if key in table:
+        return table[key]
+    for desc, gb in table.items():
+        if desc and (desc in key or key in desc):
+            return gb
+    return None
+
+
+def _enumerate_gpus_windows() -> list[GPUProfile]:
+    """Windows GPU enumeration via nvidia-smi + WMI/CIM.
+
+    NVIDIA is read from nvidia-smi, which reports accurate VRAM. AMD
+    and Intel are read from ``Win32_VideoController`` (wmic on older
+    builds, PowerShell CIM on current Win11 where wmic was removed).
+    AdapterRAM is a uint32 with a 4 GB sentinel, so the real size is
+    taken from the driver's 64-bit registry value whenever it exists.
     """
     out = []
     if shutil.which("nvidia-smi"):
@@ -705,7 +764,7 @@ def _enumerate_gpus_windows() -> list[GPUProfile]:
             r = subprocess.run(
                 ["nvidia-smi", "--query-gpu=name,memory.total",
                  "--format=csv,noheader,nounits"],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True, text=True, timeout=8,
             )
             if r.returncode == 0:
                 for line in r.stdout.splitlines():
@@ -721,44 +780,44 @@ def _enumerate_gpus_windows() -> list[GPUProfile]:
                         ))
         except Exception:
             pass
-    # AMD/Intel on Windows via WMI (no DRM). wmic is deprecated but
-    # still present on Win10/11; fall back to PowerShell CIM.
-    # AdapterRAM is bytes on WMI (0xffffffff = 4 GB sentinel for >4 GB,
-    # so treat any >=4 GB as discrete).
     wmi_gpus: list[tuple[str, float]] = []
     try:
         r = subprocess.run(
-            ["wmic", "path", "win32_VideoController", "get", "Name,AdapterRAM", "/format:csv"],
-            capture_output=True, text=True, timeout=5,
+            ["wmic", "path", "win32_VideoController", "get",
+             "Name,AdapterRAM", "/format:csv"],
+            capture_output=True, text=True, timeout=8,
         )
         if r.returncode == 0:
             for line in r.stdout.splitlines():
                 if "win32_VideoController" not in line.lower() and "," in line:
-                    # CSV: Node,AdapterRAM,Name
-                    parts = [p.strip() for p in line.split(",")]
+                    # CSV: Node,AdapterRAM,Name — the name is last and
+                    # may itself contain a comma, so split only twice.
+                    parts = [p.strip() for p in line.split(",", 2)]
                     if len(parts) >= 3 and parts[2]:
                         name = parts[2]
                         try:
-                            ram = int(parts[1]) / (1024**3) if parts[1].isdigit() else 0.0
+                            ram = (int(parts[1]) / (1024 ** 3)
+                                   if parts[1].isdigit() else 0.0)
                         except ValueError:
                             ram = 0.0
-                        # 0xffffffff sentinel: driver reports 4 GB max uint32
-                        # for >4 GB cards — treat as discrete.
-                        if ram >= 3.9:
-                            ram = 4.0
                         wmi_gpus.append((name, ram))
     except Exception:
         pass
     if not wmi_gpus:
-        # PowerShell CIM fallback (works when wmic missing on Win11)
+        # PowerShell CIM fallback. A cold WMI service can take longer
+        # than a 5 s budget, and timing out means the GPU silently
+        # disappears from the profile (CPU build on a gaming laptop).
+        ps_exe = (shutil.which("powershell")
+                  or shutil.which("pwsh")
+                  or "powershell.exe")
         try:
             ps = (
                 "Get-CimInstance Win32_VideoController | ForEach-Object { "
                 "\"{0},{1}\" -f $_.Name,$_.AdapterRAM }"
             )
             r = subprocess.run(
-                ["powershell.exe", "-NoProfile", "-Command", ps],
-                capture_output=True, text=True, timeout=5,
+                [ps_exe, "-NoProfile", "-Command", ps],
+                capture_output=True, text=True, timeout=15,
             )
             if r.returncode == 0:
                 for line in r.stdout.splitlines():
@@ -766,30 +825,45 @@ def _enumerate_gpus_windows() -> list[GPUProfile]:
                         name, ram_s = line.rsplit(",", 1)
                         name, ram_s = name.strip(), ram_s.strip()
                         try:
-                            ram = int(ram_s) / (1024**3) if ram_s.lstrip("-").isdigit() else 0.0
+                            ram = (int(ram_s) / (1024 ** 3)
+                                   if ram_s.lstrip("-").isdigit() else 0.0)
                         except ValueError:
                             ram = 0.0
-                        if ram >= 3.9:
-                            ram = 4.0
                         if name:
                             wmi_gpus.append((name, ram))
         except Exception:
             pass
+    registry_vram = _windows_registry_vram()
     for name, vram in wmi_gpus:
         low = name.lower()
         if "nvidia" in low:
-            continue  # already handled via nvidia-smi with accurate VRAM
+            # nvidia-smi is authoritative; a WMI-only NVIDIA entry means
+            # the driver (and therefore CUDA) is not usable.
+            continue
         if "amd" in low or "radeon" in low:
             vendor = "AMD"
         elif "intel" in low:
             vendor = "Intel"
         else:
             continue
-        # Shared-RAM heuristic: Intel iGPU names contain UHD/HD/Iris
-        is_intel_igpu = vendor == "Intel" and any(k in low for k in ("uhd", "hd graphics", "iris"))
+        real = _registry_vram_for(name, registry_vram)
+        if real is not None:
+            vram = real
+        elif vram >= 3.9:
+            # 0xffffffff sentinel: AdapterRAM caps at 4 GB.
+            vram = 4.0
+        # Intel iGPUs share system RAM. The names moved from HD/UHD/Iris
+        # to "Intel(R) Graphics" and "Intel(R) Arc(TM) Graphics" (Meteor
+        # Lake and newer); the discrete Arc names always carry a model
+        # number (A770, B580), so the bare phrase is the iGPU.
+        is_intel_igpu = vendor == "Intel" and any(
+            k in low for k in (
+                "uhd", "hd graphics", "iris",
+                "arc(tm) graphics", "intel(r) graphics",
+            )
+        )
         shared = is_intel_igpu
         use = not shared and vram >= 4
-        # AMD UMA with unknown VRAM: fall back to total RAM check elsewhere
         reason = (
             "shared RAM (iGPU)" if shared
             else (f"{vram:.1f} GB VRAM" if vram < 4 else "discrete GPU")
@@ -978,7 +1052,11 @@ def _os_name() -> str:
 _BACKEND_TABLE: dict[str, dict[str, str]] = {
     "NVIDIA": {"linux": "cuda", "windows": "cuda", "darwin": "vulkan"},
     "AMD": {"linux": "rocm", "windows": "vulkan", "darwin": "vulkan"},
-    "Intel": {"linux": "vulkan", "windows": "vulkan", "darwin": "vulkan"},
+    # llama.cpp ships a self-contained Windows SYCL build; it is the
+    # vendor-native path for discrete Arc. Intel iGPUs are filtered out
+    # by _gpu_eligible before this table is consulted, so they still
+    # get the CPU build.
+    "Intel": {"linux": "vulkan", "windows": "sycl", "darwin": "vulkan"},
     "Apple": {"darwin": "metal", "linux": "vulkan", "windows": "vulkan"},
 }
 

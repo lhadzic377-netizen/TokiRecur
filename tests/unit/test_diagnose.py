@@ -361,3 +361,184 @@ def test_binary_backend_asks_the_binary_before_ldd(monkeypatch, tmp_path):
 
     monkeypatch.setattr(diagnose, "_run", fake_run)
     assert diagnose.binary_backend(str(exe)) == "Vulkan"
+
+
+def test_gpu_state_modern_sycl(iso_env):
+    spec = _spec(iso_env)
+    d = _log_dir(spec, iso_env)
+    (d / "llama.log").write_text(
+        "0.00.001.000 I   - SYCL0   : Intel(R) Arc(TM) A770 Graphics "
+        "(16384 MiB, 15000 MiB free)\n"
+    )
+    st = ctl.gpu_state(spec)
+    assert st["backend"] == "SYCL"
+    assert "A770" in (st["device"] or "")
+
+
+def test_gpu_state_modern_openvino(iso_env):
+    spec = _spec(iso_env)
+    d = _log_dir(spec, iso_env)
+    (d / "llama.log").write_text(
+        "0.00.001.000 I   - OPENVINO0 : Intel(R) Arc(TM) A770 Graphics\n"
+    )
+    st = ctl.gpu_state(spec)
+    assert st["backend"] == "OPENVINO"
+    assert "A770" in (st["device"] or "")
+
+
+def test_binary_backend_windows_sycl(monkeypatch, tmp_path):
+    monkeypatch.setattr(diagnose.winproc, "IS_WINDOWS", True)
+    exe = tmp_path / "llama-server.exe"
+    exe.write_bytes(b"x")
+    (tmp_path / "ggml-sycl.dll").write_bytes(b"x")
+    (tmp_path / "sycl9.dll").write_bytes(b"x")
+    assert diagnose.binary_backend(str(exe)) == "SYCL"
+    assert diagnose.sycl_runtime_ready(str(exe))
+
+
+def test_binary_backend_windows_openvino(monkeypatch, tmp_path):
+    monkeypatch.setattr(diagnose.winproc, "IS_WINDOWS", True)
+    exe = tmp_path / "llama-server.exe"
+    exe.write_bytes(b"x")
+    (tmp_path / "ggml-openvino.dll").write_bytes(b"x")
+    (tmp_path / "openvino.dll").write_bytes(b"x")
+    assert diagnose.binary_backend(str(exe)) == "OpenVINO"
+    assert diagnose.openvino_runtime_ready(str(exe))
+
+
+def test_rocm_runtime_ready(monkeypatch, tmp_path):
+    monkeypatch.setattr(diagnose.winproc, "IS_WINDOWS", True)
+    exe = tmp_path / "llama-server.exe"
+    exe.write_bytes(b"x")
+    (tmp_path / "ggml-hip.dll").write_bytes(b"x")
+    assert not diagnose.rocm_runtime_ready(str(exe))
+    (tmp_path / "amdhip64_7.dll").write_bytes(b"x")
+    (tmp_path / "amd_comgr.dll").write_bytes(b"x")
+    assert diagnose.rocm_runtime_ready(str(exe))
+    assert diagnose.rocm_runtime_dlls(tmp_path) == [
+        "amd_comgr.dll", "amdhip64_7.dll",
+    ]
+
+
+def test_vulkan_runtime_ready_finds_system_loader(monkeypatch, tmp_path):
+    monkeypatch.setattr(diagnose.winproc, "IS_WINDOWS", True)
+    exe = tmp_path / "llama-server.exe"
+    exe.write_bytes(b"x")
+    root = tmp_path / "Windows"
+    (root / "System32").mkdir(parents=True)
+    (root / "System32" / "vulkan-1.dll").write_bytes(b"x")
+    monkeypatch.setenv("SystemRoot", str(root))
+    assert diagnose.vulkan_runtime_ready(str(exe))
+    (root / "System32" / "vulkan-1.dll").unlink()
+    assert not diagnose.vulkan_runtime_ready(str(exe))
+
+
+def test_sycl_runtime_ready(monkeypatch, tmp_path):
+    monkeypatch.setattr(diagnose.winproc, "IS_WINDOWS", True)
+    exe = tmp_path / "llama-server.exe"
+    exe.write_bytes(b"x")
+    assert not diagnose.sycl_runtime_ready(str(exe))
+    (tmp_path / "sycl9.dll").write_bytes(b"x")
+    assert diagnose.sycl_runtime_ready(str(exe))
+    assert diagnose.sycl_runtime_dlls(tmp_path) == ["sycl9.dll"]
+
+
+def _win_gpu(monkeypatch, gpus):
+    monkeypatch.setattr(diagnose.winproc, "IS_WINDOWS", True)
+    monkeypatch.setattr(diagnose.shutil, "which", lambda _: None)
+    monkeypatch.setattr(diagnose.os.path, "exists", lambda _: False)
+    monkeypatch.setattr(
+        "tokirecur.hardware._enumerate_gpus_windows", lambda: gpus,
+    )
+    return diagnose.gpu_hardware()
+
+
+def test_gpu_hardware_windows_amd_uses_vulkan(monkeypatch):
+    from tokirecur.hardware import GPUProfile
+
+    hw = _win_gpu(monkeypatch, [GPUProfile(
+        vendor="AMD", name="AMD Radeon RX 7600", vram_gb=8.0,
+        driver=None, vulkan_score=1.0, shared_ram=False,
+        use_for_llm=True, reason="discrete GPU",
+    )])
+    assert hw["backend"] == "Vulkan"
+    assert hw["name"] == "AMD Radeon RX 7600"
+    assert hw["vram"] == "8.0 GB"
+
+
+def test_gpu_hardware_windows_intel_arc_uses_sycl(monkeypatch):
+    from tokirecur.hardware import GPUProfile
+
+    hw = _win_gpu(monkeypatch, [GPUProfile(
+        vendor="Intel", name="Intel(R) Arc(TM) A770 Graphics",
+        vram_gb=16.0, driver=None, vulkan_score=1.0, shared_ram=False,
+        use_for_llm=True, reason="discrete GPU",
+    )])
+    assert hw["backend"] == "SYCL"
+    assert hw["name"] == "Intel(R) Arc(TM) A770 Graphics"
+
+
+def test_gpu_hardware_windows_intel_igpu_reports_name_not_backend(monkeypatch):
+    from tokirecur.hardware import GPUProfile
+
+    hw = _win_gpu(monkeypatch, [GPUProfile(
+        vendor="Intel", name="Intel(R) UHD Graphics", vram_gb=1.0,
+        driver=None, vulkan_score=1.0, shared_ram=True,
+        use_for_llm=False, reason="shared RAM (iGPU)",
+    )])
+    assert hw["backend"] is None
+    assert hw["name"] == "Intel(R) UHD Graphics"
+
+
+def test_run_reports_present_but_unused_gpu(monkeypatch, iso_env):
+    monkeypatch.setattr(diagnose, "gpu_hardware", lambda: {
+        "backend": None, "name": "Intel(R) UHD Graphics",
+        "vram": "1.0 GB", "driver": None,
+    })
+    out = diagnose.run()
+    assert "present, not used for LLM offload" in out
+
+
+def test_hint_rocm_missing_runtime(monkeypatch, iso_env):
+    spec = _spec(iso_env)
+    monkeypatch.setattr(diagnose, "_active_spec", lambda: spec)
+    monkeypatch.setattr(diagnose, "gpu_hardware", lambda: {
+        "backend": "Vulkan", "name": "RX 7600", "vram": None, "driver": None,
+    })
+    monkeypatch.setattr(ctl, "_resolve_binary", lambda spec: "/tmp/llama-server")
+    monkeypatch.setattr(diagnose, "binary_backend", lambda b: "ROCm")
+    monkeypatch.setattr(diagnose.winproc, "IS_WINDOWS", True)
+    monkeypatch.setattr(diagnose, "rocm_runtime_ready", lambda b: False)
+    lines = diagnose.hint()
+    assert any("amdhip64" in line for line in lines)
+    assert any("--backend rocm" in line for line in lines)
+
+
+def test_hint_vulkan_missing_loader(monkeypatch, iso_env):
+    spec = _spec(iso_env)
+    monkeypatch.setattr(diagnose, "_active_spec", lambda: spec)
+    monkeypatch.setattr(diagnose, "gpu_hardware", lambda: {
+        "backend": "Vulkan", "name": "RX 7600", "vram": None, "driver": None,
+    })
+    monkeypatch.setattr(ctl, "_resolve_binary", lambda spec: "/tmp/llama-server")
+    monkeypatch.setattr(diagnose, "binary_backend", lambda b: "Vulkan")
+    monkeypatch.setattr(diagnose.winproc, "IS_WINDOWS", True)
+    monkeypatch.setattr(diagnose, "vulkan_runtime_ready", lambda b: False)
+    lines = diagnose.hint()
+    assert any("vulkan-1.dll" in line for line in lines)
+    assert any("GPU driver" in line for line in lines)
+
+
+def test_hint_sycl_missing_runtime(monkeypatch, iso_env):
+    spec = _spec(iso_env)
+    monkeypatch.setattr(diagnose, "_active_spec", lambda: spec)
+    monkeypatch.setattr(diagnose, "gpu_hardware", lambda: {
+        "backend": "SYCL", "name": "Arc A770", "vram": None, "driver": None,
+    })
+    monkeypatch.setattr(ctl, "_resolve_binary", lambda spec: "/tmp/llama-server")
+    monkeypatch.setattr(diagnose, "binary_backend", lambda b: "SYCL")
+    monkeypatch.setattr(diagnose.winproc, "IS_WINDOWS", True)
+    monkeypatch.setattr(diagnose, "sycl_runtime_ready", lambda b: False)
+    lines = diagnose.hint()
+    assert any("sycl*.dll" in line for line in lines)
+    assert any("--backend sycl" in line for line in lines)

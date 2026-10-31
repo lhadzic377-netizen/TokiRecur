@@ -2496,6 +2496,10 @@ def _gpu_backend_of_process(pid: int) -> str | None:
         return "CUDA"
     if "libggml-hip" in maps or "libggml-rocm" in maps:
         return "ROCm"
+    if "libggml-sycl" in maps:
+        return "SYCL"
+    if "libggml-openvino" in maps:
+        return "OpenVINO"
     return None
 
 
@@ -2564,14 +2568,18 @@ def gpu_state(spec: ModelSpec) -> dict[str, str | None]:
         if "system_info" in line:
             continue
         m = re.search(
-            r"(?:-\s+)?(CUDA\d+|ROCm\d+|Vulkan\d+|Metal)\s*:\s*"
-            r"([^()\n]+?)\s*(?:\([^)]*\))?\s*$",
+            r"(?:-\s+)?(CUDA\d+|ROCm\d+|Vulkan\d+|Metal|SYCL\d+|OPENVINO\d+)"
+            r"\s*:\s*(.+?)\s*$",
             line,
         )
         if m:
             name = m.group(1)
             result["backend"] = name.rstrip("0123456789")
-            result["device"] = m.group(2).strip()
+            # Intel device names contain "(R)"/"(TM)"; strip only the
+            # trailing memory parenthetical, not the vendor marks.
+            result["device"] = re.sub(
+                r"\s*\([^()]*\)\s*$", "", m.group(2).strip(),
+            ).strip()
     if result["backend"] is None:
         pid = _pid_on_port(spec.llama_port)
         if pid:
@@ -2678,27 +2686,56 @@ def _check_gpu_offload_binary_match(
     if not ngl or ngl <= 0:
         return True
     try:
-        from ..diagnose import binary_backend, cuda_runtime_ready
+        from ..diagnose import binary_backend
         kind = binary_backend(binary)
     except Exception:
         return True  # can't inspect; trust the user's explicit ngl
-    if (winproc.IS_WINDOWS and kind and kind.lower() == "cuda"
-            and not cuda_runtime_ready(binary)):
-        # ggml-cuda.dll loads, cannot find cudart64_*.dll, and the
+    if winproc.IS_WINDOWS and kind:
+        # A GPU backend module loads, cannot find its runtime, and the
         # server falls back to CPU without failing. That is exactly the
         # silent degradation this check exists to stop.
-        msg = (
-            f"GPU offload requested (-ngl {ngl}) but the CUDA build at "
-            f"{binary} is missing its runtime DLLs (cudart64_*.dll), so "
-            f"llama.cpp would silently run on CPU. Reinstall it with "
-            f"`toki model install-llama --backend cuda`, or pass "
-            f"TOKI_NGL=0 to run CPU mode on purpose."
+        from ..diagnose import (
+            cuda_runtime_ready,
+            openvino_runtime_ready,
+            rocm_runtime_ready,
+            sycl_runtime_ready,
+            vulkan_runtime_ready,
         )
-        if strict:
-            raise RuntimeError(msg)
-        click.echo(f"warning: {msg}", err=True)
-        return False
-    if not kind or kind.lower() in ("cuda", "rocm", "vulkan", "metal"):
+        k = kind.lower()
+        missing: tuple[str, str, str | None] | None = None
+        if k == "cuda" and not cuda_runtime_ready(binary):
+            missing = ("CUDA", "cudart64_*.dll", "cuda")
+        elif k == "rocm" and not rocm_runtime_ready(binary):
+            missing = ("ROCm", "amdhip64*.dll", "rocm")
+        elif k == "vulkan" and not vulkan_runtime_ready(binary):
+            missing = ("Vulkan", "vulkan-1.dll", None)
+        elif k == "sycl" and not sycl_runtime_ready(binary):
+            missing = ("SYCL", "sycl*.dll", "sycl")
+        elif k == "openvino" and not openvino_runtime_ready(binary):
+            missing = ("OpenVINO", "openvino.dll", None)
+        if missing:
+            label, dlls, backend = missing
+            if backend:
+                fix = (f"Reinstall it with `toki model install-llama "
+                       f"--backend {backend}`")
+            elif k == "vulkan":
+                fix = ("Install or repair the GPU driver (it provides "
+                       "vulkan-1.dll)")
+            else:
+                fix = "Reinstall the build"
+            msg = (
+                f"GPU offload requested (-ngl {ngl}) but the {label} build "
+                f"at {binary} is missing its runtime ({dlls}), so "
+                f"llama.cpp would silently run on CPU. {fix}, or pass "
+                f"TOKI_NGL=0 to run CPU mode on purpose."
+            )
+            if strict:
+                raise RuntimeError(msg)
+            click.echo(f"warning: {msg}", err=True)
+            return False
+    if not kind or kind.lower() in (
+        "cuda", "rocm", "vulkan", "metal", "sycl", "openvino",
+    ):
         return True
     msg = (
         f"GPU offload requested (-ngl {ngl}) but the installed "

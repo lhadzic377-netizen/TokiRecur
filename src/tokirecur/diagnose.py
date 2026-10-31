@@ -69,6 +69,54 @@ def cuda_driver_verdict(driver: tuple[int, ...] | None) -> tuple[bool, bool]:
     return driver < CUDA_12_WINDOWS_DRIVER, driver < CUDA_13_WINDOWS_DRIVER
 
 
+def _windows_gpu_hardware() -> dict[str, str | None]:
+    """GPU hardware from Windows WMI, including ineligible adapters.
+
+    The vendor tools are unreliable here: ``rocminfo`` is a Linux tool,
+    ``hipconfig`` is absent unless the HIP SDK is installed, and
+    ``vulkaninfo`` ships with the Vulkan SDK, not the GPU driver. WMI
+    is on every Windows box. When the best adapter is an iGPU that the
+    profile refuses to offload to, report its name with ``backend``
+    None so the doctor can say what is present instead of claiming a
+    CPU-only machine.
+    """
+    from .hardware import (
+        _BACKEND_TABLE,
+        _enumerate_gpus_windows,
+        _gpu_eligible,
+    )
+
+    try:
+        gpus = _enumerate_gpus_windows()
+    except Exception:
+        gpus = []
+    empty = {"backend": None, "name": None, "vram": None, "driver": None}
+    if not gpus:
+        return empty
+    eligible = [g for g in gpus if _gpu_eligible(g)]
+    eligible.sort(key=lambda g: (g.shared_ram, -g.vram_gb))
+    if not eligible:
+        gpu = max(gpus, key=lambda g: g.vram_gb)
+        return {
+            "backend": None,
+            "name": gpu.name,
+            "vram": f"{gpu.vram_gb:.1f} GB" if gpu.vram_gb else None,
+            "driver": None,
+        }
+    gpu = eligible[0]
+    backend = _BACKEND_TABLE.get(gpu.vendor, {}).get("windows", "vulkan")
+    label = {
+        "cuda": "CUDA", "rocm": "ROCm", "vulkan": "Vulkan",
+        "metal": "Metal", "sycl": "SYCL", "openvino": "OpenVINO",
+    }.get(backend, backend.upper())
+    return {
+        "backend": label,
+        "name": gpu.name,
+        "vram": f"{gpu.vram_gb:.1f} GB" if gpu.vram_gb else None,
+        "driver": None,
+    }
+
+
 def gpu_hardware() -> dict[str, str | None]:
     """Detected GPU hardware: {"backend", "name", "vram", "driver"}."""
     if sys.platform == "darwin":
@@ -86,6 +134,16 @@ def gpu_hardware() -> dict[str, str | None]:
                 "vram": parts[1] if len(parts) > 1 else None,
                 "driver": parts[2] if len(parts) > 2 else None,
             }
+    if winproc.IS_WINDOWS:
+        # WMI knows AMD/Intel even without any vendor tool installed,
+        # and it agrees with the hardware profile (AMD → Vulkan, Intel
+        # Arc → SYCL). Run it before the ROCm-directory and vulkaninfo
+        # heuristics: the Vulkan SDK is usually absent, and an installed
+        # HIP toolkit would otherwise make the doctor recommend ROCm
+        # while install-llama's profile recommends Vulkan.
+        win = _windows_gpu_hardware()
+        if win["backend"] or win["name"]:
+            return win
     if shutil.which("hipconfig") or os.path.exists("/opt/rocm") or os.path.exists(
         "C:/Program Files/AMD/ROCm"
     ):
@@ -141,12 +199,12 @@ def cuda_runtime_dlls(directory: str | os.PathLike[str]) -> list[str]:
     )
 
 
-def _cudart_on_path() -> bool:
-    """cudart DLLs supplied by a CUDA toolkit install on PATH.
+def _dll_on_path(*prefixes: str) -> bool:
+    """Is a DLL matching one of ``prefixes`` on the Windows PATH?
 
-    A locally-built llama-server links against the toolkit's cudart
-    rather than a copy next to the exe; Windows resolves it through
-    the DLL search path.
+    A locally-built GPU server links against the vendor toolkit's
+    runtime rather than a copy next to the exe; Windows resolves it
+    through the DLL search path.
     """
     if not winproc.IS_WINDOWS:
         return False
@@ -155,11 +213,16 @@ def _cudart_on_path() -> bool:
         if not entry:
             continue
         try:
-            if any(Path(entry).glob("cudart64_*.dll")):
-                return True
+            for prefix in prefixes:
+                if next(Path(entry).glob(f"{prefix}*.dll"), None):
+                    return True
         except OSError:
             continue
     return False
+
+
+def _cudart_on_path() -> bool:
+    return _dll_on_path("cudart64_")
 
 
 def cuda_runtime_ready(binary: str | None) -> bool:
@@ -169,6 +232,88 @@ def cuda_runtime_ready(binary: str | None) -> bool:
     if cuda_runtime_dlls(os.path.dirname(binary) or "."):
         return True
     return _cudart_on_path()
+
+
+def rocm_runtime_dlls(directory: str | os.PathLike[str]) -> list[str]:
+    """HIP runtime DLLs shipped next to a Windows ROCm llama-server.
+
+    The win-rocm release carries ``ggml-hip.dll`` plus ``amdhip64_7.dll``,
+    ``amd_comgr.dll`` and ``rocm_kpack.dll``. Without them the HIP
+    backend fails to load and llama.cpp silently runs on CPU.
+    """
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return []
+    return sorted(
+        n for n in names
+        if n.lower().endswith(".dll")
+        and n.lower().startswith(("amdhip64", "amd_comgr", "rocm_kpack"))
+    )
+
+
+def rocm_runtime_ready(binary: str | None) -> bool:
+    """Can a Windows ROCm build load its HIP runtime?"""
+    if not binary:
+        return False
+    runtime = rocm_runtime_dlls(os.path.dirname(binary) or ".")
+    if any(n.lower().startswith("amdhip64") for n in runtime):
+        return True
+    return _dll_on_path("amdhip64")
+
+
+def vulkan_runtime_ready(binary: str | None) -> bool:
+    """Can a Windows Vulkan build find the Vulkan loader?
+
+    llama.cpp's Vulkan zip does not bundle ``vulkan-1.dll``; it comes
+    from the GPU driver (System32). If it is missing, ggml-vulkan.dll
+    fails to load and the server silently runs on CPU.
+    """
+    if not binary:
+        return False
+    directory = os.path.dirname(binary) or "."
+    if os.path.exists(os.path.join(directory, "vulkan-1.dll")):
+        return True
+    root = os.environ.get("SystemRoot", r"C:\Windows")
+    return any(
+        os.path.exists(os.path.join(root, sub, "vulkan-1.dll"))
+        for sub in ("System32", "SysWOW64")
+    )
+
+
+def sycl_runtime_dlls(directory: str | os.PathLike[str]) -> list[str]:
+    """SYCL runtime DLLs shipped next to a Windows SYCL llama-server.
+
+    The win-sycl zip bundles ``sycl9.dll`` plus the oneMKL/UR/TBB
+    runtimes; a local oneAPI build may instead find them on PATH.
+    """
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return []
+    return sorted(
+        n for n in names
+        if n.lower().startswith("sycl") and n.lower().endswith(".dll")
+    )
+
+
+def sycl_runtime_ready(binary: str | None) -> bool:
+    """Can a Windows SYCL build load its runtime?"""
+    if not binary:
+        return False
+    if sycl_runtime_dlls(os.path.dirname(binary) or "."):
+        return True
+    return _dll_on_path("sycl")
+
+
+def openvino_runtime_ready(binary: str | None) -> bool:
+    """Can a Windows OpenVINO build load ``openvino.dll``?"""
+    if not binary:
+        return False
+    directory = os.path.dirname(binary) or "."
+    if os.path.exists(os.path.join(directory, "openvino.dll")):
+        return True
+    return _dll_on_path("openvino")
 
 
 def binary_backend(binary: str | None) -> str | None:
@@ -208,6 +353,10 @@ def binary_backend(binary: str | None) -> str | None:
             return "Vulkan"
         if "ggml-metal.dll" in names:
             return "Metal"
+        if "ggml-sycl.dll" in names:
+            return "SYCL"
+        if "ggml-openvino.dll" in names:
+            return "OpenVINO"
         # Pre-dynamic-backend builds: no ggml-<backend>.dll at all.
         if any(n.startswith(("cudart", "cublas", "nvrtc")) for n in names):
             return "CUDA"
@@ -231,6 +380,10 @@ def binary_backend(binary: str | None) -> str | None:
             return "CUDA"
         if "rocm" in low or "hip" in low:
             return "ROCm"
+        if "sycl" in low:
+            return "SYCL"
+        if "openvino" in low:
+            return "OpenVINO"
     out = _run(["ldd", binary])
     if not out:
         return None
@@ -270,6 +423,23 @@ def describe_gpu(spec=None) -> str:
     return " · ".join(parts)
 
 
+def _runtime_note(kind: str | None, build: str | None) -> str:
+    """Doctor suffix when a Windows GPU build cannot load its runtime."""
+    if not winproc.IS_WINDOWS or not kind:
+        return ""
+    if kind == "CUDA" and not cuda_runtime_ready(build):
+        return "  [missing cudart — will run on CPU]"
+    if kind == "ROCm" and not rocm_runtime_ready(build):
+        return "  [missing amdhip64 — will run on CPU]"
+    if kind == "Vulkan" and not vulkan_runtime_ready(build):
+        return "  [missing vulkan-1.dll — will run on CPU]"
+    if kind == "SYCL" and not sycl_runtime_ready(build):
+        return "  [missing sycl runtime — will run on CPU]"
+    if kind == "OpenVINO" and not openvino_runtime_ready(build):
+        return "  [missing openvino.dll — will run on CPU]"
+    return ""
+
+
 def run() -> str:
     """Full diagnostic report (plain text, one line per row)."""
     lines: list[str] = []
@@ -281,6 +451,10 @@ def run() -> str:
         if hw["driver"]:
             bits.append(f"driver {hw['driver']}")
         lines.append("gpu: " + " · ".join(bits))
+    elif hw.get("name"):
+        lines.append(
+            f"gpu: {hw['name']} (present, not used for LLM offload)"
+        )
     else:
         lines.append("gpu: none detected (CPU-only machine?)")
     if hw["backend"] == "CUDA":
@@ -298,8 +472,7 @@ def run() -> str:
     if state:
         kind = binary_backend(state)
         note = f"  (build: {kind})" if kind else ""
-        if winproc.IS_WINDOWS and kind == "CUDA" and not cuda_runtime_ready(state):
-            note += "  [missing cudart — will run on CPU]"
+        note += _runtime_note(kind, state)
         lines.append(f"llama-server (state bin): {state}{note}")
     else:
         lines.append("llama-server (state bin): not installed")
@@ -307,8 +480,7 @@ def run() -> str:
         for b in builds["registry"]:
             backend = binary_backend(b)
             suffix = f"  (build: {backend})" if backend else ""
-            if winproc.IS_WINDOWS and backend == "CUDA" and not cuda_runtime_ready(b):
-                suffix += "  [missing cudart — will run on CPU]"
+            suffix += _runtime_note(backend, b)
             lines.append(f"llama-server (registry): {b}{suffix}")
     else:
         lines.append("llama-server (registry): no models registered")
@@ -357,6 +529,42 @@ def hint(hw: dict[str, str | None] | None = None) -> list[str]:
             f"  fix: toki model install-llama --backend cuda --name {spec.name}"
         )
         lines.append(f"  then: toki model use {spec.name}")
+    elif winproc.IS_WINDOWS and build_kind == "ROCm" and not rocm_runtime_ready(build):
+        lines.append(
+            f"  its ROCm build is missing its HIP runtime DLLs "
+            f"(amdhip64*.dll) next to {build}."
+        )
+        lines.append(
+            f"  fix: toki model install-llama --backend rocm --name {spec.name}"
+        )
+        lines.append(f"  then: toki model use {spec.name}")
+    elif winproc.IS_WINDOWS and build_kind == "Vulkan" and not vulkan_runtime_ready(build):
+        lines.append(
+            "  its Vulkan build cannot load: vulkan-1.dll is missing "
+            "(the GPU driver provides the loader)."
+        )
+        lines.append(
+            "  fix: install or repair the AMD/Intel GPU driver, then "
+            f"toki model use {spec.name}"
+        )
+    elif winproc.IS_WINDOWS and build_kind == "SYCL" and not sycl_runtime_ready(build):
+        lines.append(
+            f"  its SYCL build is missing its runtime DLLs "
+            f"(sycl*.dll) next to {build}."
+        )
+        lines.append(
+            f"  fix: toki model install-llama --backend sycl --name {spec.name}"
+        )
+        lines.append(f"  then: toki model use {spec.name}")
+    elif (winproc.IS_WINDOWS and build_kind == "OpenVINO"
+          and not openvino_runtime_ready(build)):
+        lines.append(
+            f"  its OpenVINO build is missing openvino.dll next to {build}."
+        )
+        lines.append(
+            f"  fix: reinstall it, or use the SYCL build: "
+            f"toki model install-llama --backend sycl --name {spec.name}"
+        )
     elif build_kind in (None, "CPU"):
         lines.append(
             f"  its llama-server ({build}) is a CPU build (or unknown)."
