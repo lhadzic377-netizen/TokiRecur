@@ -68,6 +68,14 @@ gated ones (`hf auth login` first). `toki model use` starts the stack
 the registry describes and rewrites the client configs so the same
 model is selected in every client.
 
+On an NVIDIA box, `install-llama` picks the CUDA build (13.x on a
+580.65+ driver, 12.4 on 551.61–580.64) and downloads the matching
+cudart runtime archive (~400 MB) with it — the CUDA build does not load
+without those DLLs. If the driver is older than 551.61, update it
+first; the installer says so and `toki doctor` prints the verdict.
+Installing a GPU build while a model is running fails with a "stop the
+model stack" message; `toki model stop --force` then re-run.
+
 ## The launcher
 
 ```powershell

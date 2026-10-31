@@ -2678,10 +2678,26 @@ def _check_gpu_offload_binary_match(
     if not ngl or ngl <= 0:
         return True
     try:
-        from ..diagnose import binary_backend
+        from ..diagnose import binary_backend, cuda_runtime_ready
         kind = binary_backend(binary)
     except Exception:
         return True  # can't inspect; trust the user's explicit ngl
+    if (winproc.IS_WINDOWS and kind and kind.lower() == "cuda"
+            and not cuda_runtime_ready(binary)):
+        # ggml-cuda.dll loads, cannot find cudart64_*.dll, and the
+        # server falls back to CPU without failing. That is exactly the
+        # silent degradation this check exists to stop.
+        msg = (
+            f"GPU offload requested (-ngl {ngl}) but the CUDA build at "
+            f"{binary} is missing its runtime DLLs (cudart64_*.dll), so "
+            f"llama.cpp would silently run on CPU. Reinstall it with "
+            f"`toki model install-llama --backend cuda`, or pass "
+            f"TOKI_NGL=0 to run CPU mode on purpose."
+        )
+        if strict:
+            raise RuntimeError(msg)
+        click.echo(f"warning: {msg}", err=True)
+        return False
     if not kind or kind.lower() in ("cuda", "rocm", "vulkan", "metal"):
         return True
     msg = (

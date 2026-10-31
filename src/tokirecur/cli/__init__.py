@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -1660,10 +1661,16 @@ def _asset_patterns(os_name: str, arch: str) -> list[tuple[str, str]]:
     if os_name == "macos":
         return [("metal", f"macos-{arch}"), ("metal", "macos-universal")]
     if os_name == "windows":
+        # CUDA asset names move: b10289 shipped 13.3, b12020 ships
+        # 13.4. Match the 13.x family rather than one point release, so
+        # a new minor does not make install-llama silently fall through
+        # to Vulkan/CPU on an NVIDIA box. 12.4 stays explicit because
+        # it is the build for drivers below the CUDA 13 floor.
         if arch == "x64":
             return [
-                ("cuda", "win-cuda-13.3-x64"),
-                ("cuda", "win-cuda-12.4-x64"),
+                ("cuda", r"win-cuda-13\.\d+-x64\.zip$"),
+                ("cuda", r"win-cuda-12\.4-x64\.zip$"),
+                ("cuda", r"win-cuda-[\d.]+-x64\.zip$"),
                 # llama.cpp renamed the ROCm asset from win-hip-radeon-x64
                 # to win-rocm-<ver>-x64 in mid-2026; match both so old and
                 # new releases resolve to the ROCm build.
@@ -1672,8 +1679,13 @@ def _asset_patterns(os_name: str, arch: str) -> list[tuple[str, str]]:
                 ("vulkan", "win-vulkan-x64"),
                 ("cpu", "win-cpu-x64"),
             ]
-        # arm64 Windows: only CPU (and Adreno OpenCL) builds exist.
+        # arm64 Windows: CPU, Adreno OpenCL, Vulkan and (since 2026)
+        # CUDA 13.x builds exist.
         return [
+            ("cuda", r"win-cuda-13\.\d+-arm64\.zip$"),
+            ("cuda", r"win-cuda-12\.4-arm64\.zip$"),
+            ("cuda", r"win-cuda-[\d.]+-arm64\.zip$"),
+            ("vulkan", "win-vulkan-arm64"),
             ("vulkan", "win-opencl-adreno-arm64"),
             ("cpu", "win-cpu-arm64"),
         ]
@@ -1745,7 +1757,16 @@ def _safe_copy_replace(src: Path, dst: Path) -> None:
             # owning pid has exited.
             shutil.copy2(src, dst)
             return
-    shutil.copy2(src, dst)
+    try:
+        shutil.copy2(src, dst)
+    except PermissionError as exc:
+        if winproc.IS_WINDOWS:
+            raise click.ClickException(
+                f"cannot replace {dst}: a running process has it open. "
+                f"Stop the model stack first (`toki model stop --force`), "
+                f"then re-run the install."
+            ) from exc
+        raise
 
 
 def _sweep_stale_backups(bin_dir: Path, exe_name: str) -> None:
@@ -1766,42 +1787,65 @@ def _sweep_stale_backups(bin_dir: Path, exe_name: str) -> None:
             except OSError:
                 pass
             continue
+        # os.kill(pid, 0) is TerminateProcess on Windows, so a sweep
+        # would kill a live process whose pid was reused in a stale
+        # name. Probe through winproc instead.
+        if winproc.pid_alive(pid):
+            continue
         try:
-            os.kill(pid, 0)  # signal 0 → check alive, never delivers
-        except (ProcessLookupError, OSError):
-            # Dead (or permission denied — safe to ignore, leave it).
-            try:
-                stale.unlink()
-            except OSError:
-                pass
+            stale.unlink()
+        except OSError:
+            pass
 
 
-# Runtime libs that ONLY belong to GPU builds. When a CPU build is
-# installed they must be pruned from the bin dir — otherwise
-# ``binary_backend`` / ``toki doctor`` still report "Vulkan" from a
-# stale .so and the CPU binary itself may try to dlopen one (the
-# Vulkan runtime on an iGPU box is what syncs per-token and tanked
-# generation to 0.78 t/s).
-_GPU_RUNTIME_LIBS = (
-    "libggml-vulkan.so", "libggml-cuda.so", "libggml-rocm.so",
-    "libggml-metal.so", "ggml-vulkan.dll", "ggml-cuda.dll",
-    "ggml-rocm.dll", "ggml-metal.dll",
-)
+# Files that belong to exactly one GPU backend. Installing a backend
+# must remove the others:
+#
+# * llama.cpp's dynamic loader loads every ``ggml-<backend>`` module it
+#   finds next to the executable, so a stale ggml-vulkan.dll on a CUDA
+#   box can win the device pick (and vice versa).
+# * a stale cudart64_*.dll makes a Vulkan/CPU build look like CUDA to
+#   ``binary_backend`` and the doctor, and lets ``-ngl 99`` pass the
+#   launch check on a binary that will never use the GPU.
+#
+# Note the Windows ROCm build ships ``ggml-hip.dll`` (not ggml-rocm.dll)
+# plus versioned ``amdhip64_<ver>.dll`` and ``amd_comgr.dll``.
+_GPU_BACKEND_FILES: dict[str, tuple[str, ...]] = {
+    "cuda": (
+        "ggml-cuda.dll", "libggml-cuda.so",
+        "cudart64_*.dll", "cublas64_*.dll", "cublaslt64_*.dll",
+        "nvrtc64_*.dll",
+    ),
+    "vulkan": (
+        "ggml-vulkan.dll", "libggml-vulkan.so", "vulkan-1.dll",
+    ),
+    "rocm": (
+        "ggml-rocm.dll", "ggml-hip.dll", "libggml-rocm.so",
+        "amdhip64*.dll", "amd_comgr*.dll", "rocm_kpack*.dll",
+        "hipblas*.dll", "rocblas*.dll",
+    ),
+    "metal": (
+        "ggml-metal.dll", "libggml-metal.so",
+    ),
+}
 
 
 def _prune_foreign_gpu_libs(bin_dir: Path, backend: str) -> None:
-    """Remove GPU runtime libs (and their .stale.* backups) that don't
-    belong to ``backend``.
+    """Remove GPU runtime files that don't belong to ``backend``.
 
-    Installing the CPU build over a previous Vulkan build would
-    otherwise leave ``libggml-vulkan.so`` behind; the running
-    llama-server (CPU) doesn't load it, but every backend probe does
-    and the next Vulkan install would resurrect it. A CPU box must
-    end up with exactly zero GPU libs.
+    Installing CUDA over a previous Vulkan build would otherwise leave
+    ``ggml-vulkan.dll`` behind; llama.cpp loads it, enumerates the
+    iGPU, and the model can run on the wrong device. Installing CPU
+    over CUDA leaves cudart DLLs, which make every backend probe report
+    CUDA for a CPU binary. A CPU box must end up with exactly zero GPU
+    libs.
     """
-    if backend == "cpu":
-        for pat in _GPU_RUNTIME_LIBS:
-            for lib in list(bin_dir.glob(pat)) + list(bin_dir.glob(pat + ".stale.*")):
+    for other, patterns in _GPU_BACKEND_FILES.items():
+        if other == backend:
+            continue
+        for pat in patterns:
+            for lib in (list(bin_dir.glob(pat))
+                        + list(bin_dir.glob(pat + ".stale.*"))):
                 try:
                     lib.unlink()
                 except OSError:
@@ -1956,8 +2000,14 @@ def _pick_asset(
     best: tuple[tuple[int, int], dict, str] | None = None
     for a in assets:
         low = a.get("name", "").lower()
+        if low.startswith(("cudart-", "cuda-cublas-")):
+            # Runtime-only archives: they never contain llama-server.exe.
+            continue
         for i, (backend, frag) in enumerate(patterns):
-            if frag in low:
+            # Fragments are regexes: Windows CUDA needs to pin both the
+            # CUDA minor and the architecture (the same 13.4 name exists
+            # for x64 and arm64).
+            if re.search(frag, low):
                 # Prefer the archive that actually contains llama-server:
                 # CUDA/ROCm releases also ship runtime archives named
                 # cudart-llama-bin-* / cuda-cublas-llama-bin-* that match
@@ -1990,16 +2040,17 @@ def _find_local_llama_server() -> str | None:
     — the registry, ``binary_backend`` and the warn checks all see the
     same path.
     """
+    exe = "llama-server.exe" if winproc.IS_WINDOWS else "llama-server"
     candidates: list[Path] = []
     bld = os.environ.get("LLAMA_CPP_BLD")
     if bld:
-        candidates.append(Path(bld) / "bin" / "llama-server")
+        candidates.append(Path(bld) / "bin" / exe)
     home = Path.home()
     candidates.extend([
-        home / "llama.cpp" / "build-tr" / "bin" / "llama-server",
-        home / "llama.cpp" / "build" / "bin" / "llama-server",
-        Path("/usr/local/bin/llama-server"),
-        Path("/opt/llama.cpp/build/bin/llama-server"),
+        home / "llama.cpp" / "build-tr" / "bin" / exe,
+        home / "llama.cpp" / "build" / "bin" / exe,
+        Path("/usr/local/bin") / exe,
+        Path("/opt/llama.cpp/build/bin") / exe,
     ])
     for c in candidates:
         try:
@@ -2078,16 +2129,62 @@ def _install_from_local(
 def _cuda_runtime_archive_name(main_asset_name: str) -> str | None:
     """Name of the cudart runtime archive paired with a CUDA main asset.
 
-    llama.cpp's CUDA 13.x Windows builds split cudart/cublas out of the
-    main archive into a separate `cudart-llama-bin-win-cuda-13.3-x64.zip`
-    that must be unpacked alongside ``llama-server.exe`` (the 12.4 build
-    statically links cudart, so it doesn't need this).
+    Every llama.cpp Windows CUDA build (12.4 and 13.x) ships cudart,
+    cublas and cublasLt in a separate
+    ``cudart-llama-bin-win-cuda-<ver>-<arch>.zip``. Without those DLLs
+    ggml-cuda.dll fails to load and the server silently runs on CPU.
+    The runtime archive carries no build number, only the CUDA version
+    and the architecture.
     """
     import re
-    m = re.search(r"win-cuda-(\d+\.\d+)-x64", main_asset_name)
+    m = re.search(r"win-cuda-(\d+\.\d+)-(x64|arm64)", main_asset_name)
     if not m:
         return None
-    return f"cudart-llama-bin-win-cuda-{m.group(1)}-x64.zip"
+    return f"cudart-llama-bin-win-cuda-{m.group(1)}-{m.group(2)}.zip"
+
+
+def _prefer_cuda12(
+    patterns: list[tuple[str, str]],
+) -> list[tuple[str, str]]:
+    """Move the CUDA 12.4 asset to the front for pre-CUDA-13 drivers."""
+    cuda12 = [p for p in patterns if "win-cuda-12" in p[1]]
+    if not cuda12:
+        return patterns
+    return cuda12 + [p for p in patterns if p not in cuda12]
+
+
+def _find_cuda_runtime_asset(
+    assets: list[dict], main_asset_name: str,
+) -> dict | None:
+    """The cudart archive that belongs with a CUDA main asset.
+
+    Exact name first (the release convention). Then any cudart archive
+    for the same CUDA version and architecture, then any for the same
+    architecture — so a rename or a build-numbered variant does not
+    leave the install without a runtime. Returns None when the release
+    predates the split (the main archive then carries the DLLs).
+    """
+    import re
+    exact_name = _cuda_runtime_archive_name(main_asset_name)
+    if exact_name:
+        exact = next(
+            (a for a in assets if a.get("name") == exact_name), None,
+        )
+        if exact:
+            return exact
+    m = re.search(r"win-cuda-(\d+\.\d+)-(x64|arm64)", main_asset_name)
+    if not m:
+        return None
+    ver, arch = m.group(1), m.group(2)
+    for a in assets:
+        name = a.get("name", "")
+        if name.startswith("cudart-") and f"win-cuda-{ver}-{arch}" in name:
+            return a
+    for a in assets:
+        name = a.get("name", "")
+        if name.startswith("cudart-") and name.endswith(f"-{arch}.zip"):
+            return a
+    return None
 
 
 def _download_and_unpack_zip(api, asset: dict, bin_dir: Path,
@@ -2117,10 +2214,9 @@ def _download_and_unpack_zip(api, asset: dict, bin_dir: Path,
                     tf.extractall(tmp_dir, filter="data")
                 except TypeError:
                     tf.extractall(tmp_dir)
-        # Clear stale backups before writing the sidecar files; same
-        # rationale as in install_llama — a previous interrupted install
-        # may have left .stale.<pid> orphans to clean up.
-        _sweep_stale_backups(bin_dir, Path(asset["name"]).stem)
+        # The archive may nest its files under a top-level folder;
+        # strip exactly one level so llama-server.exe and the runtime
+        # DLLs land directly in bin_dir.
         for src in tmp_dir.rglob("*"):
             if not src.is_file() or src == zip_path:
                 continue
@@ -2309,11 +2405,9 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
                 err=True,
             )
         if prefer_cuda12:
-            # Drivers below the 12.8/13.x floor run the CUDA 12.4 build
+            # Drivers below the CUDA 13 floor run the CUDA 12.4 build
             # fine; prefer that asset so installs don't fail at load time.
-            cuda12 = [p for p in patterns if "12.4" in p[1]]
-            if cuda12:
-                patterns = cuda12 + [p for p in patterns if p not in cuda12]
+            patterns = _prefer_cuda12(patterns)
 
     state_dir = Path(os.environ.get(
         "TOKI_STATE_DIR", str(Path.home() / ".local" / "state" / "tokirecur"),
@@ -2551,34 +2645,80 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
         _sweep_stale_backups(bin_dir, exe_name)
         _safe_copy_replace(src, dst)
         for side in src.parent.iterdir():
-            if side.is_file() and side != src:
+            # Flat archives (Windows) put the downloaded .zip in the
+            # same directory as llama-server.exe; never install it.
+            if side.is_file() and side not in (src, zip_path):
                 _safe_copy_replace(side, bin_dir / side.name)
         # A CPU install must not leave GPU runtime libs behind: stale
         # .so files mislead backend probes and confuse the launcher.
         _prune_foreign_gpu_libs(bin_dir, backend)
 
-        # CUDA 13.x ships cudart/cublas as a separate runtime archive
-        # (the main archive has no cudart64_*.dll inside ggml-cuda.dll);
-        # without it llama-server can't load CUDA and falls back to CPU.
+        # Every Windows CUDA build ships cudart/cublas as a separate
+        # runtime archive (the main archive's ggml-cuda.dll links
+        # against them); without it llama-server can't load CUDA and
+        # falls back to CPU.
         if matched_backend == "cuda":
-            cudart_name = _cuda_runtime_archive_name(asset["name"])
-            if cudart_name:
-                cudart = next(
-                    (a for a in assets if a.get("name") == cudart_name),
-                    None,
+            cudart = _find_cuda_runtime_asset(assets, asset["name"])
+            if cudart is None:
+                click.echo(
+                    "note: this release has no separate cudart archive; "
+                    "checking the main archive for the runtime DLLs…",
+                    err=True,
                 )
-                if cudart:
-                    click.echo(
-                        f"downloading {cudart['name']} "
-                        f"({cudart['size'] / 1048576:.0f} MB)..."
-                    )
-                    _download_and_unpack_zip(
-                        api, cudart, bin_dir,
-                        progress_prefix="cudart: ",
-                    )
+            else:
+                click.echo(
+                    f"downloading {cudart['name']} "
+                    f"({cudart['size'] / 1048576:.0f} MB)..."
+                )
+                _download_and_unpack_zip(
+                    api, cudart, bin_dir,
+                    progress_prefix="cudart: ",
+                )
     if os_name != "windows":
         dst.chmod(dst.stat().st_mode | 0o111)
     click.echo(f"installed: {dst}")
+
+    # A CUDA build without its runtime DLLs loads ggml-cuda.dll, fails,
+    # and silently runs on CPU. Check the runtime explicitly and prove
+    # the binary enumerates a CUDA device before calling it good.
+    if matched_backend == "cuda" and os_name == "windows":
+        from ..diagnose import cuda_runtime_dlls
+
+        runtime = cuda_runtime_dlls(bin_dir)
+        if not runtime:
+            raise click.ClickException(
+                f"the CUDA build is installed but its runtime DLLs "
+                f"(cudart64_*.dll, cublas64_*.dll) are missing from "
+                f"{bin_dir} — llama-server would silently fall back to "
+                f"CPU. Re-run `toki model install-llama --backend cuda`; "
+                f"if this release has no cudart archive, install the "
+                f"Vulkan build instead (--backend vulkan)."
+            )
+        click.echo(f"verify: CUDA runtime {', '.join(runtime)}")
+        try:
+            probe = subprocess.run(
+                [str(dst), "--list-devices"],
+                capture_output=True, text=True, timeout=60,
+                encoding="utf-8", errors="replace",
+            )
+            text = (probe.stdout or "") + "\n" + (probe.stderr or "")
+            device = next(
+                (ln.strip() for ln in text.splitlines() if "CUDA" in ln), "",
+            )
+            if device:
+                click.echo(f"verify: {device}")
+            else:
+                click.echo(
+                    "warning: the DLLs are in place but the binary did not "
+                    "enumerate a CUDA device. Usually the NVIDIA driver is "
+                    "older than this build needs — run `toki doctor` for "
+                    "the driver verdict.",
+                    err=True,
+                )
+        except (OSError, subprocess.SubprocessError) as e:
+            click.echo(
+                f"warning: could not list CUDA devices: {e}", err=True,
+            )
 
     # Post-install verification: what backend actually landed? A CPU
     # box must have zero GPU libs; a GPU box must have its libs. This

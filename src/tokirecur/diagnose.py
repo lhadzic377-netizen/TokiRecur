@@ -18,15 +18,16 @@ import shutil
 import subprocess
 import sys
 import time
+from pathlib import Path
 
-from . import ctl
+from . import ctl, winproc
 
-# Windows NVIDIA driver floors for llama.cpp CUDA builds: 12.4 needs
-# 551.61+, and 12.8/13.x-era builds need 570+ (13.x officially wants
-# ~590-610, but NVIDIA stopped publishing Windows minimums for 13.0+,
-# so 570 is the conservative cut for preferring the 12.4 asset).
+# Windows NVIDIA driver floors for llama.cpp CUDA builds. CUDA 12.4
+# needs 551.61+. CUDA 13.x needs 580.65 at minimum (minor-version
+# compatibility: a 13.4 build loads on the 13.0 floor); below that,
+# install-llama prefers the 12.4 asset so the build actually loads.
 CUDA_12_WINDOWS_DRIVER = (551, 61)
-CUDA_13_WINDOWS_DRIVER = (570, 0)
+CUDA_13_WINDOWS_DRIVER = (580, 65)
 
 
 def _run(argv: list[str], timeout: float = 5.0) -> str | None:
@@ -123,6 +124,53 @@ def installed_build() -> dict[str, str | None]:
     return {"state_bin": state_bin, "registry": sorted(set(registry)) or None}
 
 
+def cuda_runtime_dlls(directory: str | os.PathLike[str]) -> list[str]:
+    """cudart/cublas DLLs next to a Windows llama-server, sorted.
+
+    ``ggml-cuda.dll`` links against these at load time. Without them the
+    backend fails to load and llama.cpp silently falls back to CPU, so
+    this is the difference between "CUDA build" and "CUDA works".
+    """
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return []
+    return sorted(
+        n for n in names
+        if n.lower().startswith(("cudart64_", "cublas64_", "cublaslt64_"))
+    )
+
+
+def _cudart_on_path() -> bool:
+    """cudart DLLs supplied by a CUDA toolkit install on PATH.
+
+    A locally-built llama-server links against the toolkit's cudart
+    rather than a copy next to the exe; Windows resolves it through
+    the DLL search path.
+    """
+    if not winproc.IS_WINDOWS:
+        return False
+    for entry in os.environ.get("PATH", "").split(os.pathsep):
+        entry = entry.strip('"')
+        if not entry:
+            continue
+        try:
+            if any(Path(entry).glob("cudart64_*.dll")):
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def cuda_runtime_ready(binary: str | None) -> bool:
+    """Can a CUDA build find cudart at load time?"""
+    if not binary:
+        return False
+    if cuda_runtime_dlls(os.path.dirname(binary) or "."):
+        return True
+    return _cudart_on_path()
+
+
 def binary_backend(binary: str | None) -> str | None:
     """Infer a llama.cpp build's backend from its linked libraries.
 
@@ -139,16 +187,33 @@ def binary_backend(binary: str | None) -> str | None:
         return "MLX"
     if not os.path.exists(binary):
         return None
-    if os.name == "nt":
+    if winproc.IS_WINDOWS:
         try:
-            dlls = " ".join(os.listdir(os.path.dirname(binary) or ".")).lower()
+            names = {
+                n.lower()
+                for n in os.listdir(os.path.dirname(binary) or ".")
+            }
         except OSError:
             return None
-        if any(x in dlls for x in ("cudart", "cublas", "nvrtc")):
+        # The backend module is the authoritative signal: current
+        # release builds ship ggml-<backend>.dll (the Windows ROCm
+        # build is ggml-hip.dll). Runtime DLLs alone are ambiguous — a
+        # stale cudart64_*.dll next to a Vulkan build must not read as
+        # CUDA, or -ngl 99 passes on a binary that can never use it.
+        if "ggml-cuda.dll" in names:
             return "CUDA"
-        if "amdhip" in dlls or "hipblas" in dlls:
+        if "ggml-hip.dll" in names or "ggml-rocm.dll" in names:
             return "ROCm"
-        if "vulkan-1" in dlls:
+        if "ggml-vulkan.dll" in names:
+            return "Vulkan"
+        if "ggml-metal.dll" in names:
+            return "Metal"
+        # Pre-dynamic-backend builds: no ggml-<backend>.dll at all.
+        if any(n.startswith(("cudart", "cublas", "nvrtc")) for n in names):
+            return "CUDA"
+        if any(n.startswith(("amdhip", "hipblas", "rocblas")) for n in names):
+            return "ROCm"
+        if "vulkan-1.dll" in names:
             return "Vulkan"
         return "CPU"
     # Ask the binary what it can see before trusting its link table: a
@@ -229,11 +294,21 @@ def run() -> str:
             )
 
     builds = installed_build()
-    lines.append(f"llama-server (state bin): {builds['state_bin'] or 'not installed'}")
+    state = builds["state_bin"]
+    if state:
+        kind = binary_backend(state)
+        note = f"  (build: {kind})" if kind else ""
+        if winproc.IS_WINDOWS and kind == "CUDA" and not cuda_runtime_ready(state):
+            note += "  [missing cudart — will run on CPU]"
+        lines.append(f"llama-server (state bin): {state}{note}")
+    else:
+        lines.append("llama-server (state bin): not installed")
     if builds["registry"]:
         for b in builds["registry"]:
             backend = binary_backend(b)
             suffix = f"  (build: {backend})" if backend else ""
+            if winproc.IS_WINDOWS and backend == "CUDA" and not cuda_runtime_ready(b):
+                suffix += "  [missing cudart — will run on CPU]"
             lines.append(f"llama-server (registry): {b}{suffix}")
     else:
         lines.append("llama-server (registry): no models registered")
@@ -273,7 +348,16 @@ def hint(hw: dict[str, str | None] | None = None) -> list[str]:
         "GPU offload in llama.log.",
     ]
     reason = gpu_fallback_reason(spec)
-    if build_kind in (None, "CPU"):
+    if winproc.IS_WINDOWS and build_kind == "CUDA" and not cuda_runtime_ready(build):
+        lines.append(
+            f"  its CUDA build is missing its runtime DLLs "
+            f"(cudart64_*.dll) next to {build}."
+        )
+        lines.append(
+            f"  fix: toki model install-llama --backend cuda --name {spec.name}"
+        )
+        lines.append(f"  then: toki model use {spec.name}")
+    elif build_kind in (None, "CPU"):
         lines.append(
             f"  its llama-server ({build}) is a CPU build (or unknown)."
         )

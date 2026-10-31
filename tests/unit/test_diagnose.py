@@ -138,7 +138,8 @@ def test_driver_version_none_on_query_failure(monkeypatch):
         ((551, 60), (True, True)),
         ((551, 61), (False, True)),
         ((569, 99), (False, True)),
-        ((570, 0), (False, False)),
+        ((580, 64), (False, True)),
+        ((580, 65), (False, False)),
         ((610, 0), (False, False)),
         (None, (False, False)),
     ],
@@ -195,16 +196,61 @@ def test_hint_gpu_used_returns_empty(monkeypatch, iso_env):
 
 
 def test_binary_backend_windows_cuda(monkeypatch, tmp_path):
-    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setattr(diagnose.winproc, "IS_WINDOWS", True)
     exe = tmp_path / "llama-server.exe"
     exe.write_bytes(b"x")
+    (tmp_path / "ggml-cuda.dll").write_bytes(b"x")
     (tmp_path / "cudart64_13.dll").write_bytes(b"x")
     (tmp_path / "cublas64_13.dll").write_bytes(b"x")
     assert diagnose.binary_backend(str(exe)) == "CUDA"
+    assert diagnose.cuda_runtime_ready(str(exe))
+
+
+def test_binary_backend_windows_cuda_without_runtime(monkeypatch, tmp_path):
+    """The backend module is still CUDA, but the runtime is not ready —
+    the launch check must refuse -ngl 99 instead of silently going CPU."""
+    monkeypatch.setattr(diagnose.winproc, "IS_WINDOWS", True)
+    exe = tmp_path / "llama-server.exe"
+    exe.write_bytes(b"x")
+    (tmp_path / "ggml-cuda.dll").write_bytes(b"x")
+    assert diagnose.binary_backend(str(exe)) == "CUDA"
+    assert not diagnose.cuda_runtime_ready(str(exe))
+
+
+def test_cuda_runtime_ready_accepts_toolkit_on_path(monkeypatch, tmp_path):
+    """A locally-built CUDA server finds cudart through the toolkit PATH."""
+    monkeypatch.setattr(diagnose.winproc, "IS_WINDOWS", True)
+    exe = tmp_path / "llama-server.exe"
+    exe.write_bytes(b"x")
+    toolkit = tmp_path / "cuda" / "bin"
+    toolkit.mkdir(parents=True)
+    (toolkit / "cudart64_13.dll").write_bytes(b"x")
+    monkeypatch.setenv("PATH", str(toolkit))
+    assert diagnose.cuda_runtime_ready(str(exe))
+
+
+def test_binary_backend_windows_stale_cudart_does_not_win(monkeypatch, tmp_path):
+    """A leftover cudart DLL next to a Vulkan build must not read as CUDA."""
+    monkeypatch.setattr(diagnose.winproc, "IS_WINDOWS", True)
+    exe = tmp_path / "llama-server.exe"
+    exe.write_bytes(b"x")
+    (tmp_path / "ggml-vulkan.dll").write_bytes(b"x")
+    (tmp_path / "cudart64_12.dll").write_bytes(b"x")
+    assert diagnose.binary_backend(str(exe)) == "Vulkan"
+
+
+def test_binary_backend_windows_hip_is_rocm(monkeypatch, tmp_path):
+    """The Windows ROCm release ships ggml-hip.dll, not ggml-rocm.dll."""
+    monkeypatch.setattr(diagnose.winproc, "IS_WINDOWS", True)
+    exe = tmp_path / "llama-server.exe"
+    exe.write_bytes(b"x")
+    (tmp_path / "ggml-hip.dll").write_bytes(b"x")
+    (tmp_path / "amdhip64_7.dll").write_bytes(b"x")
+    assert diagnose.binary_backend(str(exe)) == "ROCm"
 
 
 def test_binary_backend_windows_cpu(monkeypatch, tmp_path):
-    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setattr(diagnose.winproc, "IS_WINDOWS", True)
     exe = tmp_path / "llama-server.exe"
     exe.write_bytes(b"x")
     assert diagnose.binary_backend(str(exe)) == "CPU"
@@ -260,6 +306,21 @@ def test_hint_gpu_build_advises_ngl_check(monkeypatch, iso_env):
     lines = diagnose.hint()
     assert any("TOKI_NGL" in line for line in lines)
     assert not any("install-llama" in line for line in lines)
+
+
+def test_hint_cuda_missing_runtime(monkeypatch, iso_env):
+    spec = _spec(iso_env)
+    monkeypatch.setattr(diagnose, "_active_spec", lambda: spec)
+    monkeypatch.setattr(diagnose, "gpu_hardware", lambda: {
+        "backend": "CUDA", "name": "GTX 1650", "vram": None, "driver": None,
+    })
+    monkeypatch.setattr(ctl, "_resolve_binary", lambda spec: "/tmp/llama-server")
+    monkeypatch.setattr(diagnose, "binary_backend", lambda b: "CUDA")
+    monkeypatch.setattr(diagnose.winproc, "IS_WINDOWS", True)
+    monkeypatch.setattr(diagnose, "cuda_runtime_ready", lambda b: False)
+    lines = diagnose.hint()
+    assert any("cudart64" in line for line in lines)
+    assert any("install-llama --backend cuda" in line for line in lines)
 
 
 def test_run_includes_sections(monkeypatch, iso_env):

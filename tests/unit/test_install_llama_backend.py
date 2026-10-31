@@ -138,6 +138,16 @@ def test_pick_asset_skips_cudart_runtime_archives():
     assert asset["name"] == "llama-b10311-bin-win-vulkan-x64.zip"
 
 
+def test_pick_asset_never_picks_runtime_archive_alone():
+    """A release with only the cudart runtime archive has no server."""
+    assets = [
+        {"name": "cudart-llama-bin-win-cuda-13.4-x64.zip", "size": 1},
+    ]
+    asset, backend = _pick_asset(assets, _asset_patterns("windows", "x64"))
+    assert asset is None
+    assert backend is None
+
+
 def test_rocm_env_defaults():
     env = _rocm_env(None)
     assert env == {"GGML_CUDA_ENABLE_UNIFIED_MEMORY": "1"}
@@ -268,8 +278,10 @@ def test_detect_backend_windows_non_intel_vulkan(monkeypatch):
 @pytest.mark.parametrize(
     "main,cudart",
     [
-        ("llama-b10326-bin-win-cuda-13.3-x64.zip",
-         "cudart-llama-bin-win-cuda-13.3-x64.zip"),
+        ("llama-b12020-bin-win-cuda-13.4-x64.zip",
+         "cudart-llama-bin-win-cuda-13.4-x64.zip"),
+        ("llama-b12020-bin-win-cuda-13.4-arm64.zip",
+         "cudart-llama-bin-win-cuda-13.4-arm64.zip"),
         ("llama-b10326-bin-win-cuda-12.4-x64.zip",
          "cudart-llama-bin-win-cuda-12.4-x64.zip"),
         ("llama-b10326-bin-ubuntu-rocm-7.2-x64.tar.gz", None),
@@ -281,17 +293,157 @@ def test_cuda_runtime_archive_name(main, cudart):
     assert _cuda_runtime_archive_name(main) == cudart
 
 
-def test_install_pulls_cudart_runtime_for_cuda_13_3(tmp_path, monkeypatch):
-    """CUDA 13.x main archives don't bundle cudart64_13.dll; install-llama
-    must download the paired cudart-llama-bin runtime archive too, otherwise
-    llama-server can't load CUDA and falls back to CPU."""
+def test_find_cuda_runtime_asset_exact_and_fallback():
+    from tokirecur.cli import _find_cuda_runtime_asset
+
+    main = "llama-b12020-bin-win-cuda-13.4-x64.zip"
+    assets = [
+        {"name": main},
+        {"name": "cudart-llama-bin-win-cuda-13.4-x64.zip"},
+    ]
+    got = _find_cuda_runtime_asset(assets, main)
+    assert got["name"] == "cudart-llama-bin-win-cuda-13.4-x64.zip"
+
+    # Renamed (build-numbered) runtime archive: same version + arch wins.
+    assets[1]["name"] = "cudart-llama-b12020-bin-win-cuda-13.4-x64.zip"
+    got = _find_cuda_runtime_asset(assets, main)
+    assert got["name"].endswith("win-cuda-13.4-x64.zip")
+
+    # Releases that predate the split have no runtime archive.
+    assert _find_cuda_runtime_asset(assets[:1], main) is None
+
+
+def test_pick_asset_current_cuda_release_names():
+    """b12020 ships cuda-13.4; the old hardcoded 13.3 fragment made
+    install-llama miss CUDA entirely and fall back to Vulkan/CPU."""
+    assets = [
+        {"name": "cudart-llama-bin-win-cuda-13.4-x64.zip", "size": 1},
+        {"name": "llama-b12020-bin-win-cuda-12.4-x64.zip", "size": 1},
+        {"name": "llama-b12020-bin-win-cuda-13.4-x64.zip", "size": 1},
+        {"name": "llama-b12020-bin-win-vulkan-x64.zip", "size": 1},
+        {"name": "llama-b12020-bin-win-cpu-x64.zip", "size": 1},
+    ]
+    asset, backend = _pick_asset(assets, _asset_patterns("windows", "x64"))
+    assert backend == "cuda"
+    assert asset["name"] == "llama-b12020-bin-win-cuda-13.4-x64.zip"
+
+
+def test_pick_asset_windows_arch_is_not_crossed():
+    """The same CUDA name exists for x64 and arm64; never cross them."""
+    assets = [
+        {"name": "llama-b12020-bin-win-cuda-13.4-arm64.zip", "size": 1},
+        {"name": "llama-b12020-bin-win-cuda-13.4-x64.zip", "size": 1},
+    ]
+    asset, _ = _pick_asset(assets, _asset_patterns("windows", "x64"))
+    assert asset["name"].endswith("-x64.zip")
+    asset, _ = _pick_asset(assets, _asset_patterns("windows", "arm64"))
+    assert asset["name"].endswith("-arm64.zip")
+
+
+def test_prefer_cuda12_for_old_driver():
+    from tokirecur.cli import _prefer_cuda12
+    assets = [
+        {"name": "llama-b12020-bin-win-cuda-13.4-x64.zip", "size": 1},
+        {"name": "llama-b12020-bin-win-cuda-12.4-x64.zip", "size": 1},
+    ]
+    patterns = _prefer_cuda12(_asset_patterns("windows", "x64"))
+    asset, backend = _pick_asset(assets, patterns)
+    assert backend == "cuda"
+    assert asset["name"].endswith("cuda-12.4-x64.zip")
+
+
+def test_pick_asset_future_cuda_minor_matches():
+    assets = [
+        {"name": "llama-b99999-bin-win-cuda-14.1-x64.zip", "size": 1},
+    ]
+    asset, backend = _pick_asset(assets, _asset_patterns("windows", "x64"))
+    assert backend == "cuda"
+    assert asset["name"].endswith("cuda-14.1-x64.zip")
+
+
+def test_prune_foreign_gpu_libs_cuda(tmp_path):
+    from tokirecur.cli import _prune_foreign_gpu_libs
+    for name in (
+        "ggml-cuda.dll", "cudart64_13.dll", "cublas64_13.dll",
+        "ggml-vulkan.dll", "ggml-hip.dll", "amdhip64_7.dll",
+        "ggml-cpu-x64.dll", "llama-server.exe",
+    ):
+        (tmp_path / name).write_bytes(b"x")
+    _prune_foreign_gpu_libs(tmp_path, "cuda")
+    left = {p.name for p in tmp_path.iterdir()}
+    assert left == {
+        "ggml-cuda.dll", "cudart64_13.dll", "cublas64_13.dll",
+        "ggml-cpu-x64.dll", "llama-server.exe",
+    }
+
+
+def test_prune_foreign_gpu_libs_vulkan_removes_cudart(tmp_path):
+    from tokirecur.cli import _prune_foreign_gpu_libs
+    for name in (
+        "ggml-vulkan.dll", "ggml-cuda.dll", "cudart64_13.dll",
+        "cublas64_13.dll", "ggml-cpu-x64.dll",
+    ):
+        (tmp_path / name).write_bytes(b"x")
+    _prune_foreign_gpu_libs(tmp_path, "vulkan")
+    left = {p.name for p in tmp_path.iterdir()}
+    assert left == {"ggml-vulkan.dll", "ggml-cpu-x64.dll"}
+
+
+def test_prune_foreign_gpu_libs_cpu_removes_all(tmp_path):
+    from tokirecur.cli import _prune_foreign_gpu_libs
+    for name in (
+        "ggml-cuda.dll", "cudart64_13.dll", "ggml-vulkan.dll",
+        "ggml-hip.dll", "amdhip64_7.dll", "ggml-cpu-x64.dll",
+    ):
+        (tmp_path / name).write_bytes(b"x")
+    _prune_foreign_gpu_libs(tmp_path, "cpu")
+    left = {p.name for p in tmp_path.iterdir()}
+    assert left == {"ggml-cpu-x64.dll"}
+
+
+def test_install_pulls_cudart_runtime_for_cuda_13_4(tmp_path, monkeypatch):
+    """Full CUDA install flow: main archive + cudart runtime, stale Vulkan
+    DLL pruned, runtime verified, and the downloaded zip not installed."""
+    import io
+    import types
+    import zipfile
+
     from tokirecur import cli as cli_mod
     from tokirecur.cli import install_llama
 
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
+    (bin_dir / "ggml-vulkan.dll").write_bytes(b"old")
+    (bin_dir / "llama-server.exe").write_bytes(b"old")
 
-    downloads: list[str] = []
+    def make_zip(files):
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            for name, data in files.items():
+                zf.writestr(name, data)
+        return buf.getvalue()
+
+    main_zip = make_zip({
+        "llama-server.exe": b"MZ",
+        "ggml-cuda.dll": b"cuda",
+        "ggml-base.dll": b"base",
+    })
+    cudart_zip = make_zip({
+        "cudart64_13.dll": b"rt",
+        "cublas64_13.dll": b"blas",
+    })
+
+    RELEASE = {
+        "tag_name": "b12020",
+        "assets": [
+            {"name": "llama-b12020-bin-win-cuda-13.4-x64.zip",
+             "size": len(main_zip),
+             "browser_download_url": "https://example.test/main.zip"},
+            {"name": "cudart-llama-bin-win-cuda-13.4-x64.zip",
+             "size": len(cudart_zip),
+             "browser_download_url": "https://example.test/cudart.zip"},
+        ],
+    }
 
     class FakeClient:
         def __init__(self, *a, **kw): pass
@@ -300,70 +452,54 @@ def test_install_pulls_cudart_runtime_for_cuda_13_3(tmp_path, monkeypatch):
 
         def get(self, url, headers=None):
             class _Resp:
-                status_code = 200
                 def json(self_inner): return RELEASE
                 def raise_for_status(self_inner): pass
             return _Resp()
 
-        def stream(self, method, url, headers=None):
-            downloads.append(url)
-            # Build a real zip in memory containing llama-server.exe so
-            # the main archive extraction succeeds and the cudart hook runs.
-            import io as _io
-            import zipfile as _zipfile
-            buf = _io.BytesIO()
-            with _zipfile.ZipFile(buf, "w") as zf:
-                zf.writestr("llama-server.exe", b"MZ")
-            data = buf.getvalue()
+    downloads: list[str] = []
 
-            class _Resp:
-                def raise_for_status(self_inner): pass
-                def __enter__(self_inner): return self_inner
-                def __exit__(self_inner, *a): return False
-                def iter_bytes(self_inner, chunk):
-                    yield data
-            return _Resp()
+    def fake_download(api, url, dest, label=""):
+        downloads.append(url)
+        Path(dest).write_bytes(
+            main_zip if url.endswith("main.zip") else cudart_zip
+        )
 
-    RELEASE = {
-        "tag_name": "b10326",
-        "assets": [
-            {"name": "llama-b10326-bin-win-cuda-13.3-x64.zip",
-             "size": 146_540_671,
-             "browser_download_url": "https://example.test/main.zip"},
-            {"name": "cudart-llama-bin-win-cuda-13.3-x64.zip",
-             "size": 390_970_417,
-             "browser_download_url": "https://example.test/cudart.zip"},
-        ],
-    }
+    def fake_run(argv, **kw):
+        if "--list-devices" in argv:
+            return types.SimpleNamespace(
+                returncode=0,
+                stdout="Available devices:\n  CUDA0: RTX 4090\n",
+                stderr="",
+            )
+        return types.SimpleNamespace(returncode=0, stdout="v1\n", stderr="")
 
-    monkeypatch.setattr("httpx.Client", FakeClient, raising=False)
     import httpx as _httpx
     monkeypatch.setattr(_httpx, "Client", FakeClient)
+    monkeypatch.setattr(cli_mod, "_stream_download_with_retry", fake_download)
+    monkeypatch.setattr(cli_mod.subprocess, "run", fake_run)
     monkeypatch.setattr("sys.platform", "win32")
     monkeypatch.setattr("platform.machine", lambda: "AMD64")
-    # Auto-detect backend: pretend nvidia-smi is present → cuda.
-    monkeypatch.setattr("shutil.which", lambda n: "nvidia-smi" if n == "nvidia-smi" else None)
-    # Force a known-good driver so the 13.3 asset is chosen over 12.4.
+    monkeypatch.setattr(
+        "shutil.which", lambda n: "nvidia-smi" if n == "nvidia-smi" else None,
+    )
     from tokirecur import diagnose
     monkeypatch.setattr(diagnose, "cuda_driver_verdict", lambda d: (False, False))
 
-    # Skip the real extraction/zipfile plumbing for the cudart archive;
-    # record any URL the dispatch hands to it.
-    extra_downloads: list[str] = []
+    install_llama.callback(tag="b12020", dest=str(bin_dir), name=None,
+                           backend="cuda", gfx=None, profile=False,
+                           force_cpu=False)
 
-    def fake_unpack(api, asset, dest_dir, progress_prefix=""):
-        extra_downloads.append(asset["browser_download_url"])
-
-    monkeypatch.setattr(cli_mod, "_download_and_unpack_zip", fake_unpack)
-
-    install_llama.callback(tag="b10326", dest=str(bin_dir), name=None,
-                          backend="cuda", gfx=None, profile=False,
-                          force_cpu=False)
-
-    urls = extra_downloads
-    assert any("cudart.zip" in u for u in urls), (
-        f"cudart runtime archive not downloaded: {urls}"
+    assert any("cudart.zip" in u for u in downloads)
+    names = {p.name for p in bin_dir.iterdir()}
+    assert {"llama-server.exe", "ggml-cuda.dll", "cudart64_13.dll",
+            "cublas64_13.dll"} <= names
+    assert "ggml-vulkan.dll" not in names, "stale Vulkan DLL survived"
+    assert not any(n.endswith(".zip") for n in names), (
+        "the downloaded archive was installed into bin_dir"
     )
+    assert diagnose.binary_backend(
+        str(bin_dir / "llama-server.exe")
+    ) == "CUDA"
 
 
 def test_binary_backend_reports_mlx_for_module_name():
