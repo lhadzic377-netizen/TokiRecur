@@ -2153,6 +2153,25 @@ def _prefer_cuda12(
     return cuda12 + [p for p in patterns if p not in cuda12]
 
 
+def _prune_cuda_runtime_major(bin_dir: Path, keep_major: str) -> None:
+    """Remove cudart/cublas DLLs built for a different CUDA major.
+
+    A leftover cudart64_12.dll must not satisfy the runtime check for a
+    13.x build: ggml-cuda.dll looks for cudart64_13.dll, fails to load,
+    and the server silently runs on CPU.
+    """
+    for pat in ("cudart64_*.dll", "cublas64_*.dll",
+                "cublaslt64_*.dll"):
+        for lib in (list(bin_dir.glob(pat))
+                    + list(bin_dir.glob(pat + ".stale.*"))):
+            m = re.search(r"64_(\d+)", lib.name)
+            if m and m.group(1) != keep_major:
+                try:
+                    lib.unlink()
+                except OSError:
+                    pass
+
+
 def _find_cuda_runtime_asset(
     assets: list[dict], main_asset_name: str,
 ) -> dict | None:
@@ -2180,9 +2199,12 @@ def _find_cuda_runtime_asset(
         name = a.get("name", "")
         if name.startswith("cudart-") and f"win-cuda-{ver}-{arch}" in name:
             return a
+    major = ver.split(".")[0]
     for a in assets:
         name = a.get("name", "")
-        if name.startswith("cudart-") and name.endswith(f"-{arch}.zip"):
+        if (name.startswith("cudart-")
+                and name.endswith(f"-{arch}.zip")
+                and f"cuda-{major}." in name):
             return a
     return None
 
@@ -2658,6 +2680,9 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
         # against them); without it llama-server can't load CUDA and
         # falls back to CPU.
         if matched_backend == "cuda":
+            m_major = re.search(r"win-cuda-(\d+)\.", asset["name"])
+            if m_major:
+                _prune_cuda_runtime_major(bin_dir, m_major.group(1))
             cudart = _find_cuda_runtime_asset(assets, asset["name"])
             if cudart is None:
                 click.echo(
@@ -2684,7 +2709,13 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
     if matched_backend == "cuda" and os_name == "windows":
         from ..diagnose import cuda_runtime_dlls
 
+        expected_major = re.search(r"win-cuda-(\d+)\.", asset["name"])
         runtime = cuda_runtime_dlls(bin_dir)
+        if expected_major:
+            runtime = [
+                n for n in runtime
+                if f"cudart64_{expected_major.group(1)}." in n.lower()
+            ]
         if not runtime:
             raise click.ClickException(
                 f"the CUDA build is installed but its runtime DLLs "

@@ -312,6 +312,15 @@ def test_find_cuda_runtime_asset_exact_and_fallback():
     # Releases that predate the split have no runtime archive.
     assert _find_cuda_runtime_asset(assets[:1], main) is None
 
+    # A runtime archive for a different CUDA major is not a substitute:
+    # its DLLs are named cudart64_12.dll and the 13.x build can't load
+    # them, so the server would silently fall back to CPU.
+    wrong_major = [
+        {"name": main},
+        {"name": "cudart-llama-bin-win-cuda-12.4-x64.zip"},
+    ]
+    assert _find_cuda_runtime_asset(wrong_major, main) is None
+
 
 def test_pick_asset_current_cuda_release_names():
     """b12020 ships cuda-13.4; the old hardcoded 13.3 fragment made
@@ -359,6 +368,18 @@ def test_pick_asset_future_cuda_minor_matches():
     asset, backend = _pick_asset(assets, _asset_patterns("windows", "x64"))
     assert backend == "cuda"
     assert asset["name"].endswith("cuda-14.1-x64.zip")
+
+
+def test_prune_cuda_runtime_major(tmp_path):
+    from tokirecur.cli import _prune_cuda_runtime_major
+    for name in (
+        "cudart64_12.dll", "cublas64_12.dll", "cudart64_13.dll",
+        "cublasLt64_13.dll", "ggml-cuda.dll",
+    ):
+        (tmp_path / name).write_bytes(b"x")
+    _prune_cuda_runtime_major(tmp_path, "13")
+    left = {p.name for p in tmp_path.iterdir()}
+    assert left == {"cudart64_13.dll", "cublasLt64_13.dll", "ggml-cuda.dll"}
 
 
 def test_prune_foreign_gpu_libs_cuda(tmp_path):
@@ -414,6 +435,7 @@ def test_install_pulls_cudart_runtime_for_cuda_13_4(tmp_path, monkeypatch):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     (bin_dir / "ggml-vulkan.dll").write_bytes(b"old")
+    (bin_dir / "cudart64_12.dll").write_bytes(b"old12")
     (bin_dir / "llama-server.exe").write_bytes(b"old")
 
     def make_zip(files):
@@ -494,6 +516,7 @@ def test_install_pulls_cudart_runtime_for_cuda_13_4(tmp_path, monkeypatch):
     assert {"llama-server.exe", "ggml-cuda.dll", "cudart64_13.dll",
             "cublas64_13.dll"} <= names
     assert "ggml-vulkan.dll" not in names, "stale Vulkan DLL survived"
+    assert "cudart64_12.dll" not in names, "stale CUDA 12 runtime survived"
     assert not any(n.endswith(".zip") for n in names), (
         "the downloaded archive was installed into bin_dir"
     )
