@@ -14,6 +14,7 @@ the exact commands to fix it — no guessing.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -316,6 +317,14 @@ def openvino_runtime_ready(binary: str | None) -> bool:
     return _dll_on_path("openvino")
 
 
+def metal_device_ready(binary: str | None) -> bool:
+    """Can this macOS Metal build enumerate an MTL device?"""
+    if not binary:
+        return False
+    out = _run([binary, "--list-devices"])
+    return bool(out and re.search(r"\bMTL\d+\b", out, re.IGNORECASE))
+
+
 def binary_backend(binary: str | None) -> str | None:
     """Infer a llama.cpp build's backend from its linked libraries.
 
@@ -384,7 +393,46 @@ def binary_backend(binary: str | None) -> str | None:
             return "SYCL"
         if "openvino" in low:
             return "OpenVINO"
+        if "metal" in low or re.search(r"\bmtl\d+\b", low):
+            return "Metal"
+        # --list-devices prints "(none)" when only the CPU backend is
+        # registered (or when a GPU backend failed to load). Either way
+        # the server will run on CPU.
+        if "(none)" in low:
+            return "CPU"
     out = _run(["ldd", binary])
+    if not out and sys.platform == "darwin":
+        # macOS has no ldd. The release tarball ships the Metal backend
+        # as libggml-metal*.dylib next to llama-server; a CPU-only build
+        # has libggml-cpu*.dylib and no Metal module. otool is the last
+        # resort because the Xcode command line tools are not always
+        # installed on a user's Mac.
+        try:
+            names = {
+                n.lower()
+                for n in os.listdir(os.path.dirname(binary) or ".")
+            }
+        except OSError:
+            names = set()
+        if any(
+            n.startswith(("libggml-metal", "ggml-metal"))
+            and n.endswith(".dylib")
+            for n in names
+        ):
+            return "Metal"
+        out = _run(["otool", "-L", binary])
+        if out:
+            low = out.lower()
+            if "metal" in low:
+                return "Metal"
+            return "CPU"
+        if any(
+            n.startswith(("libggml-cpu", "ggml-cpu"))
+            and n.endswith(".dylib")
+            for n in names
+        ):
+            return "CPU"
+        return None
     if not out:
         return None
     low = out.lower()
@@ -565,6 +613,13 @@ def hint(hw: dict[str, str | None] | None = None) -> list[str]:
             f"  fix: reinstall it, or use the SYCL build: "
             f"toki model install-llama --backend sycl --name {spec.name}"
         )
+    elif (sys.platform == "darwin" and build_kind == "Metal"
+          and not metal_device_ready(build)):
+        lines.append(
+            "  its Metal build cannot enumerate an MTL device — macOS is "
+            "too old or Metal is unavailable."
+        )
+        lines.append("  fix: update macOS, or run CPU-only with TOKI_NGL=0.")
     elif build_kind in (None, "CPU"):
         lines.append(
             f"  its llama-server ({build}) is a CPU build (or unknown)."

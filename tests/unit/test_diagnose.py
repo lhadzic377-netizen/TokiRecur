@@ -542,3 +542,99 @@ def test_hint_sycl_missing_runtime(monkeypatch, iso_env):
     lines = diagnose.hint()
     assert any("sycl*.dll" in line for line in lines)
     assert any("--backend sycl" in line for line in lines)
+
+
+def test_gpu_state_modern_metal(iso_env):
+    """llama.cpp names the Metal device MTL0, not Metal0."""
+    spec = _spec(iso_env)
+    d = _log_dir(spec, iso_env)
+    (d / "llama.log").write_text(
+        "0.00.001.000 I   - MTL0    : Apple M2 (24576 MiB, 23000 MiB free)\n"
+    )
+    st = ctl.gpu_state(spec)
+    assert st["backend"] == "Metal"
+    assert st["device"] == "Apple M2"
+
+
+def test_binary_backend_macos_metal(monkeypatch, tmp_path):
+    exe = tmp_path / "llama-server"
+    exe.write_bytes(b"x")
+
+    def fake_run(argv, timeout=5.0):
+        if argv[-1] == "--list-devices":
+            return (
+                "Available devices:\n"
+                "  MTL0: Apple M2 (24576 MiB, 23000 MiB free)"
+            )
+        return None
+
+    monkeypatch.setattr(diagnose, "_run", fake_run)
+    assert diagnose.binary_backend(str(exe)) == "Metal"
+
+
+def test_binary_backend_macos_cpu_from_none(monkeypatch, tmp_path):
+    """--list-devices prints (none) when only the CPU backend is present."""
+    exe = tmp_path / "llama-server"
+    exe.write_bytes(b"x")
+
+    def fake_run(argv, timeout=5.0):
+        if argv[-1] == "--list-devices":
+            return "Available devices:\n  (none)"
+        return None
+
+    monkeypatch.setattr(diagnose, "_run", fake_run)
+    assert diagnose.binary_backend(str(exe)) == "CPU"
+
+
+def test_binary_backend_macos_metal_from_sibling_dylib(monkeypatch, tmp_path):
+    """No ldd on macOS; the release ships libggml-metal*.dylib."""
+    exe = tmp_path / "llama-server"
+    exe.write_bytes(b"x")
+    (tmp_path / "libggml-metal.0.28.0.dylib").write_bytes(b"x")
+    (tmp_path / "libggml-cpu.dylib").write_bytes(b"x")
+    monkeypatch.setattr(diagnose.sys, "platform", "darwin")
+    monkeypatch.setattr(diagnose, "_run", lambda argv, timeout=5.0: None)
+    assert diagnose.binary_backend(str(exe)) == "Metal"
+
+
+def test_binary_backend_macos_cpu_from_sibling_dylib(monkeypatch, tmp_path):
+    exe = tmp_path / "llama-server"
+    exe.write_bytes(b"x")
+    (tmp_path / "libggml-cpu.dylib").write_bytes(b"x")
+    monkeypatch.setattr(diagnose.sys, "platform", "darwin")
+    monkeypatch.setattr(diagnose, "_run", lambda argv, timeout=5.0: None)
+    assert diagnose.binary_backend(str(exe)) == "CPU"
+
+
+def test_binary_backend_macos_otool_metal(monkeypatch, tmp_path):
+    exe = tmp_path / "llama-server"
+    exe.write_bytes(b"x")
+
+    def fake_run(argv, timeout=5.0):
+        if argv[0] == "otool":
+            return (
+                f"{exe}:\n"
+                "\t@rpath/libggml-metal.0.dylib (compatibility version 0.0.0)\n"
+                "\t/usr/lib/libSystem.B.dylib"
+            )
+        return None
+
+    monkeypatch.setattr(diagnose.sys, "platform", "darwin")
+    monkeypatch.setattr(diagnose, "_run", fake_run)
+    assert diagnose.binary_backend(str(exe)) == "Metal"
+
+
+def test_hint_macos_metal_without_mtl_device(monkeypatch, iso_env):
+    """A Metal build on a Mac/VM that cannot enumerate MTL must say so."""
+    spec = _spec(iso_env)
+    monkeypatch.setattr(diagnose, "_active_spec", lambda: spec)
+    monkeypatch.setattr(diagnose, "gpu_hardware", lambda: {
+        "backend": "Metal", "name": "Apple M2", "vram": None, "driver": None,
+    })
+    monkeypatch.setattr(ctl, "_resolve_binary", lambda spec: "/tmp/llama-server")
+    monkeypatch.setattr(diagnose, "binary_backend", lambda b: "Metal")
+    monkeypatch.setattr(diagnose, "metal_device_ready", lambda b: False)
+    monkeypatch.setattr(diagnose.sys, "platform", "darwin")
+    lines = diagnose.hint()
+    assert any("cannot enumerate an MTL device" in line for line in lines)
+    assert any("TOKI_NGL=0" in line for line in lines)

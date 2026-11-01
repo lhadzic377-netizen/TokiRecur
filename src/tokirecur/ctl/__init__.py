@@ -2568,13 +2568,16 @@ def gpu_state(spec: ModelSpec) -> dict[str, str | None]:
         if "system_info" in line:
             continue
         m = re.search(
-            r"(?:-\s+)?(CUDA\d+|ROCm\d+|Vulkan\d+|Metal|SYCL\d+|OPENVINO\d+)"
-            r"\s*:\s*(.+?)\s*$",
+            r"(?:-\s+)?(CUDA\d+|ROCm\d+|Vulkan\d+|Metal|MTL\d+|"
+            r"SYCL\d+|OPENVINO\d+)\s*:\s*(.+?)\s*$",
             line,
         )
         if m:
             name = m.group(1)
-            result["backend"] = name.rstrip("0123456789")
+            backend = name.rstrip("0123456789")
+            # llama.cpp names the Metal device MTL0; report the backend
+            # as Metal so the launcher and doctor use one spelling.
+            result["backend"] = "Metal" if backend == "MTL" else backend
             # Intel device names contain "(R)"/"(TM)"; strip only the
             # trailing memory parenthetical, not the vendor marks.
             result["device"] = re.sub(

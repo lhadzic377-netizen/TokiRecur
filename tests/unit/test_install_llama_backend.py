@@ -1451,17 +1451,34 @@ def test_env_backend_override_unset_returns_none(monkeypatch):
     assert _env_backend_override() is None
 
 
-def test_profile_ttl_env_override(monkeypatch):
-    """TOKI_PROFILE_TTL (seconds) replaces the 30-day default."""
-    monkeypatch.setenv("TOKI_PROFILE_TTL", "60")
-    import importlib
+def test_profile_ttl_env_override():
+    """TOKI_PROFILE_TTL (seconds) replaces the 30-day default.
 
-    from tokirecur import hardware
-    importlib.reload(hardware)
-    assert hardware.PROFILE_TTL_SECONDS == 60
-    monkeypatch.delenv("TOKI_PROFILE_TTL")
-    importlib.reload(hardware)
-    assert hardware.PROFILE_TTL_SECONDS == 30 * 24 * 3600
+    Run in a subprocess: importlib.reload() swaps the module's dataclass
+    objects, so tests that imported CPUProfile from the original module
+    then compare it with instances built after the reload fail with
+    "identical reprs but not equal".
+    """
+    import subprocess
+    import sys
+
+    def ttl(value):
+        env = os.environ.copy()
+        if value is None:
+            env.pop("TOKI_PROFILE_TTL", None)
+        else:
+            env["TOKI_PROFILE_TTL"] = value
+        out = subprocess.run(
+            [sys.executable, "-c",
+             "from tokirecur import hardware; "
+             "print(hardware.PROFILE_TTL_SECONDS)"],
+            capture_output=True, text=True, env=env, timeout=60,
+        )
+        assert out.returncode == 0, out.stderr
+        return int(out.stdout.strip())
+
+    assert ttl("60") == 60
+    assert ttl(None) == 30 * 24 * 3600
 
 
 def test_prune_foreign_gpu_libs_removes_gpu_libs_on_cpu_install(tmp_path):
@@ -1794,3 +1811,181 @@ def test_install_windows_gpu_backend_verifies_runtime(
     assert not any(n.endswith(".zip") for n in names)
     landed = diagnose.binary_backend(str(bin_dir / "llama-server.exe"))
     assert landed.lower() == backend
+
+
+def test_prune_foreign_gpu_libs_cpu_removes_metal_dylibs(tmp_path):
+    from tokirecur.cli import _prune_foreign_gpu_libs
+
+    for name in (
+        "libggml-metal.dylib", "libggml-metal.0.28.0.dylib",
+        "libggml-cpu.dylib", "libggml-base.dylib",
+        "ggml-opencl.dll", "OpenCL.dll",
+    ):
+        (tmp_path / name).write_bytes(b"x")
+    _prune_foreign_gpu_libs(tmp_path, "cpu")
+    left = {p.name for p in tmp_path.iterdir()}
+    assert "libggml-cpu.dylib" in left
+    assert "libggml-base.dylib" in left
+    assert "libggml-metal.dylib" not in left
+    assert "libggml-metal.0.28.0.dylib" not in left
+    assert "ggml-opencl.dll" not in left
+    assert "OpenCL.dll" not in left
+
+
+@pytest.mark.parametrize(
+    "requested_backend,device_output,expected",
+    [
+        (
+            "metal",
+            "Available devices:\n"
+            "  MTL0: Apple M2 (24576 MiB, 23000 MiB free)",
+            "verify: MTL0",
+        ),
+        (
+            "metal",
+            "Available devices:\n  (none)",
+            "did not enumerate an MTL device",
+        ),
+        (
+            "cpu",
+            "Available devices:\n"
+            "  MTL0: Apple M2 (24576 MiB, 23000 MiB free)",
+            "macOS has no separate CPU build",
+        ),
+    ],
+)
+def test_install_macos_metal_and_cpu_fallback(
+    tmp_path, monkeypatch, capsys, requested_backend, device_output, expected,
+):
+    """macOS ships one universal Metal build. With a Metal device it
+    verifies MTL0; on a Mac/VM without Metal the same build runs CPU and
+    the install must succeed with an explicit note, not a false error."""
+    import io
+    import tarfile
+    import types
+
+    from tokirecur import cli as cli_mod
+    from tokirecur.cli import install_llama
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "llama-server").write_bytes(b"old")
+    (bin_dir / "libggml-metal.dylib").write_bytes(b"old-metal")
+
+    files = {
+        "llama-server": b"#!/bin/sh\nexit 0\n",
+        "libggml-metal.dylib": b"metal",
+        "libggml-metal.0.28.0.dylib": b"metal-versioned",
+        "libggml-cpu.dylib": b"cpu",
+        "libggml-base.dylib": b"base",
+    }
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+        for name, data in files.items():
+            info = tarfile.TarInfo(name=f"llama-b12020/{name}")
+            info.size = len(data)
+            info.mode = 0o755
+            tf.addfile(info, io.BytesIO(data))
+    payload = buf.getvalue()
+
+    RELEASE = {
+        "tag_name": "b12020",
+        "assets": [{
+            "name": "llama-b12020-bin-macos-arm64.tar.gz",
+            "size": len(payload),
+            "browser_download_url": "https://example.test/macos.tar.gz",
+        }],
+    }
+
+    class FakeClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get(self, url, headers=None):
+            class _Resp:
+                def json(self_inner):
+                    return RELEASE
+
+                def raise_for_status(self_inner):
+                    pass
+
+            return _Resp()
+
+    def fake_download(api, url, dest, label=""):
+        Path(dest).write_bytes(payload)
+
+    def fake_run(argv, **kw):
+        if "--list-devices" in argv:
+            return types.SimpleNamespace(
+                returncode=0, stdout=device_output + "\n", stderr="",
+            )
+        return types.SimpleNamespace(returncode=0, stdout="v1\n", stderr="")
+
+    import httpx as _httpx
+    monkeypatch.setattr(_httpx, "Client", FakeClient)
+    monkeypatch.setattr(cli_mod, "_stream_download_with_retry", fake_download)
+    monkeypatch.setattr(cli_mod.subprocess, "run", fake_run)
+    monkeypatch.setattr("sys.platform", "darwin")
+    monkeypatch.setattr("platform.machine", lambda: "arm64")
+    monkeypatch.setattr("shutil.which", lambda n: None)
+    # A local llama.cpp build on the test box must not shadow the
+    # release asset this test is exercising.
+    monkeypatch.setattr("tokirecur.cli._find_local_llama_server", lambda: None)
+
+    install_llama.callback(
+        tag="b12020", dest=str(bin_dir), name=None, backend=requested_backend,
+        gfx=None, profile=False, force_cpu=False,
+    )
+
+    names = {p.name for p in bin_dir.iterdir()}
+    assert "libggml-metal.dylib" in names
+    assert "libggml-metal.0.28.0.dylib" in names
+    combined = capsys.readouterr()
+    text = combined.out + combined.err
+    assert expected in text
+    if "MTL0" in expected:
+        assert "landed backend metal" in text
+    elif "CPU build" in expected:
+        assert "installing metal instead" in text
+    else:
+        assert "will run on CPU" in text
+
+
+def test_install_macos_cpu_uses_local_cpu_build(tmp_path, monkeypatch, capsys):
+    """macOS has no CPU release asset; a local CPU-only build is the
+    only true CPU binary, so --backend cpu must install it instead of
+    falling back to the universal Metal asset."""
+    from tokirecur import cli as cli_mod
+    from tokirecur import diagnose
+    from tokirecur.cli import install_llama
+
+    local_dir = tmp_path / "local"
+    local_dir.mkdir()
+    (local_dir / "llama-server").write_bytes(b"cpu-server")
+    (local_dir / "libggml-cpu.dylib").write_bytes(b"cpu")
+
+    bin_dir = tmp_path / "bin"
+    monkeypatch.setattr("sys.platform", "darwin")
+    monkeypatch.setattr("platform.machine", lambda: "arm64")
+    monkeypatch.setattr(
+        cli_mod, "_find_local_llama_server",
+        lambda: str(local_dir / "llama-server"),
+    )
+    monkeypatch.setattr(diagnose, "_run", lambda argv, timeout=5.0: None)
+
+    install_llama.callback(
+        tag=None, dest=str(bin_dir), name=None, backend="cpu",
+        gfx=None, profile=False, force_cpu=False,
+    )
+
+    assert (bin_dir / "libggml-cpu.dylib").exists()
+    assert not (bin_dir / "libggml-metal.dylib").exists()
+    text = "".join(capsys.readouterr())
+    assert "local CPU build" in text
+    assert "landed backend cpu" in text

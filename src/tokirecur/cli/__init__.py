@@ -1850,6 +1850,13 @@ _GPU_BACKEND_FILES: dict[str, tuple[str, ...]] = {
     ),
     "metal": (
         "ggml-metal.dll", "libggml-metal.so",
+        "ggml-metal*.dylib", "libggml-metal*.dylib",
+    ),
+    # OpenCL is not a supported offload backend (the Adreno asset is no
+    # longer selectable), but a manually installed build must not
+    # survive a CPU/GPU reinstall and confuse backend probes.
+    "opencl": (
+        "ggml-opencl.dll", "OpenCL.dll",
     ),
 }
 
@@ -2087,7 +2094,7 @@ def _find_local_llama_server() -> str | None:
 
 def _local_binary_backend(local_path: str) -> str | None:
     """Backend label reported by a locally-built llama-server (CUDA /
-    ROCm / Vulkan / CPU). Used to record what backend the local build
+    ROCm / Vulkan / Metal / CPU). Used to record what backend the local build
     actually carries, so the post-install verify step has something
     concrete to compare against.
     """
@@ -2408,6 +2415,11 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
         click.echo(f"error: unsupported architecture '{machine}'", err=True)
         raise SystemExit(1) from None
 
+    # An explicit CPU request (or --force-cpu) must not be overridden
+    # by a local GPU build; auto→CPU may still prefer one (the profile
+    # can be stale, and the local build is what the user compiled).
+    explicit_cpu = backend == "cpu" or force_cpu
+
     if backend == "auto":
         # TOKI_BACKEND: hard user override, honoured before any
         # profile or heuristic decision. Valid values are the same
@@ -2517,7 +2529,22 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
         if local:
             from ..diagnose import binary_backend
             local_kind = (binary_backend(local) or "").lower()
-            if local_kind in ("cuda", "rocm", "vulkan", "sycl", "openvino", "metal"):
+            # macOS has no CPU release asset. A locally-built CPU-only
+            # llama-server is the only way to get a true CPU binary
+            # there, so honour it instead of falling back to Metal.
+            if local_kind == "cpu" and not requested_patterns:
+                click.echo(
+                    f"backend: local CPU build at {local} "
+                    f"(this platform has no CPU release asset; "
+                    f"rebuild with ./scripts/build_llama_cpp.sh to refresh)"
+                )
+                _install_from_local(local, asset_name=None,
+                                    bin_dir=bin_dir, exe_name=exe_name,
+                                    backend="cpu", os_name=os_name)
+                return
+            if (not explicit_cpu
+                    and local_kind in ("cuda", "rocm", "vulkan", "sycl",
+                                       "openvino", "metal")):
                 click.echo(
                     f"backend: local {local_kind} build at {local} "
                     f"(overrides profile's CPU recommendation; "
@@ -2539,7 +2566,9 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
     if existing.exists():
         from ..diagnose import binary_backend
         existing_kind = (binary_backend(str(existing)) or "").lower()
-        if (existing_kind in ("cuda", "rocm", "vulkan", "sycl", "openvino", "metal")
+        if (requested_patterns
+                and existing_kind in ("cuda", "rocm", "vulkan", "sycl",
+                                      "openvino", "metal")
                 and backend == "cpu"
                 and os.environ.get("TOKI_INSTALL_LLAMA_FORCE_DOWNGRADE") != "1"):
             raise click.ClickException(
@@ -2682,6 +2711,11 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
             return _install_from_local(local, asset_name=None,
                                        bin_dir=bin_dir, exe_name=exe_name,
                                        backend=backend, os_name=os_name)
+        if os_name == "macos" and backend == "cpu":
+            click.echo(
+                "note: macOS has no separate CPU build; the universal "
+                "Metal build runs CPU-only with -ngl 0 / --device none."
+            )
         click.echo(
             f"note: no {backend} build for {os_name}/{arch}; "
             f"installing {matched_backend} instead"
@@ -2883,6 +2917,34 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
             "update the AMD/Intel driver.",
         )
 
+    # macOS ships one universal build with Metal compiled in. Prove it
+    # enumerates an MTL device instead of trusting the file name; a Mac
+    # (or VM) without Metal still runs on CPU.
+    if matched_backend == "metal" and os_name == "macos":
+        try:
+            probe = subprocess.run(
+                [str(dst), "--list-devices"],
+                capture_output=True, text=True, timeout=60,
+                encoding="utf-8", errors="replace",
+            )
+            text = (probe.stdout or "") + "\n" + (probe.stderr or "")
+            device = next(
+                (ln.strip() for ln in text.splitlines()
+                 if re.search(r"\bMTL\d+\b", ln)),
+                "",
+            )
+            if device:
+                click.echo(f"verify: {device}")
+            else:
+                click.echo(
+                    "warning: the Metal build did not enumerate an MTL "
+                    "device — llama.cpp will run on CPU. Update macOS if "
+                    "this Mac should support Metal.",
+                    err=True,
+                )
+        except (OSError, subprocess.SubprocessError) as e:
+            click.echo(f"warning: could not list Metal devices: {e}", err=True)
+
     # Post-install verification: what backend actually landed? A CPU
     # box must have zero GPU libs; a GPU box must have its libs. This
     # is what the launcher / doctor will report, so surface it now
@@ -2892,17 +2954,28 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
     if landed == "unknown":
         click.echo(
             "verify: could not inspect the installed binary "
-            f"(ldd unavailable); expected backend {backend}",
+            f"(no ldd/otool/dylib probe); expected backend {backend}",
             err=True,
         )
     elif landed != backend:
-        click.echo(
-            f"error: expected backend {backend} but this build is "
-            f"{landed} — install failed to land the right build. "
-            f"Re-run with --backend {backend} to retry.",
-            err=True,
-        )
-        raise SystemExit(1)
+        # macOS ships one universal build with Metal compiled in. On a
+        # Mac (or VM) without Metal it loads and runs on CPU; that is a
+        # valid install, not the wrong asset.
+        if os_name == "macos" and backend == "metal" and landed == "cpu":
+            click.echo(
+                "note: this macOS build did not enumerate a Metal device; "
+                "it will run on CPU. Pass -ngl 0 / --device none to make "
+                "that explicit.",
+                err=True,
+            )
+        else:
+            click.echo(
+                f"error: expected backend {backend} but this build is "
+                f"{landed} — install failed to land the right build. "
+                f"Re-run with --backend {backend} to retry.",
+                err=True,
+            )
+            raise SystemExit(1)
     else:
         click.echo(f"verify: landed backend {landed} (expected {backend})")
 

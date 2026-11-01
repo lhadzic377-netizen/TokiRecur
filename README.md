@@ -97,6 +97,12 @@ Toki Recur is pure Python over the llama-server HTTP API — it runs on **any x8
 | Windows | x86_64 | CUDA (auto NVIDIA), SYCL (auto Intel Arc), Vulkan (auto AMD), ROCm/HIP (explicit AMD), CPU | `win-cuda-13.4-x64`, `win-sycl-x64`, `win-vulkan-x64`, `win-rocm-10.0-x64`, `win-cpu-x64` | beta |
 | Windows | aarch64 | Vulkan, CPU | `win-vulkan-arm64`, `win-cpu-arm64` | beta |
 
+> **macOS note:** llama.cpp ships one universal Metal build; there is no
+> separate macOS CPU asset. It runs CPU-only with `-ngl 0` / `--device none`.
+> `install-llama --backend cpu` on macOS installs that same build and prints
+> the note; a Mac or VM without Metal falls back to CPU with an explicit
+> warning, not a false "installed Metal" claim.
+
 > **Linux ROCm note (mid-2026):** llama.cpp stopped publishing Linux ROCm
 > release assets after **b10375**. `install-llama --backend rocm` still finds
 > that last build, but brand-new model support lands on master first — on a
