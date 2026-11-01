@@ -638,3 +638,26 @@ def test_hint_macos_metal_without_mtl_device(monkeypatch, iso_env):
     lines = diagnose.hint()
     assert any("cannot enumerate an MTL device" in line for line in lines)
     assert any("TOKI_NGL=0" in line for line in lines)
+
+
+def test_hint_explicit_cpu_env_returns_empty(monkeypatch, iso_env):
+    """TOKI_NGL=0 is an intentional CPU launch, not a missing GPU."""
+    spec = _spec(iso_env)
+    monkeypatch.setattr(diagnose, "_active_spec", lambda: spec)
+    monkeypatch.setattr(diagnose, "gpu_hardware", lambda: {
+        "backend": "CUDA", "name": "GTX 1650", "vram": None, "driver": None,
+    })
+    monkeypatch.setenv("TOKI_NGL", "0")
+    assert diagnose.hint() == []
+
+
+def test_hint_explicit_cpu_registry_returns_empty(monkeypatch, iso_env):
+    """A registry -ngl 0 pin is an intentional CPU launch."""
+    spec = _spec(iso_env)
+    spec.extra_args = ["-ngl", "0"]
+    monkeypatch.setattr(diagnose, "_active_spec", lambda: spec)
+    monkeypatch.setattr(diagnose, "gpu_hardware", lambda: {
+        "backend": "CUDA", "name": "GTX 1650", "vram": None, "driver": None,
+    })
+    monkeypatch.delenv("TOKI_NGL", raising=False)
+    assert diagnose.hint() == []

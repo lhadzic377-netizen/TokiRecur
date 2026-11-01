@@ -550,6 +550,25 @@ def run() -> str:
     return "\n".join(lines)
 
 
+def _cpu_mode_requested(spec) -> bool:
+    """Is CPU-only the requested mode, not an accident?
+
+    ``TOKI_NGL=0`` and a registry ``-ngl 0`` pin are explicit choices;
+    warning "a GPU is present but unused" there sends people to install
+    a GPU build they deliberately turned off.
+    """
+    if os.environ.get("TOKI_NGL") == "0":
+        return True
+    extra_args = getattr(spec, "extra_args", ()) or ()
+    for i, arg in enumerate(extra_args):
+        if arg in ("-ngl", "--n-gpu-layers") and i + 1 < len(extra_args):
+            try:
+                return int(extra_args[i + 1]) <= 0
+            except ValueError:
+                return False
+    return False
+
+
 def hint(hw: dict[str, str | None] | None = None) -> list[str]:
     """Actionable fix lines when the GPU is unused, else []."""
     hw = hw or gpu_hardware()
@@ -557,6 +576,8 @@ def hint(hw: dict[str, str | None] | None = None) -> list[str]:
         return []
     spec = _active_spec()
     if spec is None:
+        return []
+    if _cpu_mode_requested(spec):
         return []
     st = ctl.gpu_state(spec)
     if st["backend"]:
