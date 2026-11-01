@@ -913,6 +913,8 @@ def up(
     if healed:
         click.echo("model-capable CLI configs synced for the active model")
 
+    if spec is not None and not skip_llama:
+        ctl_mod.warn_other_models(spec)
     if not skip_llama:
         try:
             pid = lifecycle.start_llama_server(

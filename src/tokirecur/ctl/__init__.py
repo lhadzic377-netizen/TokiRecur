@@ -3377,10 +3377,27 @@ def _takeover_stale_daemon(spec: ModelSpec) -> None:
         )
 
 
+def warn_other_models(spec: ModelSpec) -> None:
+    for other in load_registry():
+        if other.name == spec.name or other.always_on:
+            continue
+        try:
+            if llama_reachable(other) or daemon_reachable(other):
+                logger.warning(
+                    "%s: '%s' is still running — stop it first if this "
+                    "load runs out of memory",
+                    spec.name,
+                    other.name,
+                )
+        except Exception:
+            continue
+
+
 def start_model(spec: ModelSpec, wait: bool = True) -> None:
     """Bring up the model's llama-server + daemon (idempotent)."""
     state = spec.state_dir()
     state.mkdir(parents=True, exist_ok=True)
+    warn_other_models(spec)
 
     # Image stacks are one sd-server, not llama+daemon: the daemon is the
     # text path and cannot carry image generation, and llama-server cannot
