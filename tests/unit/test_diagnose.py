@@ -159,10 +159,29 @@ def test_doctor_notes_old_driver(monkeypatch):
         lambda: {"state_bin": "C:/bin/llama-server.exe", "registry": []},
     )
     monkeypatch.setattr(diagnose, "_active_spec", lambda: None)
+    monkeypatch.setattr(diagnose.sys, "platform", "win32")
     report = diagnose.run()
     assert "gpu note:" in report
     assert "551.61" in report
     assert "install-llama --backend cuda" in report
+
+
+def test_doctor_notes_old_driver_linux(monkeypatch):
+    monkeypatch.setattr(diagnose, "gpu_hardware", lambda: {
+        "backend": "CUDA", "name": "RTX 3090", "vram": "24576 MiB",
+        "driver": "550.54",
+    })
+    monkeypatch.setattr(diagnose, "driver_version", lambda: (550, 54))
+    monkeypatch.setattr(
+        diagnose, "installed_build",
+        lambda: {"state_bin": "/opt/bin/llama-server", "registry": []},
+    )
+    monkeypatch.setattr(diagnose, "_active_spec", lambda: None)
+    monkeypatch.setattr(diagnose.sys, "platform", "linux")
+    report = diagnose.run()
+    assert "570.26" in report
+    assert "CUDA 12.8+" in report
+    assert "551.61" not in report
 
 
 def test_hint_no_gpu_returns_empty(monkeypatch):
@@ -283,6 +302,98 @@ def test_binary_backend_missing(tmp_path):
     assert diagnose.binary_backend(str(tmp_path / "nope")) is None
 
 
+def test_binary_backend_linux_cuda_sibling_wins_over_none(monkeypatch, tmp_path):
+    """A GPU build with no runtime enumerates (none); the sibling module
+    still identifies the build so the doctor can name the missing lib."""
+    exe = tmp_path / "llama-server"
+    exe.write_bytes(b"x")
+    (tmp_path / "libggml-cuda.so").write_bytes(b"x")
+    monkeypatch.setattr(
+        diagnose, "_run",
+        lambda argv, timeout=5.0: "Available devices:\n  (none)",
+    )
+    assert diagnose.binary_backend(str(exe)) == "CUDA"
+
+
+def test_binary_backend_linux_sycl_sibling(monkeypatch, tmp_path):
+    exe = tmp_path / "llama-server"
+    exe.write_bytes(b"x")
+    (tmp_path / "libggml-sycl.so").write_bytes(b"x")
+    monkeypatch.setattr(diagnose, "_run", lambda argv, timeout=5.0: None)
+    assert diagnose.binary_backend(str(exe)) == "SYCL"
+
+
+def test_binary_backend_linux_openvino_sibling(monkeypatch, tmp_path):
+    exe = tmp_path / "llama-server"
+    exe.write_bytes(b"x")
+    (tmp_path / "libggml-openvino.so").write_bytes(b"x")
+    monkeypatch.setattr(diagnose, "_run", lambda argv, timeout=5.0: None)
+    assert diagnose.binary_backend(str(exe)) == "OpenVINO"
+
+
+def test_cuda_runtime_ready_linux_sibling(monkeypatch, tmp_path):
+    monkeypatch.setattr(diagnose, "_cuda_lib_dirs", lambda: [])
+    monkeypatch.setattr(diagnose, "_ldconfig_has", lambda *names: False)
+    exe = tmp_path / "llama-server"
+    exe.write_bytes(b"x")
+    assert not diagnose.cuda_runtime_ready(str(exe))
+    (tmp_path / "libcudart.so.13").write_bytes(b"x")
+    assert diagnose.cuda_runtime_ready(str(exe))
+    assert diagnose.cuda_runtime_libs(tmp_path) == ["libcudart.so.13"]
+
+
+def test_rocm_runtime_ready_linux_sibling(monkeypatch, tmp_path):
+    monkeypatch.setattr(diagnose, "_ldconfig_has", lambda *names: False)
+    monkeypatch.setattr(
+        diagnose, "_posix_lib_dirs", lambda *extra: [],
+    )
+    exe = tmp_path / "llama-server"
+    exe.write_bytes(b"x")
+    assert not diagnose.rocm_runtime_ready(str(exe))
+    (tmp_path / "libamdhip64.so.7").write_bytes(b"x")
+    assert diagnose.rocm_runtime_ready(str(exe))
+
+
+def test_vulkan_runtime_ready_linux_sibling(monkeypatch, tmp_path):
+    monkeypatch.setattr(diagnose, "_ldconfig_has", lambda *names: False)
+    monkeypatch.setattr(
+        diagnose, "_posix_lib_dirs", lambda *extra: [],
+    )
+    monkeypatch.setattr(diagnose.sys, "platform", "linux")
+    exe = tmp_path / "llama-server"
+    exe.write_bytes(b"x")
+    assert not diagnose.vulkan_runtime_ready(str(exe))
+    (tmp_path / "libvulkan.so.1").write_bytes(b"x")
+    assert diagnose.vulkan_runtime_ready(str(exe))
+
+
+def test_sycl_runtime_ready_linux_sibling(monkeypatch, tmp_path):
+    monkeypatch.setattr(diagnose, "_sycl_lib_dirs", lambda: [])
+    monkeypatch.setattr(diagnose, "_ldconfig_has", lambda *names: False)
+    exe = tmp_path / "llama-server"
+    exe.write_bytes(b"x")
+    assert not diagnose.sycl_runtime_ready(str(exe))
+    missing = diagnose.sycl_runtime_missing(str(exe))
+    assert len(missing) == 3
+    for name in ("libsycl.so.9", "libmkl_sycl.so.2", "libze_loader.so.1"):
+        (tmp_path / name).write_bytes(b"x")
+    assert diagnose.sycl_runtime_ready(str(exe))
+    assert diagnose.sycl_runtime_missing(str(exe)) == []
+
+
+def test_openvino_runtime_and_gpu_plugin_linux(monkeypatch, tmp_path):
+    monkeypatch.setattr(diagnose, "_openvino_lib_dirs", lambda: [])
+    monkeypatch.setattr(diagnose, "_ldconfig_has", lambda *names: False)
+    exe = tmp_path / "llama-server"
+    exe.write_bytes(b"x")
+    assert not diagnose.openvino_runtime_ready(str(exe))
+    (tmp_path / "libopenvino.so.2600").write_bytes(b"x")
+    assert diagnose.openvino_runtime_ready(str(exe))
+    assert not diagnose.openvino_gpu_plugin_ready(str(exe))
+    (tmp_path / "libopenvino_intel_gpu_plugin.so").write_bytes(b"x")
+    assert diagnose.openvino_gpu_plugin_ready(str(exe))
+
+
 def test_hint_cpu_build_advises_reinstall(monkeypatch, iso_env):
     spec = _spec(iso_env)
     monkeypatch.setattr(diagnose, "_active_spec", lambda: spec)
@@ -303,6 +414,7 @@ def test_hint_gpu_build_advises_ngl_check(monkeypatch, iso_env):
     })
     monkeypatch.setattr(ctl, "_resolve_binary", lambda spec: "/tmp/llama-server")
     monkeypatch.setattr(diagnose, "binary_backend", lambda b: "CUDA")
+    monkeypatch.setattr(diagnose, "cuda_runtime_ready", lambda b: True)
     lines = diagnose.hint()
     assert any("TOKI_NGL" in line for line in lines)
     assert not any("install-llama" in line for line in lines)

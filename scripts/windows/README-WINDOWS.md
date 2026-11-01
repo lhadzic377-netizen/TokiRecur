@@ -75,11 +75,17 @@ model is selected in every client.
   does not load without those DLLs.
 - **Intel discrete Arc** → SYCL, the vendor-native build. The zip is
   self-contained (SYCL + oneMKL + Unified Runtime); no oneAPI install
-  is needed. Intel iGPUs stay on the CPU build by policy.
+  is needed. Intel iGPUs stay on the CPU build by policy. OpenVINO is
+  an explicit alternative: `toki model install-llama --backend
+  openvino`; its zip bundles the OpenVINO runtime and the Intel GPU
+  plugin, and the install refuses a build without that plugin.
 - **AMD** → Vulkan, which works on every supported Radeon. ROCm is an
   explicit choice for supported cards:
   `toki model install-llama --backend rocm` (the zip bundles the HIP
   runtime).
+- **Windows on ARM64** → CUDA 13.4 on supported NVIDIA hardware,
+  Vulkan, or CPU. llama.cpp ships no Windows ARM64 SYCL, OpenVINO or
+  ROCm asset, so those explicit requests are rejected.
 - **No usable GPU** → CPU.
 
 Every Windows GPU install verifies its runtime DLLs **and** a real

@@ -4,7 +4,7 @@
 
 # Toki Recur
 
-A standalone KV cache reuse system for LLM inference. Drop-in prefix caching that works across CUDA, ROCm, and Vulkan.
+A standalone KV cache reuse system for LLM inference. Drop-in prefix caching that works across CUDA, ROCm, SYCL, OpenVINO, Vulkan, Metal, and CPU.
 
 ## What it does
 
@@ -87,15 +87,15 @@ On machines with limited RAM (8–16 GB), `toki model use` automatically reduces
 
 ## Platforms
 
-Toki Recur is pure Python over the llama-server HTTP API — it runs on **any x86_64 or aarch64 device** running Linux, macOS or Windows, with whatever GPU backend your llama-server build has (ROCm, CUDA, SYCL, Vulkan, Metal, CPU). The only per-platform piece is the llama-server binary itself:
+Toki Recur is pure Python over the llama-server HTTP API — it runs on **any x86_64 or aarch64 device** running Linux, macOS or Windows, with whatever GPU backend your llama-server build has (ROCm, CUDA, SYCL, OpenVINO, Vulkan, Metal, CPU). The only per-platform piece is the llama-server binary itself:
 
-| Platform | Architecture | llama-server builds | install-llama asset | Support |
+| Platform | Architecture | llama-server builds | install-llama assets | Support |
 |---|---|---|---|---|
-| Linux | x86_64 | ROCm (auto if HIP present), Vulkan, CPU | `ubuntu-rocm-7.14-x64`, `ubuntu-vulkan-x64`, `ubuntu-x64` | stable |
-| Linux | aarch64 | Vulkan, CPU | `ubuntu-vulkan-arm64`, `ubuntu-arm64` | stable |
+| Linux | x86_64 | CUDA (auto NVIDIA), ROCm (auto AMD/HIP), SYCL (explicit Intel Arc), OpenVINO (explicit Intel), Vulkan, CPU | `ubuntu-cuda-13.4-x64`, `ubuntu-cuda-12.8-x64`, `ubuntu-rocm-10.0-x64`, `ubuntu-sycl-fp16-x64`, `ubuntu-openvino-2026.4.1-x64`, `ubuntu-vulkan-x64`, `ubuntu-x64` | stable |
+| Linux | aarch64 | CUDA (auto NVIDIA), Vulkan, CPU | `ubuntu-cuda-13.4-arm64`, `ubuntu-vulkan-arm64`, `ubuntu-arm64` | stable |
 | macOS | x86_64, arm64 | Metal (also runs CPU-only) | `macos-x64`, `macos-arm64` | stable |
-| Windows | x86_64 | CUDA (auto NVIDIA), SYCL (auto Intel Arc), Vulkan (auto AMD), ROCm/HIP (explicit AMD), CPU | `win-cuda-13.4-x64`, `win-sycl-x64`, `win-vulkan-x64`, `win-rocm-10.0-x64`, `win-cpu-x64` | beta |
-| Windows | aarch64 | Vulkan, CPU | `win-vulkan-arm64`, `win-cpu-arm64` | beta |
+| Windows | x86_64 | CUDA (auto NVIDIA), SYCL (auto Intel Arc), Vulkan (auto AMD), ROCm/HIP (explicit AMD), OpenVINO (explicit Intel), CPU | `win-cuda-13.4-x64`, `win-sycl-x64`, `win-vulkan-x64`, `win-rocm-10.0-x64`, `win-openvino-2026.4.1-x64`, `win-cpu-x64` | beta |
+| Windows | aarch64 | CUDA (auto NVIDIA), Vulkan, CPU | `win-cuda-13.4-arm64`, `win-vulkan-arm64`, `win-cpu-arm64` | beta |
 
 > **macOS note:** llama.cpp ships one universal Metal build; there is no
 > separate macOS CPU asset. It runs CPU-only with `-ngl 0` / `--device none`.
@@ -104,14 +104,21 @@ Toki Recur is pure Python over the llama-server HTTP API — it runs on **any x8
 > Mac or VM without Metal falls back to CPU with an explicit warning, not a
 > false "installed Metal" claim.
 
-> **Linux ROCm note (mid-2026):** llama.cpp stopped publishing Linux ROCm
-> release assets after **b10375**. `install-llama --backend rocm` still finds
-> that last build, but brand-new model support lands on master first — on a
-> Linux ROCm box, build the latest source instead:
-> `scripts/build_llama_cpp.sh` (ROCm for the host GPU, gfx1151 on Strix
-> Halo APUs). Windows ROCm keeps shipping as `win-rocm-<ver>-x64`
-> (currently 10.0); its HIP runtime is bundled in the zip, so no ROCm
-> toolkit install is needed.
+> **CUDA note:** Linux and Windows CUDA builds ship `cudart`/`cublas` as a
+> separate runtime archive. `install-llama` downloads the matching one, checks
+> `libcudart.so.<major>` / `cudart64_<major>.dll`, and proves a real `CUDA0`
+> device line before reporting success. CUDA 13.x needs driver 580.65+; the
+> 12.8 Linux build needs 570.26+ (Windows 12.4 needs 551.61+).
+
+> **Linux SYCL note:** the release archive contains only `build/bin`; it
+> links the Intel oneAPI DPC++ runtime, oneMKL and Level Zero. `install-llama`
+> verifies all three and refuses a partial install instead of letting the
+> server fall back to CPU. Windows SYCL is self-contained.
+
+> **Linux ROCm note:** llama.cpp resumed Linux ROCm release assets with
+> **ROCm 10.0** (`ubuntu-rocm-10.0-x64`). The Windows ROCm zip bundles its HIP
+> runtime; Linux uses the system ROCm runtime and `install-llama` verifies
+> `libamdhip64.so` before reporting success.
 
 CI runs the test suite on all three OSes (x86_64 + aarch64) and executes the
 Linux and macOS system installers end-to-end. The GPU backends are provided by
@@ -125,7 +132,7 @@ One command installs the matching official build:
 
 ```bash
 toki model install-llama                 # auto-detect backend, latest release
-toki model install-llama --backend rocm  # force a backend (rocm|cuda|vulkan|metal|cpu)
+toki model install-llama --backend rocm  # force a backend (rocm|cuda|sycl|openvino|vulkan|metal|cpu)
 toki model install-llama --backend rocm --gfx 11.5.1  # set HSA_OVERRIDE_GFX_VERSION
 toki model install-llama --tag b6400     # pin a release tag
 toki model install-llama --name 35b      # ...and point a registry model at it

@@ -1610,7 +1610,9 @@ def _force_cpu_when_no_usable_gpu(os_name: str, arch: str, backend: str) -> str:
     return "cpu"
 
 
-_KNOWN_BACKENDS = ("cuda", "rocm", "vulkan", "sycl", "metal", "mlx", "cpu")
+_KNOWN_BACKENDS = (
+    "cuda", "rocm", "vulkan", "sycl", "openvino", "metal", "mlx", "cpu",
+)
 
 
 def _env_backend_override() -> str | None:
@@ -1685,6 +1687,10 @@ def _asset_patterns(os_name: str, arch: str) -> list[tuple[str, str]]:
                 # Intel's vendor-native build: self-contained SYCL +
                 # oneMKL + UR runtime, no oneAPI install required.
                 ("sycl", "win-sycl-x64"),
+                # OpenVINO is an explicit Intel path; auto still picks
+                # SYCL for discrete Arc. The release zip is merged with
+                # the CPU/server build and bundles the OpenVINO runtime.
+                ("openvino", "win-openvino-"),
                 ("vulkan", "win-vulkan-x64"),
                 ("cpu", "win-cpu-x64"),
             ]
@@ -1703,14 +1709,60 @@ def _asset_patterns(os_name: str, arch: str) -> list[tuple[str, str]]:
         ]
     if arch == "x64":
         return [
+            # Linux CUDA assets exist for both x64 and arm64; 12.8 is
+            # the fallback for drivers below the CUDA 13 floor.
+            ("cuda", r"ubuntu-cuda-13\.\d+-x64"),
+            ("cuda", r"ubuntu-cuda-12\.\d+-x64"),
+            ("cuda", r"ubuntu-cuda-[\d.]+-x64"),
             ("rocm", "ubuntu-rocm-"),
+            # The Linux SYCL archive is not self-contained (it links
+            # the oneAPI runtime), but it is the vendor-native Intel
+            # path when oneAPI is installed. fp16 is preferred.
+            ("sycl", "ubuntu-sycl-fp16-x64"),
+            ("sycl", "ubuntu-sycl-fp32-x64"),
+            # OpenVINO's Linux archive bundles its runtime and TBB.
+            ("openvino", "ubuntu-openvino-"),
             ("vulkan", "ubuntu-vulkan-x64"),
             ("cpu", "ubuntu-x64"),
         ]
     return [
+        ("cuda", r"ubuntu-cuda-13\.\d+-arm64"),
+        ("cuda", r"ubuntu-cuda-[\d.]+-arm64"),
         ("vulkan", "ubuntu-vulkan-arm64"),
         ("cpu", "ubuntu-arm64"),
     ]
+
+
+# When a requested GPU backend has no asset for this OS/arch, fall back
+# only to a compatible backend — never to another vendor's runtime.
+# ROCm on arm64 is the live case: Vulkan and CPU are the correct AMD
+# fallbacks; a CUDA asset would be nonsense. An explicit CUDA/SYCL/
+# OpenVINO request is rejected by the platform guards before this is
+# reached; these entries cover auto-detected profiles and older
+# releases that dropped an asset.
+_FALLBACK_BACKENDS: dict[str, tuple[str, ...]] = {
+    "rocm": ("vulkan", "cpu"),
+    "sycl": ("vulkan", "cpu"),
+    "openvino": ("vulkan", "cpu"),
+    "cuda": ("cpu",),
+    "vulkan": ("cpu",),
+    "metal": ("cpu",),
+}
+
+
+def _fallback_patterns(
+    patterns: list[tuple[str, str]], backend: str,
+) -> list[tuple[str, str]]:
+    """Compatible fallbacks for a backend with no release asset."""
+    if backend == "cpu":
+        # macOS has no separate CPU asset: keep the Metal patterns so
+        # the install lands the universal build and prints the CPU note.
+        return patterns
+    allowed = _FALLBACK_BACKENDS.get(backend, ("cpu",))
+    compatible = [p for p in patterns if p[0] in allowed]
+    if compatible:
+        return compatible
+    return [p for p in patterns if p[0] == "cpu"] or patterns
 
 
 # Number of times to retry a streaming download from the GitHub
@@ -1827,26 +1879,35 @@ _GPU_BACKEND_FILES: dict[str, tuple[str, ...]] = {
         "ggml-cuda.dll", "libggml-cuda.so",
         "cudart64_*.dll", "cublas64_*.dll", "cublaslt64_*.dll",
         "nvrtc64_*.dll",
+        "libcudart.so*", "libcublas.so*", "libcublasLt.so*",
+        "libnvrtc.so*",
     ),
     "vulkan": (
         "ggml-vulkan.dll", "libggml-vulkan.so", "vulkan-1.dll",
+        "libvulkan.so*",
     ),
     "rocm": (
         "ggml-rocm.dll", "ggml-hip.dll", "libggml-rocm.so",
+        "libggml-hip.so",
         "amdhip64*.dll", "amd_comgr*.dll", "rocm_kpack*.dll",
         "hipblas*.dll", "rocblas*.dll",
+        "libamdhip64.so*", "libamd_comgr.so*", "librocm_kpack.so*",
+        "libhipblas.so*", "librocblas.so*",
     ),
     "sycl": (
         "ggml-sycl.dll", "libggml-sycl.so",
         "sycl*.dll", "mkl_*.dll", "ur_*.dll", "dnnl.dll",
         "libmmd.dll", "svml_dispmd.dll", "libiomp5md.dll",
         "libhwloc-15.dll", "tcm.dll", "umf.dll",
+        "libsycl.so*", "libmkl_sycl.so*", "libze_loader.so*",
+        "libur_loader.so*",
     ),
     "openvino": (
         "ggml-openvino.dll", "libggml-openvino.so", "openvino*.dll",
         "tbb12_debug.dll", "tbbbind_2_5.dll", "tbbbind_2_5_debug.dll",
         "tbbmalloc.dll", "tbbmalloc_debug.dll",
         "tbbmalloc_proxy.dll", "tbbmalloc_proxy_debug.dll",
+        "libopenvino*.so*", "libtbb*.so*",
     ),
     "metal": (
         "ggml-metal.dll", "libggml-metal.so",
@@ -1856,7 +1917,7 @@ _GPU_BACKEND_FILES: dict[str, tuple[str, ...]] = {
     # longer selectable), but a manually installed build must not
     # survive a CPU/GPU reinstall and confuse backend probes.
     "opencl": (
-        "ggml-opencl.dll", "OpenCL.dll",
+        "ggml-opencl.dll", "OpenCL.dll", "libggml-opencl.so",
     ),
 }
 
@@ -2064,9 +2125,10 @@ def _find_local_llama_server() -> str | None:
       3. ``$HOME/llama.cpp/build/bin/llama-server`` (manual builds)
       4. ``/usr/local/bin/llama-server`` and ``/opt/llama.cpp/build/bin/llama-server``
 
-    Used by ``install-llama`` when llama.cpp no longer ships a release
-    asset for the requested backend (Linux ROCm post-b10375, custom
-    CUDA builds). The state-dir copy is then made via
+    Used by ``install-llama`` when llama.cpp ships no release asset for
+    the requested backend (older releases, unusual OS/arch pairs) or
+    when the user has a locally-built backend. The state-dir copy is
+    then made via
     ``_safe_copy_replace`` so the rest of the launch path stays uniform
     — the registry, ``binary_backend`` and the warn checks all see the
     same path.
@@ -2160,42 +2222,54 @@ def _install_from_local(
 def _cuda_runtime_archive_name(main_asset_name: str) -> str | None:
     """Name of the cudart runtime archive paired with a CUDA main asset.
 
-    Every llama.cpp Windows CUDA build (12.4 and 13.x) ships cudart,
-    cublas and cublasLt in a separate
-    ``cudart-llama-bin-win-cuda-<ver>-<arch>.zip``. Without those DLLs
-    ggml-cuda.dll fails to load and the server silently runs on CPU.
-    The runtime archive carries no build number, only the CUDA version
-    and the architecture.
+    Every llama.cpp CUDA build ships cudart, cublas and cublasLt in a
+    separate archive; without it ggml-cuda fails to load and the
+    server silently runs on CPU. Windows names it
+    ``cudart-llama-bin-win-cuda-<ver>-<arch>.zip`` (no build number).
+    Linux names it
+    ``cudart-llama-<tag>-bin-ubuntu-cuda-<ver>-<arch>.tar.gz`` (build
+    number included, like the main asset).
     """
     import re
-    m = re.search(r"win-cuda-(\d+\.\d+)-(x64|arm64)", main_asset_name)
-    if not m:
-        return None
-    return f"cudart-llama-bin-win-cuda-{m.group(1)}-{m.group(2)}.zip"
+    m = re.search(r"win-cuda-(\d+\.\d+)-(x64|arm64)\.zip$", main_asset_name)
+    if m:
+        return f"cudart-llama-bin-win-cuda-{m.group(1)}-{m.group(2)}.zip"
+    m = re.search(
+        r"^llama-(.+)-bin-ubuntu-cuda-(\d+\.\d+)-(x64|arm64)\.tar\.gz$",
+        main_asset_name,
+    )
+    if m:
+        return (
+            f"cudart-llama-{m.group(1)}-bin-ubuntu-cuda-"
+            f"{m.group(2)}-{m.group(3)}.tar.gz"
+        )
+    return None
 
 
 def _prefer_cuda12(
     patterns: list[tuple[str, str]],
 ) -> list[tuple[str, str]]:
-    """Move the CUDA 12.4 asset to the front for pre-CUDA-13 drivers."""
-    cuda12 = [p for p in patterns if "win-cuda-12" in p[1]]
+    """Move the CUDA 12.x asset to the front for pre-CUDA-13 drivers."""
+    cuda12 = [p for p in patterns if "cuda-12" in p[1]]
     if not cuda12:
         return patterns
     return cuda12 + [p for p in patterns if p not in cuda12]
 
 
 def _prune_cuda_runtime_major(bin_dir: Path, keep_major: str) -> None:
-    """Remove cudart/cublas DLLs built for a different CUDA major.
+    """Remove cudart/cublas runtime files built for a different major.
 
-    A leftover cudart64_12.dll must not satisfy the runtime check for a
-    13.x build: ggml-cuda.dll looks for cudart64_13.dll, fails to load,
-    and the server silently runs on CPU.
+    A leftover cudart64_12.dll (or libcudart.so.12) must not satisfy
+    the runtime check for a 13.x build: ggml-cuda looks for the 13
+    SONAME, fails to load, and the server silently runs on CPU.
     """
     for pat in ("cudart64_*.dll", "cublas64_*.dll",
-                "cublaslt64_*.dll"):
+                "cublaslt64_*.dll", "libcudart.so*",
+                "libcublas.so*", "libcublasLt.so*"):
         for lib in (list(bin_dir.glob(pat))
                     + list(bin_dir.glob(pat + ".stale.*"))):
-            m = re.search(r"64_(\d+)", lib.name)
+            m = (re.search(r"64_(\d+)", lib.name)
+                 or re.search(r"\.so\.(\d+)", lib.name))
             if m and m.group(1) != keep_major:
                 try:
                     lib.unlink()
@@ -2210,9 +2284,10 @@ def _find_cuda_runtime_asset(
 
     Exact name first (the release convention). Then any cudart archive
     for the same CUDA version and architecture, then any for the same
-    architecture — so a rename or a build-numbered variant does not
-    leave the install without a runtime. Returns None when the release
-    predates the split (the main archive then carries the DLLs).
+    major and architecture — so a rename or a build-numbered variant
+    does not leave the install without a runtime. Returns None when the
+    release predates the split (the main archive then carries the
+    runtime).
     """
     import re
     exact_name = _cuda_runtime_archive_name(main_asset_name)
@@ -2222,20 +2297,23 @@ def _find_cuda_runtime_asset(
         )
         if exact:
             return exact
-    m = re.search(r"win-cuda-(\d+\.\d+)-(x64|arm64)", main_asset_name)
+    m = re.search(
+        r"(?:win|ubuntu)-cuda-(\d+\.\d+)-(x64|arm64)", main_asset_name,
+    )
     if not m:
         return None
     ver, arch = m.group(1), m.group(2)
     for a in assets:
         name = a.get("name", "")
-        if name.startswith("cudart-") and f"win-cuda-{ver}-{arch}" in name:
+        if name.startswith("cudart-") and f"cuda-{ver}-{arch}" in name:
             return a
     major = ver.split(".")[0]
     for a in assets:
         name = a.get("name", "")
         if (name.startswith("cudart-")
-                and name.endswith(f"-{arch}.zip")
-                and f"cuda-{major}." in name):
+                and f"cuda-{major}." in name
+                and (name.endswith(f"-{arch}.zip")
+                     or name.endswith(f"-{arch}.tar.gz"))):
             return a
     return None
 
@@ -2308,21 +2386,32 @@ def _rocm_env(gfx: str | None) -> dict[str, str]:
     return env
 
 
-def _probe_windows_gpu_device(
+def _probe_gpu_device(
     dst: Path, pattern: str, label: str, driver_hint: str,
-) -> None:
-    """Run ``--list-devices`` and print the real device line.
+) -> str:
+    """Run ``--list-devices``, print the real device line, return it.
 
-    Runtime DLLs being present is necessary but not sufficient: the
-    vendor driver must also enumerate a device. A missing device is a
-    warning (the build is installed and a driver update can fix it),
+    Runtime libraries being present is necessary but not sufficient:
+    the vendor driver must also enumerate a device. A missing device is
+    a warning (the build is installed and a driver update can fix it),
     never a silent success.
     """
+    env = None
+    if os.name != "nt":
+        # Release binaries use an $ORIGIN rpath, but a locally-built or
+        # repacked tree may not. Make the sibling runtime discoverable
+        # for the probe without changing the caller's environment.
+        env = os.environ.copy()
+        libdir = str(dst.parent)
+        existing = env.get("LD_LIBRARY_PATH", "")
+        env["LD_LIBRARY_PATH"] = (
+            libdir + (os.pathsep + existing if existing else "")
+        )
     try:
         probe = subprocess.run(
             [str(dst), "--list-devices"],
             capture_output=True, text=True, timeout=60,
-            encoding="utf-8", errors="replace",
+            encoding="utf-8", errors="replace", env=env,
         )
         text = (probe.stdout or "") + "\n" + (probe.stderr or "")
         device = next(
@@ -2338,10 +2427,12 @@ def _probe_windows_gpu_device(
                 f"did not enumerate a {label} device. {driver_hint}",
                 err=True,
             )
+        return device
     except (OSError, subprocess.SubprocessError) as e:
         click.echo(
             f"warning: could not list {label} devices: {e}", err=True,
         )
+        return ""
 
 
 @model.command("install-llama")
@@ -2354,7 +2445,8 @@ def _probe_windows_gpu_device(
               help="Registry model to point at the installed binary, e.g. 35b.")
 @click.option("--backend", default="auto",
               type=click.Choice(["auto", "rocm", "cuda", "vulkan",
-                                 "sycl", "metal", "mlx", "cpu"]),
+                                 "sycl", "openvino", "metal", "mlx",
+                                 "cpu"]),
               help="GPU backend to install (default: auto-detect from "
                    "the cached hardware profile).")
 @click.option("--gfx", "gfx", default=None,
@@ -2374,19 +2466,21 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
                   force_cpu: bool) -> None:
     """Download the llama-server binary for this OS/arch and GPU backend.
 
-    Fetches the matching llama.cpp release asset (ROCm, CUDA, Vulkan,
-    Metal or CPU; x86_64 and aarch64 both supported), extracts
-    llama-server and its sidecar libraries into the toki state bin dir,
-    self-checks the binary, and optionally rewrites a registry model's
-    ``binary`` (plus the ROCm env block) to point at it.
+    Fetches the matching llama.cpp release asset (CUDA, ROCm, Vulkan,
+    SYCL, OpenVINO, Metal or CPU; x86_64 and aarch64 both supported),
+    extracts llama-server and its sidecar libraries into the toki state
+    bin dir, self-checks the binary, and optionally rewrites a registry
+    model's ``binary`` (plus the ROCm env block) to point at it.
 
-    ``--backend`` defaults to auto-detect: Linux prefers ROCm when a
-    HIP toolchain is present, then Vulkan, then CPU; Windows picks CUDA
-    on NVIDIA, SYCL on discrete Intel Arc, and Vulkan on AMD (ROCm/HIP
-    is opt-in via ``--backend rocm``); macOS always uses the Metal
-    build. When the requested backend has no asset for this arch (e.g.
-    ROCm on arm64 Linux), the next available backend is used and a note
-    is printed.
+    ``--backend`` defaults to auto-detect: Linux prefers CUDA on
+    NVIDIA, ROCm on AMD when a HIP toolchain is present, Vulkan on
+    Intel, then CPU; Windows picks CUDA on NVIDIA, SYCL on discrete
+    Intel Arc, and Vulkan on AMD (ROCm/HIP and OpenVINO are opt-in via
+    ``--backend``); macOS always uses the universal Metal build.
+    Explicit backends that llama.cpp does not ship for this OS/arch are
+    rejected. An auto-detected backend with no asset (e.g. ROCm on
+    arm64 Linux) falls back to a vendor-compatible build (Vulkan/CPU),
+    never to another vendor's runtime.
     """
     import platform
     import tempfile
@@ -2451,7 +2545,9 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
             else:
                 backend = _detect_gpu_backend(os_name)
                 click.echo(f"backend: auto-detected {backend} ({os_name}/{arch})")
-        if force_cpu and backend in ("cuda", "rocm", "vulkan", "sycl", "metal"):
+        if force_cpu and backend in (
+            "cuda", "rocm", "vulkan", "sycl", "openvino", "metal",
+        ):
             click.echo(
                 f"note: --force-cpu requested; ignoring profile's "
                 f"recommendation ({backend}) and installing CPU instead"
@@ -2464,14 +2560,28 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
     elif backend == "rocm" and os_name == "macos":
         click.echo("error: --backend rocm is not available on macOS", err=True)
         raise SystemExit(1) from None
-    elif backend == "cuda" and os_name != "windows":
-        click.echo("error: --backend cuda is only available on Windows "
-                   "(llama.cpp ships no Linux CUDA assets)", err=True)
-        raise SystemExit(1) from None
-    elif backend == "sycl" and (os_name != "windows" or arch != "x64"):
-        click.echo("error: --backend sycl is only available on Windows "
-                   "x64 (llama.cpp ships no SYCL asset for this OS/arch)",
+    elif backend == "cuda" and os_name not in ("windows", "ubuntu"):
+        click.echo("error: --backend cuda is only available on Windows and "
+                   "Linux (llama.cpp ships no CUDA asset for macOS)",
                    err=True)
+        raise SystemExit(1) from None
+    elif backend == "sycl" and (
+        os_name not in ("windows", "ubuntu") or arch != "x64"
+    ):
+        click.echo("error: --backend sycl is only available on x64 Windows "
+                   "and Linux (llama.cpp ships no SYCL asset for this "
+                   "OS/arch)", err=True)
+        raise SystemExit(1) from None
+    elif backend == "openvino" and (
+        os_name not in ("windows", "ubuntu") or arch != "x64"
+    ):
+        click.echo("error: --backend openvino is only available on x64 "
+                   "Windows and Linux (llama.cpp ships no OpenVINO asset "
+                   "for this OS/arch)", err=True)
+        raise SystemExit(1) from None
+    elif backend == "vulkan" and os_name == "macos":
+        click.echo("error: --backend vulkan is not available on macOS; "
+                   "use --backend metal", err=True)
         raise SystemExit(1) from None
     elif backend == "mlx" and os_name != "macos":
         click.echo("error: --backend mlx is only available on macOS "
@@ -2482,30 +2592,39 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
 
     patterns = _asset_patterns(os_name, arch)
     requested_patterns = [p for p in patterns if p[0] == backend]
-    # When the requested backend has no asset for this arch, fall back
-    # through the priority list so installs never dead-end on a missing
-    # build (e.g. ROCm on arm64).
-    patterns = requested_patterns or patterns
+    if requested_patterns:
+        patterns = requested_patterns
+    else:
+        # The requested backend has no asset for this OS/arch. Fall back
+        # only to a compatible backend: ROCm on arm64 -> Vulkan/CPU, not
+        # CUDA. macOS CPU keeps the Metal patterns so the universal build
+        # lands with the CPU-only note.
+        patterns = _fallback_patterns(patterns, backend)
 
-    if backend == "cuda" and os_name == "windows":
+    if backend == "cuda" and os_name in ("windows", "ubuntu"):
         from ..diagnose import (
-            CUDA_12_WINDOWS_DRIVER,
+            cuda_asset_family,
+            cuda_driver_floor,
             cuda_driver_verdict,
             driver_version,
         )
 
-        too_old, prefer_cuda12 = cuda_driver_verdict(driver_version())
+        too_old, prefer_cuda12 = cuda_driver_verdict(
+            driver_version(), os_name,
+        )
+        floor = cuda_driver_floor(os_name)
+        family = cuda_asset_family(os_name)
         if too_old:
             click.echo(
                 "warning: NVIDIA driver is older than the "
-                f"{CUDA_12_WINDOWS_DRIVER[0]}.{CUDA_12_WINDOWS_DRIVER[1]} "
-                "floor for CUDA 12.4+ llama.cpp builds — this binary will "
-                "fail to load with 'CUDA driver version is insufficient'. "
-                "Update the NVIDIA driver first, then re-run this install.",
+                f"{floor[0]}.{floor[1]} floor for CUDA {family}+ "
+                "llama.cpp builds — this binary will fail to load with "
+                "'CUDA driver version is insufficient'. Update the NVIDIA "
+                "driver first, then re-run this install.",
                 err=True,
             )
         if prefer_cuda12:
-            # Drivers below the CUDA 13 floor run the CUDA 12.4 build
+            # Drivers below the CUDA 13 floor run the CUDA 12.x build
             # fine; prefer that asset so installs don't fail at load time.
             patterns = _prefer_cuda12(patterns)
 
@@ -2523,7 +2642,7 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
     # wrong when ``use_for_llm`` flipped yes for an APU with 0.5 GB
     # VRAM, or when the user upgraded hardware and didn't re-profile.
     # Honouring the explicit local build also gives Linux ROCm /
-    # CUDA users post-b10375 (no release asset) what they built.
+    # CUDA users a custom build what they compiled.
     if backend == "cpu":
         local = _find_local_llama_server()
         if local:
@@ -2670,9 +2789,9 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
     assets = release["assets"]
     asset, matched_backend = _pick_asset(assets, patterns)
     if asset is None:
-        # No release asset for the requested backend on this OS/arch —
-        # the classic Linux ROCm post-b10375 case. Fall back to a
-        # locally-built llama-server when one exists, so a user who
+        # No release asset for the requested backend on this OS/arch.
+        # Fall back to a locally-built llama-server when one exists, so
+        # a user who
         # built with ./scripts/build_llama_cpp.sh doesn't end up with
         # a CPU binary and -ngl 99 refusing to start.
         local = _find_local_llama_server()
@@ -2696,9 +2815,26 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
     if matched_backend != backend:
         # Release fell back to a different backend than requested —
         # usually CPU when the user wanted a GPU backend that has no
-        # release asset for this OS/arch. Try the local build before
-        # silently downgrading to CPU.
+        # release asset for this OS/arch. A local build of the requested
+        # backend is better than a different release backend; then try
+        # the local build before silently downgrading to CPU.
         local = _find_local_llama_server()
+        if local and backend != "cpu":
+            local_kind = (_local_binary_backend(local) or "").lower()
+            if local_kind == backend:
+                click.echo(
+                    f"note: no {backend} asset on llama.cpp releases for "
+                    f"{os_name}/{arch}; using locally-built {local_kind} "
+                    f"llama-server at {local} instead of "
+                    f"{matched_backend}. (Build with "
+                    f"./scripts/build_llama_cpp.sh to refresh.)",
+                    err=True,
+                )
+                return _install_from_local(
+                    local, asset_name=None, bin_dir=bin_dir,
+                    exe_name=exe_name, backend=local_kind,
+                    os_name=os_name,
+                )
         if local and matched_backend == "cpu" and backend != "cpu":
             click.echo(
                 f"note: no {backend} asset on llama.cpp releases for "
@@ -2721,19 +2857,6 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
             f"installing {matched_backend} instead"
         )
         backend = matched_backend
-    # llama.cpp stopped shipping Linux ROCm assets after b10375 (mid-2026);
-    # the walk lands on that last build, which predates newer model support.
-    # Warn so users on a Linux ROCm box know to build from source instead.
-    newest_tag = releases[0]["tag_name"] if not tag else None
-    if (backend == "rocm" and os_name == "ubuntu"
-            and newest_tag and tag_name != newest_tag):
-        click.echo(
-            f"note: {tag_name} is the last llama.cpp release with a Linux "
-            f"ROCm asset (llama.cpp now ships ROCm only for Windows). "
-            f"Newer model support lands on master first — to get it on this "
-            f"box, build from source: ./scripts/build_llama_cpp.sh",
-            err=True,
-        )
     click.echo(f"downloading {asset['name']} ({asset['size'] / 1048576:.0f} MB)...")
 
     with tempfile.TemporaryDirectory(prefix="toki-llama-") as tmp:
@@ -2775,19 +2898,18 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
         # .so files mislead backend probes and confuse the launcher.
         _prune_foreign_gpu_libs(bin_dir, backend)
 
-        # Every Windows CUDA build ships cudart/cublas as a separate
-        # runtime archive (the main archive's ggml-cuda.dll links
-        # against them); without it llama-server can't load CUDA and
-        # falls back to CPU.
+        # Every CUDA build ships cudart/cublas as a separate runtime
+        # archive (the main archive's ggml-cuda links against them);
+        # without it llama-server can't load CUDA and falls back to CPU.
         if matched_backend == "cuda":
-            m_major = re.search(r"win-cuda-(\d+)\.", asset["name"])
+            m_major = re.search(r"cuda-(\d+)\.", asset["name"])
             if m_major:
                 _prune_cuda_runtime_major(bin_dir, m_major.group(1))
             cudart = _find_cuda_runtime_asset(assets, asset["name"])
             if cudart is None:
                 click.echo(
                     "note: this release has no separate cudart archive; "
-                    "checking the main archive for the runtime DLLs…",
+                    "checking the main archive for the runtime libraries…",
                     err=True,
                 )
             else:
@@ -2803,119 +2925,213 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
         dst.chmod(dst.stat().st_mode | 0o111)
     click.echo(f"installed: {dst}")
 
-    # A CUDA build without its runtime DLLs loads ggml-cuda.dll, fails,
-    # and silently runs on CPU. Check the runtime explicitly and prove
-    # the binary enumerates a CUDA device before calling it good.
-    if matched_backend == "cuda" and os_name == "windows":
-        from ..diagnose import cuda_runtime_dlls
-
-        expected_major = re.search(r"win-cuda-(\d+)\.", asset["name"])
-        runtime = cuda_runtime_dlls(bin_dir)
-        if expected_major:
-            runtime = [
-                n for n in runtime
-                if f"cudart64_{expected_major.group(1)}." in n.lower()
-            ]
-        if not runtime:
-            raise click.ClickException(
-                f"the CUDA build is installed but its runtime DLLs "
-                f"(cudart64_*.dll, cublas64_*.dll) are missing from "
-                f"{bin_dir} — llama-server would silently fall back to "
-                f"CPU. Re-run `toki model install-llama --backend cuda`; "
-                f"if this release has no cudart archive, install the "
-                f"Vulkan build instead (--backend vulkan)."
-            )
-        click.echo(f"verify: CUDA runtime {', '.join(runtime)}")
-        try:
-            probe = subprocess.run(
-                [str(dst), "--list-devices"],
-                capture_output=True, text=True, timeout=60,
-                encoding="utf-8", errors="replace",
-            )
-            text = (probe.stdout or "") + "\n" + (probe.stderr or "")
-            # A device line (CUDA0: ...), not an init error that
-            # happens to contain the word CUDA.
-            device = next(
-                (ln.strip() for ln in text.splitlines()
-                 if re.search(r"\bCUDA\d+\b", ln)),
-                "",
-            )
-            if device:
-                click.echo(f"verify: {device}")
-            else:
-                click.echo(
-                    "warning: the DLLs are in place but the binary did not "
-                    "enumerate a CUDA device. Usually the NVIDIA driver is "
-                    "older than this build needs — run `toki doctor` for "
-                    "the driver verdict.",
-                    err=True,
-                )
-        except (OSError, subprocess.SubprocessError) as e:
-            click.echo(
-                f"warning: could not list CUDA devices: {e}", err=True,
-            )
-
-    # The Windows ROCm zip bundles its HIP runtime; without it
-    # ggml-hip.dll fails to load and llama.cpp runs on CPU.
-    if matched_backend == "rocm" and os_name == "windows":
-        from ..diagnose import rocm_runtime_dlls
-
-        runtime = rocm_runtime_dlls(bin_dir)
-        if not any(n.lower().startswith("amdhip64") for n in runtime):
-            raise click.ClickException(
-                f"the ROCm build is installed but its HIP runtime "
-                f"(amdhip64*.dll, amd_comgr.dll, rocm_kpack.dll) is "
-                f"missing from {bin_dir} — llama-server would silently "
-                f"fall back to CPU. Re-run "
-                f"`toki model install-llama --backend rocm`."
-            )
-        click.echo(f"verify: ROCm runtime {', '.join(runtime)}")
-        _probe_windows_gpu_device(
-            dst, r"\bROCm\d+\b", "ROCm",
-            "Usually the AMD driver is older than this build needs — "
-            "update Adrenalin and run `toki doctor`.",
+    # A CUDA build without its runtime loads ggml-cuda, fails, and
+    # silently runs on CPU. Check the runtime explicitly and prove the
+    # binary enumerates a CUDA device before calling it good.
+    if matched_backend == "cuda":
+        from ..diagnose import (
+            cuda_runtime_dlls,
+            cuda_runtime_libs,
+            cuda_runtime_ready,
         )
 
-    # The Windows SYCL zip is self-contained (sycl9.dll + oneMKL + UR),
-    # so a missing runtime means the install did not unpack correctly.
-    if matched_backend == "sycl" and os_name == "windows":
-        from ..diagnose import sycl_runtime_dlls
+        expected_major = re.search(r"cuda-(\d+)\.", asset["name"])
+        major = expected_major.group(1) if expected_major else None
+        if os_name == "windows":
+            runtime = cuda_runtime_dlls(bin_dir)
+            if major:
+                runtime = [
+                    n for n in runtime
+                    if f"cudart64_{major}." in n.lower()
+                ]
+            if not runtime:
+                raise click.ClickException(
+                    f"the CUDA build is installed but its runtime DLLs "
+                    f"(cudart64_*.dll, cublas64_*.dll) are missing from "
+                    f"{bin_dir} — llama-server would silently fall back "
+                    f"to CPU. Re-run `toki model install-llama "
+                    f"--backend cuda`; if this release has no cudart "
+                    f"archive, install the Vulkan build instead "
+                    f"(--backend vulkan)."
+                )
+            click.echo(f"verify: CUDA runtime {', '.join(runtime)}")
+        else:
+            runtime = cuda_runtime_libs(bin_dir)
+            if major:
+                runtime = [
+                    n for n in runtime
+                    if f"libcudart.so.{major}" in n.lower()
+                ]
+            if runtime:
+                click.echo(f"verify: CUDA runtime {', '.join(runtime)}")
+            elif cuda_runtime_ready(str(dst)):
+                click.echo(
+                    "verify: using the system CUDA runtime "
+                    "(no bundled libcudart.so)"
+                )
+            else:
+                raise click.ClickException(
+                    f"the CUDA build is installed but its runtime "
+                    f"(libcudart.so.{major or '*'}, libcublas.so, "
+                    f"libcublasLt.so) is missing from {bin_dir} and the "
+                    f"system — llama-server would silently fall back to "
+                    f"CPU. Re-run `toki model install-llama --backend "
+                    f"cuda`; if this release has no cudart archive, "
+                    f"install the Vulkan build instead "
+                    f"(--backend vulkan)."
+                )
+        _probe_gpu_device(
+            dst, r"\bCUDA\d+\b", "CUDA",
+            "Usually the NVIDIA driver is older than this build needs — "
+            "run `toki doctor` for the driver verdict.",
+        )
 
-        runtime = sycl_runtime_dlls(bin_dir)
-        if not runtime:
-            raise click.ClickException(
-                f"the SYCL build is installed but its runtime "
-                f"(sycl*.dll) is missing from {bin_dir} — llama-server "
-                f"would silently fall back to CPU. Re-run "
-                f"`toki model install-llama --backend sycl`."
-            )
-        click.echo(f"verify: SYCL runtime {', '.join(runtime)}")
-        _probe_windows_gpu_device(
+    # The Windows ROCm zip bundles its HIP runtime; Linux relies on the
+    # system ROCm runtime. Without it ggml-hip fails to load and
+    # llama.cpp runs on CPU.
+    if matched_backend == "rocm":
+        from ..diagnose import rocm_runtime_dlls, rocm_runtime_ready
+
+        if os_name == "windows":
+            runtime = rocm_runtime_dlls(bin_dir)
+            if not any(n.lower().startswith("amdhip64") for n in runtime):
+                raise click.ClickException(
+                    f"the ROCm build is installed but its HIP runtime "
+                    f"(amdhip64*.dll, amd_comgr.dll, rocm_kpack.dll) is "
+                    f"missing from {bin_dir} — llama-server would "
+                    f"silently fall back to CPU. Re-run "
+                    f"`toki model install-llama --backend rocm`."
+                )
+            click.echo(f"verify: ROCm runtime {', '.join(runtime)}")
+        else:
+            if not rocm_runtime_ready(str(dst)):
+                raise click.ClickException(
+                    "the ROCm build is installed but the HIP runtime "
+                    "(libamdhip64.so) is missing — llama-server would "
+                    "silently fall back to CPU. Install ROCm (or the "
+                    "TheRock runtime) for this GPU, or use the Vulkan "
+                    "build: --backend vulkan."
+                )
+            click.echo("verify: ROCm HIP runtime present")
+        _probe_gpu_device(
+            dst, r"\bROCm\d+\b", "ROCm",
+            "Usually the AMD driver/ROCm runtime is older than this "
+            "build needs — run `toki doctor`.",
+        )
+
+    # The Windows SYCL zip is self-contained (sycl9.dll + oneMKL + UR).
+    # Linux SYCL archives are not: they link the oneAPI runtime, oneMKL
+    # and Level Zero, so a missing runtime is a real CPU fallback.
+    if matched_backend == "sycl":
+        from ..diagnose import (
+            sycl_runtime_dlls,
+            sycl_runtime_missing,
+            sycl_runtime_ready,
+        )
+
+        if os_name == "windows":
+            runtime = sycl_runtime_dlls(bin_dir)
+            if not runtime:
+                raise click.ClickException(
+                    f"the SYCL build is installed but its runtime "
+                    f"(sycl*.dll) is missing from {bin_dir} — "
+                    f"llama-server would silently fall back to CPU. "
+                    f"Re-run `toki model install-llama --backend sycl`."
+                )
+            click.echo(f"verify: SYCL runtime {', '.join(runtime)}")
+        else:
+            if not sycl_runtime_ready(str(dst)):
+                missing = sycl_runtime_missing(str(dst))
+                detail = (
+                    f" (missing: {', '.join(missing)})" if missing else ""
+                )
+                raise click.ClickException(
+                    f"the SYCL build is installed but the Intel oneAPI "
+                    f"runtime is incomplete{detail}. Linux SYCL builds "
+                    f"link the oneAPI DPC++ runtime, oneMKL and Level "
+                    f"Zero; install them (or use --backend vulkan), then "
+                    f"re-run this install."
+                )
+            click.echo("verify: oneAPI SYCL runtime present")
+        _probe_gpu_device(
             dst, r"\bSYCL\d+\b", "SYCL",
             "Usually the Intel GPU driver / Level Zero runtime is "
             "missing or older than this build needs — update the Intel "
             "Arc driver.",
         )
 
-    # The Vulkan zip does not bundle vulkan-1.dll; it comes from the
+    # The Vulkan archive does not bundle the loader; it comes from the
     # GPU driver. Missing it is a silent CPU fallback, so refuse.
-    if matched_backend == "vulkan" and os_name == "windows":
+    if matched_backend == "vulkan":
         from ..diagnose import vulkan_runtime_ready
 
         if not vulkan_runtime_ready(str(dst)):
-            raise click.ClickException(
-                "the Vulkan build is installed but the Vulkan loader "
-                "(vulkan-1.dll) is missing from this system — "
-                "llama-server would silently fall back to CPU. Install "
-                "or repair the AMD/Intel GPU driver, then re-run "
-                "`toki model install-llama --backend vulkan`."
+            loader = (
+                "vulkan-1.dll" if os_name == "windows"
+                else "libvulkan.so.1"
             )
-        click.echo("verify: Vulkan loader vulkan-1.dll")
-        _probe_windows_gpu_device(
+            raise click.ClickException(
+                f"the Vulkan build is installed but the Vulkan loader "
+                f"({loader}) is missing from this system — llama-server "
+                f"would silently fall back to CPU. Install or repair the "
+                f"AMD/Intel GPU driver, then re-run "
+                f"`toki model install-llama --backend vulkan`."
+            )
+        click.echo(
+            "verify: Vulkan loader "
+            + ("vulkan-1.dll" if os_name == "windows" else "libvulkan.so.1")
+        )
+        _probe_gpu_device(
             dst, r"\bVulkan\d+\b", "Vulkan",
             "Usually the GPU driver is older than this build needs — "
             "update the AMD/Intel driver.",
         )
+
+    # OpenVINO's release archive bundles the core runtime + TBB, but
+    # the Intel GPU plugin is what makes it a GPU backend. Without the
+    # plugin it enumerates the CPU plugin and runs on CPU.
+    if matched_backend == "openvino":
+        from ..diagnose import (
+            openvino_gpu_plugin_ready,
+            openvino_runtime_ready,
+        )
+
+        if not openvino_runtime_ready(str(dst)):
+            core = (
+                "openvino.dll" if os_name == "windows"
+                else "libopenvino.so"
+            )
+            raise click.ClickException(
+                f"the OpenVINO build is installed but its core runtime "
+                f"({core}) is missing from {bin_dir} — llama-server "
+                f"would silently fall back to CPU. Re-run "
+                f"`toki model install-llama --backend openvino`."
+            )
+        if not openvino_gpu_plugin_ready(str(dst)):
+            plugin = (
+                "openvino_intel_gpu_plugin.dll" if os_name == "windows"
+                else "libopenvino_intel_gpu_plugin.so"
+            )
+            raise click.ClickException(
+                f"the OpenVINO build is installed but its Intel GPU "
+                f"plugin ({plugin}) is missing — it would enumerate the "
+                f"CPU plugin and run on CPU. Re-run "
+                f"`toki model install-llama --backend openvino`, or use "
+                f"the SYCL build (--backend sycl)."
+            )
+        click.echo("verify: OpenVINO runtime + Intel GPU plugin")
+        device = _probe_gpu_device(
+            dst, r"\bOpenVINO\d+\b", "OpenVINO",
+            "Usually the Intel GPU driver / Level Zero runtime is "
+            "missing or older than this build needs — update the Intel "
+            "Arc driver.",
+        )
+        if device and re.search(r"\bcpu\b", device, re.IGNORECASE):
+            click.echo(
+                "warning: OpenVINO enumerated a CPU device, not a GPU. "
+                "Check the Intel GPU driver / Level Zero runtime.",
+                err=True,
+            )
 
     # macOS ships one universal build with Metal compiled in. Prove it
     # enumerates an MTL device instead of trusting the file name; a Mac

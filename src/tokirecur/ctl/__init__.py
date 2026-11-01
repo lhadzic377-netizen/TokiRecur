@@ -2693,42 +2693,82 @@ def _check_gpu_offload_binary_match(
         kind = binary_backend(binary)
     except Exception:
         return True  # can't inspect; trust the user's explicit ngl
-    if winproc.IS_WINDOWS and kind:
+    if kind:
         # A GPU backend module loads, cannot find its runtime, and the
         # server falls back to CPU without failing. That is exactly the
         # silent degradation this check exists to stop.
         from ..diagnose import (
             cuda_runtime_ready,
+            openvino_gpu_plugin_ready,
             openvino_runtime_ready,
             rocm_runtime_ready,
+            sycl_runtime_missing,
             sycl_runtime_ready,
             vulkan_runtime_ready,
         )
+        win = winproc.IS_WINDOWS
         k = kind.lower()
         missing: tuple[str, str, str | None] | None = None
         if k == "cuda" and not cuda_runtime_ready(binary):
-            missing = ("CUDA", "cudart64_*.dll", "cuda")
+            missing = (
+                "CUDA",
+                "cudart64_*.dll" if win else "libcudart.so",
+                "cuda",
+            )
         elif k == "rocm" and not rocm_runtime_ready(binary):
-            missing = ("ROCm", "amdhip64*.dll", "rocm")
+            missing = (
+                "ROCm",
+                "amdhip64*.dll" if win else "libamdhip64.so",
+                "rocm",
+            )
         elif k == "vulkan" and not vulkan_runtime_ready(binary):
-            missing = ("Vulkan", "vulkan-1.dll", None)
+            missing = (
+                "Vulkan",
+                "vulkan-1.dll" if win else "libvulkan.so.1",
+                None,
+            )
         elif k == "sycl" and not sycl_runtime_ready(binary):
-            missing = ("SYCL", "sycl*.dll", "sycl")
+            runtime = (
+                "sycl*.dll" if win
+                else (", ".join(sycl_runtime_missing(binary))
+                      or "oneAPI SYCL runtime")
+            )
+            missing = ("SYCL", runtime, "sycl")
         elif k == "openvino" and not openvino_runtime_ready(binary):
-            missing = ("OpenVINO", "openvino.dll", None)
+            missing = (
+                "OpenVINO",
+                "openvino.dll" if win else "libopenvino.so",
+                "openvino",
+            )
+        elif k == "openvino" and not openvino_gpu_plugin_ready(binary):
+            missing = (
+                "OpenVINO GPU",
+                ("openvino_intel_gpu_plugin.dll" if win
+                 else "libopenvino_intel_gpu_plugin.so"),
+                "openvino",
+            )
         if missing:
-            label, dlls, backend = missing
-            if backend:
-                fix = (f"Reinstall it with `toki model install-llama "
-                       f"--backend {backend}`")
-            elif k == "vulkan":
-                fix = ("Install or repair the GPU driver (it provides "
-                       "vulkan-1.dll)")
+            label, libs, backend = missing
+            if k == "vulkan":
+                loader = "vulkan-1.dll" if win else "libvulkan.so.1"
+                fix = (
+                    "Install or repair the GPU driver "
+                    f"(it provides {loader})"
+                )
+            elif k == "sycl" and not win:
+                fix = (
+                    "Install the Intel oneAPI DPC++ runtime + oneMKL + "
+                    "Level Zero, or use `toki model install-llama "
+                    "--backend vulkan`"
+                )
             else:
-                fix = "Reinstall the build"
+                fix = (
+                    f"Reinstall it with `toki model install-llama "
+                    f"--backend {backend}`"
+                )
             msg = (
                 f"GPU offload requested (-ngl {ngl}) but the {label} build "
-                f"at {binary} is missing its runtime ({dlls}), so "
+                f"at {binary} is missing its runtime ({libs}), so "
                 f"llama.cpp would silently run on CPU. {fix}, or pass "
                 f"TOKI_NGL=0 to run CPU mode on purpose."
             )

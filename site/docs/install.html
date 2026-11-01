@@ -103,7 +103,7 @@ pwsh -File "$env:TEMP\toki-install.ps1"</code></pre>
     <h2>Fetch the llama-server binary</h2>
     <p>One command installs the matching official build, it auto-detects the best backend for your machine. Pass <code>--backend</code> to override.</p>
     <pre><code>toki model install-llama                 # auto-detect backend, latest release
-toki model install-llama --backend rocm  # force a backend (rocm|cuda|sycl|vulkan|metal|cpu)
+toki model install-llama --backend rocm  # force a backend (rocm|cuda|sycl|openvino|vulkan|metal|cpu)
 toki model install-llama --backend rocm --gfx 11.5.1  # set HSA_OVERRIDE_GFX_VERSION
 toki model install-llama --tag b6400     # pin a release tag
 toki model install-llama --name 35b      # ...and point a registry model at it</code></pre>
@@ -113,14 +113,14 @@ toki model install-llama --name 35b      # ...and point a registry model at it</
     <table>
       <thead><tr><th>Platform</th><th>Architecture</th><th>llama-server builds</th></tr></thead>
       <tbody>
-        <tr><td>Linux</td><td>x86_64</td><td>ROCm (auto if HIP present), Vulkan, CPU</td></tr>
-        <tr><td>Linux</td><td>aarch64</td><td>Vulkan, CPU</td></tr>
+        <tr><td>Linux</td><td>x86_64</td><td>CUDA (auto NVIDIA), ROCm (auto AMD/HIP), SYCL (explicit Intel Arc), OpenVINO (explicit Intel), Vulkan, CPU</td></tr>
+        <tr><td>Linux</td><td>aarch64</td><td>CUDA (auto NVIDIA), Vulkan, CPU</td></tr>
         <tr><td>macOS</td><td>x86_64, arm64</td><td>Metal (also runs CPU-only)</td></tr>
-        <tr><td>Windows</td><td>x86_64</td><td>CUDA (auto NVIDIA), SYCL (auto Intel Arc), Vulkan (auto AMD), ROCm/HIP (explicit AMD), CPU</td></tr>
-        <tr><td>Windows</td><td>aarch64</td><td>Vulkan, CPU</td></tr>
+        <tr><td>Windows</td><td>x86_64</td><td>CUDA (auto NVIDIA), SYCL (auto Intel Arc), Vulkan (auto AMD), ROCm/HIP (explicit AMD), OpenVINO (explicit Intel), CPU</td></tr>
+        <tr><td>Windows</td><td>aarch64</td><td>CUDA (auto NVIDIA), Vulkan, CPU</td></tr>
       </tbody>
     </table>
-    <p>The GPU backends are provided by the llama-server binary itself, Toki Recur talks to it over HTTP and is backend-agnostic. On Windows every GPU install verifies the vendor runtime DLLs and a real device line from <code>llama-server --list-devices</code> before reporting success, so a missing driver cannot silently degrade to CPU. macOS ships one universal Metal build (there is no separate CPU asset); CPU-only mode is <code>-ngl 0</code> / <code>--device none</code>, and a Mac or VM without Metal runs that build on CPU with an explicit warning.</p>
+    <p>The GPU backends are provided by the llama-server binary itself, Toki Recur talks to it over HTTP and is backend-agnostic. Every GPU install verifies the vendor runtime and a real device line from <code>llama-server --list-devices</code> before reporting success, so a missing driver cannot silently degrade to CPU: CUDA checks its paired <code>cudart</code>/<code>cublas</code> archive and <code>CUDA0</code>; ROCm checks <code>libamdhip64.so</code> / <code>amdhip64*.dll</code> and <code>ROCm0</code>; SYCL checks the oneAPI runtime, oneMKL and Level Zero on Linux and bundled <code>sycl*.dll</code> on Windows; OpenVINO checks the core runtime and the Intel GPU plugin; Vulkan checks the driver loader. Linux SYCL archives are not self-contained, so oneAPI is a real prerequisite there. CUDA 13.x needs driver 580.65+; the Linux 12.8 build needs 570.26+ (Windows 12.4 needs 551.61+). macOS ships one universal Metal build (there is no separate CPU asset); CPU-only mode is <code>-ngl 0</code> / <code>--device none</code>, and a Mac or VM without Metal runs that build on CPU with an explicit warning.</p>
 
     <h2>System daemon installers</h2>
     <p>Optional, run as a system daemon (dedicated user + service manager unit + log rotation, auto-start at boot). <code>install.sh</code>/<code>install.ps1</code> bootstrap the full stack themselves (own venv at <code>/opt/toki-recur</code>, package + llama-server + service unit), so they work standalone, they don't need the pipx install above:</p>

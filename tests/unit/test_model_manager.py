@@ -1671,6 +1671,14 @@ def test_check_gpu_offload_returns_true_when_ngl_zero(monkeypatch):
 
 def test_check_gpu_offload_returns_true_when_gpu_binary(monkeypatch):
     """A ROCm/CUDA/Vulkan/SYCL/Metal build with -ngl 99 is fine."""
+    from tokirecur import diagnose
+
+    for name in (
+        "cuda_runtime_ready", "rocm_runtime_ready", "vulkan_runtime_ready",
+        "sycl_runtime_ready", "openvino_runtime_ready",
+        "openvino_gpu_plugin_ready",
+    ):
+        monkeypatch.setattr(diagnose, name, lambda b: True)
     for kind in ("CUDA", "ROCm", "Vulkan", "SYCL", "OpenVINO", "Metal"):
         monkeypatch.setattr(
             "tokirecur.diagnose.binary_backend", lambda b, k=kind: k,
@@ -1714,9 +1722,12 @@ def test_warn_gpu_offload_silent_when_ngl_zero(monkeypatch, capsys):
 
 def test_warn_gpu_offload_silent_when_build_has_gpu(monkeypatch, capsys):
     """A CUDA build with TOKI_NGL set is fine — no warning."""
+    from tokirecur import diagnose
+
     monkeypatch.setattr(
         "tokirecur.diagnose.binary_backend", lambda b: "CUDA",
     )
+    monkeypatch.setattr(diagnose, "cuda_runtime_ready", lambda b: True)
     ctl._warn_gpu_offload_without_gpu_binary("/nope/llama-server", 99)
     assert capsys.readouterr().err == ""
 

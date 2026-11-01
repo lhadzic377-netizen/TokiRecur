@@ -5,12 +5,12 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "tokirecur"
 dynamic = ["version"]
-description = "Toki Recur — KV cache reuse for LLM inference. Drop-in prefix caching across CUDA, ROCm, and Vulkan."
+description = "Toki Recur — KV cache reuse for LLM inference. Drop-in prefix caching across CUDA, ROCm, SYCL, OpenVINO, Vulkan, Metal, and CPU."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 authors = [{ name = "Luke Hadzic", email = "contact@tokirecur.com" }]
-keywords = ["llm", "inference", "kv-cache", "prefix-cache", "rocm", "llama.cpp", "toki-recur"]
+keywords = ["llm", "inference", "kv-cache", "prefix-cache", "cuda", "rocm", "sycl", "openvino", "vulkan", "metal", "llama.cpp", "toki-recur"]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: POSIX :: Linux",

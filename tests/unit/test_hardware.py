@@ -557,7 +557,7 @@ def test_pick_backend_table_driven_vendor_os(monkeypatch):
     )]
     assert hardware._pick_backend(cpu, gpus, "linux")["backend"] == "rocm"
     assert hardware._pick_backend(cpu, gpus, "windows")["backend"] == "vulkan"
-    assert hardware._pick_backend(cpu, gpus, "darwin")["backend"] == "vulkan"
+    assert hardware._pick_backend(cpu, gpus, "darwin")["backend"] == "metal"
 
 
 def test_freq_tier_drop_apple_efficiency_cores():

@@ -1050,13 +1050,16 @@ def _os_name() -> str:
 # Vendor → backend per OS. The picker walks eligible GPUs in
 # preference order (discrete first) and consults this table.
 _BACKEND_TABLE: dict[str, dict[str, str]] = {
-    "NVIDIA": {"linux": "cuda", "windows": "cuda", "darwin": "vulkan"},
-    "AMD": {"linux": "rocm", "windows": "vulkan", "darwin": "vulkan"},
+    "NVIDIA": {"linux": "cuda", "windows": "cuda", "darwin": "metal"},
+    "AMD": {"linux": "rocm", "windows": "vulkan", "darwin": "metal"},
     # llama.cpp ships a self-contained Windows SYCL build; it is the
     # vendor-native path for discrete Arc. Intel iGPUs are filtered out
     # by _gpu_eligible before this table is consulted, so they still
     # get the CPU build.
-    "Intel": {"linux": "vulkan", "windows": "sycl", "darwin": "vulkan"},
+    "Intel": {"linux": "vulkan", "windows": "sycl", "darwin": "metal"},
+    # macOS ships one universal Metal build. There is no CUDA, ROCm or
+    # Vulkan release asset for macOS, so every Mac GPU (Apple, AMD,
+    # Intel, and legacy NVIDIA) uses Metal.
     "Apple": {"darwin": "metal", "linux": "vulkan", "windows": "vulkan"},
 }
 

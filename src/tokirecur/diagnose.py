@@ -23,12 +23,17 @@ from pathlib import Path
 
 from . import ctl, winproc
 
-# Windows NVIDIA driver floors for llama.cpp CUDA builds. CUDA 12.4
-# needs 551.61+. CUDA 13.x needs 580.65 at minimum (minor-version
-# compatibility: a 13.4 build loads on the 13.0 floor); below that,
-# install-llama prefers the 12.4 asset so the build actually loads.
+# NVIDIA driver floors for llama.cpp CUDA builds. Windows ships CUDA
+# 12.4 and 13.x; Linux ships CUDA 12.8 and 13.x. CUDA 13.x needs
+# 580.65 at minimum (minor-version compatibility: a 13.4 build loads on
+# the 13.0 floor); below that, install-llama prefers the CUDA 12.x asset
+# so the build actually loads.
 CUDA_12_WINDOWS_DRIVER = (551, 61)
-CUDA_13_WINDOWS_DRIVER = (580, 65)
+CUDA_12_8_LINUX_DRIVER = (570, 26)
+CUDA_12_8_WINDOWS_DRIVER = (570, 65)
+CUDA_13_DRIVER = (580, 65)
+# Backwards-compatible alias used by older callers/tests.
+CUDA_13_WINDOWS_DRIVER = CUDA_13_DRIVER
 
 
 def _run(argv: list[str], timeout: float = 5.0) -> str | None:
@@ -58,16 +63,31 @@ def driver_version() -> tuple[int, ...] | None:
     return tuple(parts) if parts else None
 
 
-def cuda_driver_verdict(driver: tuple[int, ...] | None) -> tuple[bool, bool]:
+def cuda_driver_floor(os_name: str = "windows") -> tuple[int, int]:
+    """Lowest NVIDIA driver that can load the oldest CUDA asset we ship."""
+    if os_name in ("ubuntu", "linux"):
+        return CUDA_12_8_LINUX_DRIVER
+    return CUDA_12_WINDOWS_DRIVER
+
+
+def cuda_asset_family(os_name: str = "windows") -> str:
+    """Oldest CUDA release family with a llama.cpp asset on this OS."""
+    return "12.8" if os_name in ("ubuntu", "linux") else "12.4"
+
+
+def cuda_driver_verdict(
+    driver: tuple[int, ...] | None, os_name: str = "windows",
+) -> tuple[bool, bool]:
     """(too_old_for_any_cuda_build, prefer_cuda12_asset) for a driver tuple.
 
-    ``too_old`` means the driver is below the CUDA 12.4 floor, so no
-    CUDA llama.cpp build will load at all. ``prefer_cuda12`` means the
-    driver can run the 12.4 build but not newer (12.8/13.x) builds.
+    ``too_old`` means the driver is below the floor of the oldest CUDA
+    asset llama.cpp ships for this OS (12.4 on Windows, 12.8 on Linux),
+    so no CUDA build will load at all. ``prefer_cuda12`` means the
+    driver can run the 12.x build but not a CUDA 13.x build.
     """
     if driver is None:
         return False, False
-    return driver < CUDA_12_WINDOWS_DRIVER, driver < CUDA_13_WINDOWS_DRIVER
+    return driver < cuda_driver_floor(os_name), driver < CUDA_13_DRIVER
 
 
 def _windows_gpu_hardware() -> dict[str, str | None]:
@@ -200,6 +220,20 @@ def cuda_runtime_dlls(directory: str | os.PathLike[str]) -> list[str]:
     )
 
 
+def cuda_runtime_libs(directory: str | os.PathLike[str]) -> list[str]:
+    """cudart/cublas shared libraries next to a Linux llama-server."""
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return []
+    return sorted(
+        n for n in names
+        if n.lower().startswith(
+            ("libcudart.so", "libcublas.so", "libcublaslt.so")
+        )
+    )
+
+
 def _dll_on_path(*prefixes: str) -> bool:
     """Is a DLL matching one of ``prefixes`` on the Windows PATH?
 
@@ -222,17 +256,123 @@ def _dll_on_path(*prefixes: str) -> bool:
     return False
 
 
+def _glob_any(dirs: list[str] | tuple[str, ...],
+              prefixes: tuple[str, ...]) -> list[str]:
+    found: list[str] = []
+    for entry in dirs:
+        if not entry:
+            continue
+        try:
+            for prefix in prefixes:
+                found.extend(str(p) for p in Path(entry).glob(prefix + "*"))
+        except OSError:
+            continue
+    return sorted(set(found))
+
+
+def _posix_lib_dirs(*extra: str) -> list[str]:
+    dirs: list[str] = []
+    for part in os.environ.get("LD_LIBRARY_PATH", "").split(os.pathsep):
+        part = part.strip()
+        if part:
+            dirs.append(part)
+    dirs.extend(extra)
+    return dirs
+
+
+def _ldconfig_has(*names: str) -> bool:
+    out = _run(["ldconfig", "-p"], timeout=10)
+    if not out:
+        return False
+    low = out.lower()
+    return any(name.lower() in low for name in names)
+
+
+def _cuda_lib_dirs() -> list[str]:
+    dirs = ["/usr/local/cuda/lib64", "/usr/local/cuda/lib"]
+    for base in ("/usr/local/cuda/targets",):
+        try:
+            dirs.extend(str(p) for p in Path(base).glob("*/lib"))
+            dirs.extend(str(p) for p in Path(base).glob("*/lib64"))
+        except OSError:
+            pass
+    return dirs
+
+
+def _sycl_lib_dirs() -> list[str]:
+    dirs: list[str] = []
+    for base, pattern in (
+        ("/opt/intel/oneapi/compiler", "*/lib"),
+        ("/opt/intel/oneapi/compiler", "*/lib/intel64"),
+        ("/opt/intel/oneapi/mkl", "*/lib"),
+        ("/opt/intel/oneapi/mkl", "*/lib/intel64"),
+    ):
+        try:
+            dirs.extend(str(p) for p in Path(base).glob(pattern))
+        except OSError:
+            pass
+    dirs.extend((
+        "/opt/intel/oneapi/compiler/latest/lib",
+        "/opt/intel/oneapi/compiler/latest/lib/intel64",
+        "/opt/intel/oneapi/mkl/latest/lib",
+        "/opt/intel/oneapi/mkl/latest/lib/intel64",
+    ))
+    return dirs
+
+
+def _openvino_lib_dirs() -> list[str]:
+    dirs = ["/opt/intel/openvino/runtime/lib/intel64"]
+    try:
+        dirs.extend(
+            str(p) for p in Path("/opt/intel").glob(
+                "openvino*/runtime/lib/intel64"
+            )
+        )
+    except OSError:
+        pass
+    return dirs
+
+
+def _posix_runtime_ready(
+    binary: str | None,
+    prefixes: tuple[str, ...],
+    extra_dirs: tuple[str, ...] = (),
+    *,
+    use_ldconfig: bool = True,
+) -> bool:
+    """True when every required shared-library prefix resolves.
+
+    Looks next to the binary first (release archives carry their
+    runtime there), then LD_LIBRARY_PATH + vendor dirs, then the
+    dynamic linker cache. A locally-built server may link against a
+    system toolkit instead of a sibling copy.
+    """
+    dirs: list[str] = []
+    if binary:
+        dirs.append(os.path.dirname(binary) or ".")
+    dirs.extend(_posix_lib_dirs(*extra_dirs))
+    for prefix in prefixes:
+        if _glob_any(dirs, (prefix,)):
+            continue
+        if use_ldconfig and _ldconfig_has(prefix):
+            continue
+        return False
+    return True
+
+
 def _cudart_on_path() -> bool:
     return _dll_on_path("cudart64_")
 
 
 def cuda_runtime_ready(binary: str | None) -> bool:
     """Can a CUDA build find cudart at load time?"""
-    if not binary:
-        return False
-    if cuda_runtime_dlls(os.path.dirname(binary) or "."):
-        return True
-    return _cudart_on_path()
+    if winproc.IS_WINDOWS:
+        if not binary:
+            return False
+        if cuda_runtime_dlls(os.path.dirname(binary) or "."):
+            return True
+        return _cudart_on_path()
+    return _posix_runtime_ready(binary, ("libcudart.so",), tuple(_cuda_lib_dirs()))
 
 
 def rocm_runtime_dlls(directory: str | os.PathLike[str]) -> list[str]:
@@ -254,31 +394,44 @@ def rocm_runtime_dlls(directory: str | os.PathLike[str]) -> list[str]:
 
 
 def rocm_runtime_ready(binary: str | None) -> bool:
-    """Can a Windows ROCm build load its HIP runtime?"""
-    if not binary:
-        return False
-    runtime = rocm_runtime_dlls(os.path.dirname(binary) or ".")
-    if any(n.lower().startswith("amdhip64") for n in runtime):
-        return True
-    return _dll_on_path("amdhip64")
+    """Can a ROCm build load its HIP runtime?"""
+    if winproc.IS_WINDOWS:
+        if not binary:
+            return False
+        runtime = rocm_runtime_dlls(os.path.dirname(binary) or ".")
+        if any(n.lower().startswith("amdhip64") for n in runtime):
+            return True
+        return _dll_on_path("amdhip64")
+    return _posix_runtime_ready(
+        binary, ("libamdhip64.so",), ("/opt/rocm/lib", "/opt/rocm/lib64"),
+    )
 
 
 def vulkan_runtime_ready(binary: str | None) -> bool:
-    """Can a Windows Vulkan build find the Vulkan loader?
+    """Can a Vulkan build find the Vulkan loader?
 
-    llama.cpp's Vulkan zip does not bundle ``vulkan-1.dll``; it comes
-    from the GPU driver (System32). If it is missing, ggml-vulkan.dll
-    fails to load and the server silently runs on CPU.
+    llama.cpp's Vulkan archive does not bundle the loader; it comes
+    from the GPU driver (``vulkan-1.dll`` on Windows, ``libvulkan.so.1``
+    on Linux). If it is missing, the backend fails to load and the
+    server silently runs on CPU.
     """
-    if not binary:
+    if winproc.IS_WINDOWS:
+        if not binary:
+            return False
+        directory = os.path.dirname(binary) or "."
+        if os.path.exists(os.path.join(directory, "vulkan-1.dll")):
+            return True
+        root = os.environ.get("SystemRoot", r"C:\Windows")
+        return any(
+            os.path.exists(os.path.join(root, sub, "vulkan-1.dll"))
+            for sub in ("System32", "SysWOW64")
+        )
+    if sys.platform == "darwin":
         return False
-    directory = os.path.dirname(binary) or "."
-    if os.path.exists(os.path.join(directory, "vulkan-1.dll")):
-        return True
-    root = os.environ.get("SystemRoot", r"C:\Windows")
-    return any(
-        os.path.exists(os.path.join(root, sub, "vulkan-1.dll"))
-        for sub in ("System32", "SysWOW64")
+    return _posix_runtime_ready(
+        binary, ("libvulkan.so",),
+        ("/usr/lib/x86_64-linux-gnu", "/usr/lib/aarch64-linux-gnu",
+         "/usr/lib64", "/usr/lib"),
     )
 
 
@@ -299,22 +452,78 @@ def sycl_runtime_dlls(directory: str | os.PathLike[str]) -> list[str]:
 
 
 def sycl_runtime_ready(binary: str | None) -> bool:
-    """Can a Windows SYCL build load its runtime?"""
-    if not binary:
-        return False
-    if sycl_runtime_dlls(os.path.dirname(binary) or "."):
-        return True
-    return _dll_on_path("sycl")
+    """Can a SYCL build load its runtime?
+
+    Windows release zips are self-contained. Linux release zips are
+    not: they link against the Intel oneAPI DPC++ runtime, oneMKL and
+    the Level Zero loader, so the user must have those installed.
+    """
+    if winproc.IS_WINDOWS:
+        if not binary:
+            return False
+        if sycl_runtime_dlls(os.path.dirname(binary) or "."):
+            return True
+        return _dll_on_path("sycl")
+    return _posix_runtime_ready(
+        binary,
+        ("libsycl.so", "libmkl_sycl", "libze_loader.so"),
+        tuple(_sycl_lib_dirs()),
+    )
+
+
+def sycl_runtime_missing(binary: str | None) -> list[str]:
+    """Which Linux SYCL runtime pieces are absent, for a useful error."""
+    if winproc.IS_WINDOWS:
+        return [] if sycl_runtime_ready(binary) else ["sycl*.dll"]
+    dirs: list[str] = []
+    if binary:
+        dirs.append(os.path.dirname(binary) or ".")
+    dirs.extend(_posix_lib_dirs(*_sycl_lib_dirs()))
+    missing: list[str] = []
+    for prefix, label in (
+        ("libsycl.so", "libsycl.so (oneAPI DPC++ runtime)"),
+        ("libmkl_sycl", "libmkl_sycl.so (oneMKL)"),
+        ("libze_loader.so", "libze_loader.so (Level Zero loader)"),
+    ):
+        if not _glob_any(dirs, (prefix,)) and not _ldconfig_has(prefix):
+            missing.append(label)
+    return missing
 
 
 def openvino_runtime_ready(binary: str | None) -> bool:
-    """Can a Windows OpenVINO build load ``openvino.dll``?"""
-    if not binary:
-        return False
-    directory = os.path.dirname(binary) or "."
-    if os.path.exists(os.path.join(directory, "openvino.dll")):
-        return True
-    return _dll_on_path("openvino")
+    """Can an OpenVINO build load the OpenVINO core runtime?"""
+    if winproc.IS_WINDOWS:
+        if not binary:
+            return False
+        directory = os.path.dirname(binary) or "."
+        if os.path.exists(os.path.join(directory, "openvino.dll")):
+            return True
+        return _dll_on_path("openvino")
+    return _posix_runtime_ready(
+        binary, ("libopenvino.so",), tuple(_openvino_lib_dirs()),
+    )
+
+
+def openvino_gpu_plugin_ready(binary: str | None) -> bool:
+    """Is the OpenVINO Intel GPU plugin present?
+
+    Without it the OpenVINO backend enumerates the CPU plugin and the
+    server silently runs on CPU, which is not the GPU path the user
+    asked for.
+    """
+    if winproc.IS_WINDOWS:
+        if not binary:
+            return False
+        directory = os.path.dirname(binary) or "."
+        if os.path.exists(os.path.join(
+            directory, "openvino_intel_gpu_plugin.dll",
+        )):
+            return True
+        return _dll_on_path("openvino_intel_gpu_plugin")
+    return _posix_runtime_ready(
+        binary, ("libopenvino_intel_gpu_plugin.so",),
+        tuple(_openvino_lib_dirs()),
+    )
 
 
 def metal_device_ready(binary: str | None) -> bool:
@@ -374,6 +583,29 @@ def binary_backend(binary: str | None) -> str | None:
         if "vulkan-1.dll" in names:
             return "Vulkan"
         return "CPU"
+    # On Linux the release archive ships the backend as a sibling
+    # libggml-<backend>.so. Check those first: --list-devices prints
+    # "(none)" when the GPU runtime or driver is missing, and that is a
+    # runtime failure, not a CPU build. install-llama can then name the
+    # missing runtime instead of claiming the wrong asset landed.
+    if sys.platform != "darwin":
+        try:
+            names = {
+                n.lower()
+                for n in os.listdir(os.path.dirname(binary) or ".")
+            }
+        except OSError:
+            names = set()
+        if any(n.startswith("libggml-cuda") for n in names):
+            return "CUDA"
+        if any(n.startswith(("libggml-hip", "libggml-rocm")) for n in names):
+            return "ROCm"
+        if any(n.startswith("libggml-vulkan") for n in names):
+            return "Vulkan"
+        if any(n.startswith("libggml-sycl") for n in names):
+            return "SYCL"
+        if any(n.startswith("libggml-openvino") for n in names):
+            return "OpenVINO"
     # Ask the binary what it can see before trusting its link table: a
     # GPU build loads its backend as a separate libggml-*.so at runtime,
     # so `ldd` lists only the CPU core and a working Vulkan/CUDA/ROCm
@@ -436,12 +668,20 @@ def binary_backend(binary: str | None) -> str | None:
     if not out:
         return None
     low = out.lower()
-    if any(x in low for x in ("librocm", "amdhip64", "hipblas")):
+    if any(x in low for x in (
+        "libggml-hip", "libggml-rocm", "librocm", "amdhip64", "hipblas",
+    )):
         return "ROCm"
-    if any(x in low for x in ("libcudart", "libcublas")):
+    if any(x in low for x in (
+        "libggml-cuda", "libcudart", "libcublas",
+    )):
         return "CUDA"
-    if "vulkan" in low:
+    if any(x in low for x in ("libggml-vulkan", "libvulkan")):
         return "Vulkan"
+    if any(x in low for x in ("libggml-sycl", "libsycl")):
+        return "SYCL"
+    if any(x in low for x in ("libggml-openvino", "libopenvino")):
+        return "OpenVINO"
     return "CPU"
 
 
@@ -472,19 +712,26 @@ def describe_gpu(spec=None) -> str:
 
 
 def _runtime_note(kind: str | None, build: str | None) -> str:
-    """Doctor suffix when a Windows GPU build cannot load its runtime."""
-    if not winproc.IS_WINDOWS or not kind:
+    """Doctor suffix when a GPU build cannot load its runtime."""
+    if not kind:
         return ""
+    win = winproc.IS_WINDOWS
     if kind == "CUDA" and not cuda_runtime_ready(build):
-        return "  [missing cudart — will run on CPU]"
+        lib = "cudart64_*.dll" if win else "libcudart.so"
+        return f"  [missing {lib} — will run on CPU]"
     if kind == "ROCm" and not rocm_runtime_ready(build):
-        return "  [missing amdhip64 — will run on CPU]"
+        lib = "amdhip64*.dll" if win else "libamdhip64.so"
+        return f"  [missing {lib} — will run on CPU]"
     if kind == "Vulkan" and not vulkan_runtime_ready(build):
-        return "  [missing vulkan-1.dll — will run on CPU]"
+        lib = "vulkan-1.dll" if win else "libvulkan.so.1"
+        return f"  [missing {lib} — will run on CPU]"
     if kind == "SYCL" and not sycl_runtime_ready(build):
-        return "  [missing sycl runtime — will run on CPU]"
+        return "  [missing oneAPI SYCL runtime — will run on CPU]"
     if kind == "OpenVINO" and not openvino_runtime_ready(build):
-        return "  [missing openvino.dll — will run on CPU]"
+        lib = "openvino.dll" if win else "libopenvino.so"
+        return f"  [missing {lib} — will run on CPU]"
+    if kind == "OpenVINO" and not openvino_gpu_plugin_ready(build):
+        return "  [missing OpenVINO GPU plugin — will run on CPU]"
     return ""
 
 
@@ -506,12 +753,15 @@ def run() -> str:
     else:
         lines.append("gpu: none detected (CPU-only machine?)")
     if hw["backend"] == "CUDA":
-        too_old, _ = cuda_driver_verdict(driver_version())
+        os_name = "ubuntu" if sys.platform.startswith("linux") else "windows"
+        too_old, _ = cuda_driver_verdict(driver_version(), os_name)
         if too_old:
+            floor = cuda_driver_floor(os_name)
+            family = cuda_asset_family(os_name)
             lines.append(
                 "gpu note: NVIDIA driver is older than the "
-                f"{CUDA_12_WINDOWS_DRIVER[0]}.{CUDA_12_WINDOWS_DRIVER[1]} floor "
-                "for CUDA 12.4+ llama.cpp builds — update the NVIDIA driver, "
+                f"{floor[0]}.{floor[1]} floor for CUDA {family}+ "
+                "llama.cpp builds — update the NVIDIA driver, "
                 "then run: toki model install-llama --backend cuda --name <model>"
             )
 
@@ -589,49 +839,77 @@ def hint(hw: dict[str, str | None] | None = None) -> list[str]:
         "GPU offload in llama.log.",
     ]
     reason = gpu_fallback_reason(spec)
-    if winproc.IS_WINDOWS and build_kind == "CUDA" and not cuda_runtime_ready(build):
+    win = winproc.IS_WINDOWS
+    if build_kind == "CUDA" and not cuda_runtime_ready(build):
+        runtime = "cudart64_*.dll" if win else "libcudart.so"
         lines.append(
-            f"  its CUDA build is missing its runtime DLLs "
-            f"(cudart64_*.dll) next to {build}."
+            f"  its CUDA build is missing its runtime "
+            f"({runtime}) next to {build}."
         )
         lines.append(
             f"  fix: toki model install-llama --backend cuda --name {spec.name}"
         )
         lines.append(f"  then: toki model use {spec.name}")
-    elif winproc.IS_WINDOWS and build_kind == "ROCm" and not rocm_runtime_ready(build):
+    elif build_kind == "ROCm" and not rocm_runtime_ready(build):
+        runtime = ("amdhip64*.dll" if win
+                   else "libamdhip64.so (install ROCm or use Vulkan)")
         lines.append(
-            f"  its ROCm build is missing its HIP runtime DLLs "
-            f"(amdhip64*.dll) next to {build}."
+            f"  its ROCm build is missing its HIP runtime "
+            f"({runtime}) next to {build}."
         )
         lines.append(
             f"  fix: toki model install-llama --backend rocm --name {spec.name}"
         )
         lines.append(f"  then: toki model use {spec.name}")
-    elif winproc.IS_WINDOWS and build_kind == "Vulkan" and not vulkan_runtime_ready(build):
+    elif build_kind == "Vulkan" and not vulkan_runtime_ready(build):
+        loader = "vulkan-1.dll" if win else "libvulkan.so.1"
         lines.append(
-            "  its Vulkan build cannot load: vulkan-1.dll is missing "
+            f"  its Vulkan build cannot load: {loader} is missing "
             "(the GPU driver provides the loader)."
         )
         lines.append(
             "  fix: install or repair the AMD/Intel GPU driver, then "
             f"toki model use {spec.name}"
         )
-    elif winproc.IS_WINDOWS and build_kind == "SYCL" and not sycl_runtime_ready(build):
-        lines.append(
-            f"  its SYCL build is missing its runtime DLLs "
-            f"(sycl*.dll) next to {build}."
-        )
-        lines.append(
-            f"  fix: toki model install-llama --backend sycl --name {spec.name}"
-        )
+    elif build_kind == "SYCL" and not sycl_runtime_ready(build):
+        if win:
+            lines.append(
+                f"  its SYCL build is missing its runtime DLLs "
+                f"(sycl*.dll) next to {build}."
+            )
+            lines.append(
+                f"  fix: toki model install-llama --backend sycl --name {spec.name}"
+            )
+        else:
+            missing = sycl_runtime_missing(build)
+            lines.append(
+                "  its SYCL build cannot load the Intel oneAPI runtime"
+                + (f"; missing: {', '.join(missing)}" if missing else "")
+                + "."
+            )
+            lines.append(
+                "  fix: install the Intel oneAPI DPC++ runtime + oneMKL "
+                "+ Level Zero, or use --backend vulkan"
+            )
         lines.append(f"  then: toki model use {spec.name}")
-    elif (winproc.IS_WINDOWS and build_kind == "OpenVINO"
+    elif (build_kind == "OpenVINO"
           and not openvino_runtime_ready(build)):
+        runtime = "openvino.dll" if win else "libopenvino.so"
         lines.append(
-            f"  its OpenVINO build is missing openvino.dll next to {build}."
+            f"  its OpenVINO build is missing {runtime} next to {build}."
         )
         lines.append(
             f"  fix: reinstall it, or use the SYCL build: "
+            f"toki model install-llama --backend sycl --name {spec.name}"
+        )
+    elif (build_kind == "OpenVINO"
+          and not openvino_gpu_plugin_ready(build)):
+        lines.append(
+            "  its OpenVINO build is missing the Intel GPU plugin — it "
+            "would enumerate the CPU plugin and run on CPU."
+        )
+        lines.append(
+            f"  fix: reinstall the OpenVINO build, or use the SYCL build: "
             f"toki model install-llama --backend sycl --name {spec.name}"
         )
     elif (sys.platform == "darwin" and build_kind == "Metal"

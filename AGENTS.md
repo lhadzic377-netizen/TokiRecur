@@ -15,8 +15,8 @@
   The live llama-server is on **8094** (`/home/lukehadzic/llama.cpp/build/bin/llama-server`).
 - The registry's `binary:` entries point at the toki state bin
   (`~/.local/state/tokirecur/bin/llama-server`), which was rebuilt from
-  llama.cpp master (commit b94041a98) because llama.cpp stopped shipping
-  Linux ROCm release assets after b10375. Rebuild with
+  llama.cpp master (commit b94041a98) for this box. llama.cpp ships Linux
+  ROCm assets again as of ROCm 10.0 (b12024); rebuild with
   `./scripts/build_llama_cpp.sh` (LLAMA_CPP_SRC + LLAMA_CPP_BLD overridable).
 - To smoke-test chat end-to-end without touching the running daemon, start a
   throwaway one from the repo:

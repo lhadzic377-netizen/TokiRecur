@@ -40,13 +40,49 @@ B10289_ASSETS = [
     "llama-b10289-bin-win-vulkan-x64.zip",
 ]
 
-# Asset names from b10375 — the last release that shipped both Linux and
-# Windows ROCm, using the current win-rocm-* naming.
+# Asset names from b10375, which introduced the current win-rocm-* naming
+# and still shipped Linux ROCm. Later releases dropped Linux ROCm until
+# ROCm 10.0 resumed it in b12024.
 B10375_ASSETS = [
     "llama-b10375-bin-ubuntu-rocm-7.14-x64.tar.gz",
     "llama-b10375-bin-ubuntu-vulkan-x64.tar.gz",
     "llama-b10375-bin-win-rocm-7.14-x64.zip",
     "llama-b10375-bin-win-vulkan-x64.zip",
+]
+
+# b12024 is the matrix release: Linux CUDA on x64 and arm64 with a
+# separate cudart archive, Linux SYCL (fp16/fp32), OpenVINO on both
+# Windows and Linux, Windows ARM64 CUDA, and ROCm 10.0 on both OSes.
+B12024_ASSETS = [
+    "cudart-llama-b12024-bin-ubuntu-cuda-12.8-x64.tar.gz",
+    "cudart-llama-b12024-bin-ubuntu-cuda-13.4-arm64.tar.gz",
+    "cudart-llama-b12024-bin-ubuntu-cuda-13.4-x64.tar.gz",
+    "cudart-llama-bin-win-cuda-12.4-x64.zip",
+    "cudart-llama-bin-win-cuda-13.4-arm64.zip",
+    "cudart-llama-bin-win-cuda-13.4-x64.zip",
+    "llama-b12024-bin-macos-arm64.tar.gz",
+    "llama-b12024-bin-macos-x64.tar.gz",
+    "llama-b12024-bin-ubuntu-arm64.tar.gz",
+    "llama-b12024-bin-ubuntu-cuda-12.8-x64.tar.gz",
+    "llama-b12024-bin-ubuntu-cuda-13.4-arm64.tar.gz",
+    "llama-b12024-bin-ubuntu-cuda-13.4-x64.tar.gz",
+    "llama-b12024-bin-ubuntu-openvino-2026.4.1-x64.tar.gz",
+    "llama-b12024-bin-ubuntu-rocm-10.0-x64.tar.gz",
+    "llama-b12024-bin-ubuntu-sycl-fp16-x64.tar.gz",
+    "llama-b12024-bin-ubuntu-sycl-fp32-x64.tar.gz",
+    "llama-b12024-bin-ubuntu-vulkan-arm64.tar.gz",
+    "llama-b12024-bin-ubuntu-vulkan-x64.tar.gz",
+    "llama-b12024-bin-ubuntu-x64.tar.gz",
+    "llama-b12024-bin-win-cpu-arm64.zip",
+    "llama-b12024-bin-win-cpu-x64.zip",
+    "llama-b12024-bin-win-cuda-12.4-x64.zip",
+    "llama-b12024-bin-win-cuda-13.4-arm64.zip",
+    "llama-b12024-bin-win-cuda-13.4-x64.zip",
+    "llama-b12024-bin-win-openvino-2026.4.1-x64.zip",
+    "llama-b12024-bin-win-rocm-10.0-x64.zip",
+    "llama-b12024-bin-win-sycl-x64.zip",
+    "llama-b12024-bin-win-vulkan-arm64.zip",
+    "llama-b12024-bin-win-vulkan-x64.zip",
 ]
 
 
@@ -79,6 +115,99 @@ def test_pick_asset_matrix(os_name, arch, backend, expected):
     assert asset is not None
     assert asset["name"] == expected
     assert matched == backend
+
+
+@pytest.mark.parametrize(
+    "os_name,arch,backend,expected",
+    [
+        ("ubuntu", "x64", "cuda", "llama-b12024-bin-ubuntu-cuda-13.4-x64.tar.gz"),
+        ("ubuntu", "x64", "sycl", "llama-b12024-bin-ubuntu-sycl-fp16-x64.tar.gz"),
+        ("ubuntu", "x64", "openvino",
+         "llama-b12024-bin-ubuntu-openvino-2026.4.1-x64.tar.gz"),
+        ("ubuntu", "x64", "rocm", "llama-b12024-bin-ubuntu-rocm-10.0-x64.tar.gz"),
+        ("ubuntu", "x64", "vulkan", "llama-b12024-bin-ubuntu-vulkan-x64.tar.gz"),
+        ("ubuntu", "x64", "cpu", "llama-b12024-bin-ubuntu-x64.tar.gz"),
+        ("ubuntu", "arm64", "cuda",
+         "llama-b12024-bin-ubuntu-cuda-13.4-arm64.tar.gz"),
+        ("ubuntu", "arm64", "vulkan",
+         "llama-b12024-bin-ubuntu-vulkan-arm64.tar.gz"),
+        ("ubuntu", "arm64", "cpu", "llama-b12024-bin-ubuntu-arm64.tar.gz"),
+        ("windows", "x64", "cuda", "llama-b12024-bin-win-cuda-13.4-x64.zip"),
+        ("windows", "x64", "cuda", "llama-b12024-bin-win-cuda-13.4-x64.zip"),
+        ("windows", "x64", "rocm", "llama-b12024-bin-win-rocm-10.0-x64.zip"),
+        ("windows", "x64", "sycl", "llama-b12024-bin-win-sycl-x64.zip"),
+        ("windows", "x64", "openvino",
+         "llama-b12024-bin-win-openvino-2026.4.1-x64.zip"),
+        ("windows", "x64", "vulkan", "llama-b12024-bin-win-vulkan-x64.zip"),
+        ("windows", "x64", "cpu", "llama-b12024-bin-win-cpu-x64.zip"),
+        ("windows", "arm64", "cuda",
+         "llama-b12024-bin-win-cuda-13.4-arm64.zip"),
+        ("windows", "arm64", "vulkan",
+         "llama-b12024-bin-win-vulkan-arm64.zip"),
+        ("windows", "arm64", "cpu", "llama-b12024-bin-win-cpu-arm64.zip"),
+        ("macos", "arm64", "metal", "llama-b12024-bin-macos-arm64.tar.gz"),
+        ("macos", "x64", "metal", "llama-b12024-bin-macos-x64.tar.gz"),
+    ],
+)
+def test_pick_asset_b12024_matrix(os_name, arch, backend, expected):
+    assets = [{"name": n, "size": 1000} for n in B12024_ASSETS]
+    patterns = [p for p in _asset_patterns(os_name, arch) if p[0] == backend]
+    asset, matched = _pick_asset(assets, patterns)
+    assert asset is not None, f"no asset for {os_name}/{arch}/{backend}"
+    assert asset["name"] == expected
+    assert matched == backend
+
+
+def test_pick_asset_b12024_prefers_cuda12_for_old_driver():
+    from tokirecur.cli import _prefer_cuda12
+
+    assets = [{"name": n, "size": 1000} for n in B12024_ASSETS]
+    patterns = [p for p in _asset_patterns("windows", "x64") if p[0] == "cuda"]
+    asset, matched = _pick_asset(assets, _prefer_cuda12(patterns))
+    assert matched == "cuda"
+    assert asset["name"] == "llama-b12024-bin-win-cuda-12.4-x64.zip"
+
+
+def test_pick_asset_b12024_cudart_pairing():
+    from tokirecur.cli import _find_cuda_runtime_asset
+
+    assets = [{"name": n, "size": 1000} for n in B12024_ASSETS]
+    pairs = {
+        "llama-b12024-bin-ubuntu-cuda-13.4-x64.tar.gz":
+            "cudart-llama-b12024-bin-ubuntu-cuda-13.4-x64.tar.gz",
+        "llama-b12024-bin-ubuntu-cuda-13.4-arm64.tar.gz":
+            "cudart-llama-b12024-bin-ubuntu-cuda-13.4-arm64.tar.gz",
+        "llama-b12024-bin-ubuntu-cuda-12.8-x64.tar.gz":
+            "cudart-llama-b12024-bin-ubuntu-cuda-12.8-x64.tar.gz",
+        "llama-b12024-bin-win-cuda-13.4-x64.zip":
+            "cudart-llama-bin-win-cuda-13.4-x64.zip",
+        "llama-b12024-bin-win-cuda-12.4-x64.zip":
+            "cudart-llama-bin-win-cuda-12.4-x64.zip",
+        "llama-b12024-bin-win-cuda-13.4-arm64.zip":
+            "cudart-llama-bin-win-cuda-13.4-arm64.zip",
+    }
+    for main, expected in pairs.items():
+        got = _find_cuda_runtime_asset(assets, main)
+        assert got is not None, main
+        assert got["name"] == expected
+
+
+def test_fallback_patterns_are_vendor_compatible():
+    """A missing GPU asset must not fall through to another vendor."""
+    from tokirecur.cli import _fallback_patterns
+
+    arm = _asset_patterns("ubuntu", "arm64")
+    rocm = _fallback_patterns(arm, "rocm")
+    assert {b for b, _ in rocm} == {"vulkan", "cpu"}
+    assert not any(b == "cuda" for b, _ in rocm)
+
+    openvino = _fallback_patterns(arm, "openvino")
+    assert {b for b, _ in openvino} == {"vulkan", "cpu"}
+
+    # macOS has no CPU asset; an explicit CPU request keeps the Metal
+    # patterns so the universal build lands with the CPU-only note.
+    mac = _asset_patterns("macos", "arm64")
+    assert _fallback_patterns(mac, "cpu") == mac
 
 
 def test_pick_asset_windows_rocm_current_naming():
@@ -168,7 +297,9 @@ def test_asset_patterns_cover_every_os_arch(os_name, arch):
     patterns = _asset_patterns(os_name, arch)
     assert patterns, f"no patterns for {os_name}/{arch}"
     for backend, frag in patterns:
-        assert frag and backend in ("rocm", "cuda", "vulkan", "sycl", "metal", "cpu")
+        assert frag and backend in (
+            "rocm", "cuda", "vulkan", "sycl", "openvino", "metal", "cpu",
+        )
 
 
 def test_set_binary_merges_env(tmp_path, monkeypatch):
@@ -285,6 +416,12 @@ def test_detect_backend_windows_non_intel_vulkan(monkeypatch):
          "cudart-llama-bin-win-cuda-13.4-arm64.zip"),
         ("llama-b10326-bin-win-cuda-12.4-x64.zip",
          "cudart-llama-bin-win-cuda-12.4-x64.zip"),
+        ("llama-b12024-bin-ubuntu-cuda-13.4-x64.tar.gz",
+         "cudart-llama-b12024-bin-ubuntu-cuda-13.4-x64.tar.gz"),
+        ("llama-b12024-bin-ubuntu-cuda-12.8-x64.tar.gz",
+         "cudart-llama-b12024-bin-ubuntu-cuda-12.8-x64.tar.gz"),
+        ("llama-b12024-bin-ubuntu-cuda-13.4-arm64.tar.gz",
+         "cudart-llama-b12024-bin-ubuntu-cuda-13.4-arm64.tar.gz"),
         ("llama-b10326-bin-ubuntu-rocm-7.2-x64.tar.gz", None),
         ("llama-b10326-bin-win-cpu-x64.zip", None),
     ],
@@ -542,7 +679,9 @@ def test_install_pulls_cudart_runtime_for_cuda_13_4(tmp_path, monkeypatch):
         "shutil.which", lambda n: "nvidia-smi" if n == "nvidia-smi" else None,
     )
     from tokirecur import diagnose
-    monkeypatch.setattr(diagnose, "cuda_driver_verdict", lambda d: (False, False))
+    monkeypatch.setattr(
+        diagnose, "cuda_driver_verdict", lambda d, os_name="windows": (False, False),
+    )
 
     install_llama.callback(tag="b12020", dest=str(bin_dir), name=None,
                            backend="cuda", gfx=None, profile=False,
@@ -560,6 +699,234 @@ def test_install_pulls_cudart_runtime_for_cuda_13_4(tmp_path, monkeypatch):
     assert diagnose.binary_backend(
         str(bin_dir / "llama-server.exe")
     ) == "CUDA"
+
+
+def _tar_bytes(files: dict[str, bytes]) -> bytes:
+    import io
+    import tarfile
+
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+        for name, data in files.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            tf.addfile(info, io.BytesIO(data))
+    return buf.getvalue()
+
+
+def test_install_linux_cuda_pulls_paired_cudart(tmp_path, monkeypatch):
+    """Linux CUDA ships cudart/cublas as a separate archive too. The
+    install must fetch it, drop the stale major, and verify a real
+    CUDA device line — not leave a build that silently runs on CPU."""
+    import types
+
+    from tokirecur import cli as cli_mod
+    from tokirecur import diagnose
+    from tokirecur.cli import install_llama
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "llama-server").write_bytes(b"old")
+    (bin_dir / "libggml-vulkan.so").write_bytes(b"old-vk")
+    (bin_dir / "libcudart.so.12").write_bytes(b"old-12")
+
+    main_tar = _tar_bytes({
+        "build/bin/llama-server": b"ELF",
+        "build/bin/libggml-cuda.so": b"cuda",
+        "build/bin/libggml-base.so": b"base",
+    })
+    cudart_tar = _tar_bytes({
+        "lib/libcudart.so.13": b"rt",
+        "lib/libcublas.so.13": b"blas",
+        "lib/libcublasLt.so.13": b"blaslt",
+    })
+    RELEASE = {
+        "tag_name": "b12024",
+        "assets": [
+            {"name": "llama-b12024-bin-ubuntu-cuda-13.4-x64.tar.gz",
+             "size": len(main_tar),
+             "browser_download_url": "https://example.test/main.tar.gz"},
+            {"name": "cudart-llama-b12024-bin-ubuntu-cuda-13.4-x64.tar.gz",
+             "size": len(cudart_tar),
+             "browser_download_url": "https://example.test/cudart.tar.gz"},
+        ],
+    }
+
+    class FakeClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        def get(self, url, headers=None):
+            class _Resp:
+                def json(self_inner):
+                    return RELEASE
+
+                def raise_for_status(self_inner):
+                    pass
+
+            return _Resp()
+
+    downloads: list[str] = []
+
+    def fake_download(api, url, dest, label=""):
+        downloads.append(url)
+        Path(dest).write_bytes(
+            main_tar if url.endswith("main.tar.gz") else cudart_tar
+        )
+
+    def fake_run(argv, **kw):
+        if "--list-devices" in argv:
+            return types.SimpleNamespace(
+                returncode=0,
+                stdout="Available devices:\n  CUDA0: NVIDIA RTX 4090\n",
+                stderr="",
+            )
+        return types.SimpleNamespace(returncode=0, stdout="v1\n", stderr="")
+
+    import httpx as _httpx
+    monkeypatch.setattr(_httpx, "Client", FakeClient)
+    monkeypatch.setattr(cli_mod, "_stream_download_with_retry", fake_download)
+    monkeypatch.setattr(cli_mod.subprocess, "run", fake_run)
+    monkeypatch.setattr("sys.platform", "linux")
+    monkeypatch.setattr("platform.machine", lambda: "x86_64")
+    monkeypatch.setattr("shutil.which", lambda n: None)
+    monkeypatch.setattr(cli_mod, "_find_local_llama_server", lambda: None)
+    monkeypatch.setattr(
+        diagnose, "cuda_driver_verdict", lambda d, os_name="windows": (False, False),
+    )
+    monkeypatch.setattr(diagnose, "driver_version", lambda: (580, 65))
+
+    install_llama.callback(
+        tag="b12024", dest=str(bin_dir), name=None, backend="cuda",
+        gfx=None, profile=False, force_cpu=False,
+    )
+
+    assert any("cudart.tar.gz" in u for u in downloads)
+    names = {p.name for p in bin_dir.iterdir()}
+    assert {"llama-server", "libggml-cuda.so", "libcudart.so.13",
+            "libcublas.so.13", "libcublasLt.so.13"} <= names
+    assert "libggml-vulkan.so" not in names, "stale Vulkan module survived"
+    assert "libcudart.so.12" not in names, "stale CUDA 12 runtime survived"
+    assert diagnose.binary_backend(str(bin_dir / "llama-server")) == "CUDA"
+
+
+def test_install_linux_sycl_requires_oneapi_runtime(tmp_path, monkeypatch):
+    """Linux SYCL is not self-contained: without oneAPI the install must
+    fail loudly instead of leaving a CPU fallback."""
+    from tokirecur import cli as cli_mod
+    from tokirecur import diagnose
+    from tokirecur.cli import install_llama
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    payload = _tar_bytes({
+        "build/bin/llama-server": b"ELF",
+        "build/bin/libggml-sycl.so": b"sycl",
+    })
+    RELEASE = {
+        "tag_name": "b12024",
+        "assets": [{
+            "name": "llama-b12024-bin-ubuntu-sycl-fp16-x64.tar.gz",
+            "size": len(payload),
+            "browser_download_url": "https://example.test/sycl.tar.gz",
+        }],
+    }
+
+    class FakeClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        def get(self, url, headers=None):
+            class _Resp:
+                def json(self_inner):
+                    return RELEASE
+
+            return _Resp()
+
+    def fake_download(api, url, dest, label=""):
+        Path(dest).write_bytes(payload)
+
+    monkeypatch.setattr(cli_mod.httpx, "Client", FakeClient)
+    monkeypatch.setattr(cli_mod, "_stream_download_with_retry", fake_download)
+    monkeypatch.setattr("sys.platform", "linux")
+    monkeypatch.setattr("platform.machine", lambda: "x86_64")
+    monkeypatch.setattr("shutil.which", lambda n: None)
+    monkeypatch.setattr(cli_mod, "_find_local_llama_server", lambda: None)
+    monkeypatch.setattr(diagnose, "sycl_runtime_ready", lambda b: False)
+    monkeypatch.setattr(
+        diagnose, "sycl_runtime_missing",
+        lambda b: ["libsycl.so (oneAPI DPC++ runtime)"],
+    )
+
+    try:
+        install_llama.callback(
+            tag="b12024", dest=str(bin_dir), name=None, backend="sycl",
+            gfx=None, profile=False, force_cpu=False,
+        )
+    except Exception as exc:  # click.ClickException
+        message = str(exc)
+    else:
+        raise AssertionError("SYCL install without oneAPI should fail")
+    assert "oneAPI" in message
+    assert "libsycl.so" in message
+
+
+def test_install_linux_openvino_requires_gpu_plugin(tmp_path, monkeypatch):
+    """OpenVINO core alone enumerates the CPU plugin. The install must
+    refuse a build without the Intel GPU plugin."""
+    from tokirecur import cli as cli_mod
+    from tokirecur import diagnose
+    from tokirecur.cli import install_llama
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    payload = _tar_bytes({
+        "build/bin/llama-server": b"ELF",
+        "build/bin/libggml-openvino.so": b"ov",
+        "build/bin/libopenvino.so.2600": b"core",
+    })
+    RELEASE = {
+        "tag_name": "b12024",
+        "assets": [{
+            "name": "llama-b12024-bin-ubuntu-openvino-2026.4.1-x64.tar.gz",
+            "size": len(payload),
+            "browser_download_url": "https://example.test/ov.tar.gz",
+        }],
+    }
+
+    class FakeClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        def get(self, url, headers=None):
+            class _Resp:
+                def json(self_inner):
+                    return RELEASE
+
+            return _Resp()
+
+    def fake_download(api, url, dest, label=""):
+        Path(dest).write_bytes(payload)
+
+    monkeypatch.setattr(cli_mod.httpx, "Client", FakeClient)
+    monkeypatch.setattr(cli_mod, "_stream_download_with_retry", fake_download)
+    monkeypatch.setattr("sys.platform", "linux")
+    monkeypatch.setattr("platform.machine", lambda: "x86_64")
+    monkeypatch.setattr("shutil.which", lambda n: None)
+    monkeypatch.setattr(cli_mod, "_find_local_llama_server", lambda: None)
+    monkeypatch.setattr(diagnose, "openvino_runtime_ready", lambda b: True)
+    monkeypatch.setattr(diagnose, "openvino_gpu_plugin_ready", lambda b: False)
+
+    try:
+        install_llama.callback(
+            tag="b12024", dest=str(bin_dir), name=None, backend="openvino",
+            gfx=None, profile=False, force_cpu=False,
+        )
+    except Exception as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("OpenVINO install without GPU plugin should fail")
+    assert "Intel GPU" in message or "GPU plugin" in message
 
 
 def test_binary_backend_reports_mlx_for_module_name():
@@ -600,6 +967,35 @@ def test_mlx_backend_rejected_on_linux(monkeypatch):
     res = runner.invoke(_cli, ["model", "install-llama", "--backend", "mlx"])
     assert res.exit_code != 0
     assert "mlx is only available on macOS" in res.output
+
+
+@pytest.mark.parametrize(
+    "platform,arch,backend,needle",
+    [
+        ("darwin", "arm64", "cuda", "only available on Windows and Linux"),
+        ("darwin", "arm64", "vulkan", "not available on macOS"),
+        ("darwin", "arm64", "sycl", "only available on x64 Windows and Linux"),
+        ("darwin", "arm64", "openvino",
+         "only available on x64 Windows and Linux"),
+        ("linux", "aarch64", "sycl", "only available on x64 Windows and Linux"),
+        ("linux", "aarch64", "openvino",
+         "only available on x64 Windows and Linux"),
+    ],
+)
+def test_install_backend_guards_reject_impossible_assets(
+    monkeypatch, platform, arch, backend, needle,
+):
+    from click.testing import CliRunner
+
+    from tokirecur.cli import cli as _cli
+
+    monkeypatch.setattr("sys.platform", platform)
+    monkeypatch.setattr("platform.machine", lambda: arch)
+    res = CliRunner().invoke(
+        _cli, ["model", "install-llama", "--backend", backend],
+    )
+    assert res.exit_code != 0
+    assert needle in res.output
 
 
 def test_llama_args_use_mlx_for_mlx_binary():
@@ -1646,8 +2042,8 @@ def test_install_force_downgrade_env_overrides_gpu_to_cpu_guard(tmp_path, monkey
 
 
 
-def test_probe_windows_gpu_device_prints_real_device(monkeypatch, capsys):
-    from tokirecur.cli import _probe_windows_gpu_device
+def test_probe_gpu_device_prints_real_device(monkeypatch, capsys):
+    from tokirecur.cli import _probe_gpu_device
 
     def fake_run(argv, **kw):
         return type("R", (), {
@@ -1658,15 +2054,15 @@ def test_probe_windows_gpu_device_prints_real_device(monkeypatch, capsys):
         })()
 
     monkeypatch.setattr("tokirecur.cli.subprocess.run", fake_run)
-    _probe_windows_gpu_device(
+    _probe_gpu_device(
         Path("/tmp/llama-server.exe"), r"\bSYCL\d+\b", "SYCL", "hint",
     )
     out = capsys.readouterr().out
     assert "verify: - SYCL0 : Intel(R) Arc(TM) A770 Graphics" in out
 
 
-def test_probe_windows_gpu_device_warns_when_no_device(monkeypatch, capsys):
-    from tokirecur.cli import _probe_windows_gpu_device
+def test_probe_gpu_device_warns_when_no_device(monkeypatch, capsys):
+    from tokirecur.cli import _probe_gpu_device
 
     def fake_run(argv, **kw):
         return type("R", (), {
@@ -1675,7 +2071,7 @@ def test_probe_windows_gpu_device_warns_when_no_device(monkeypatch, capsys):
         })()
 
     monkeypatch.setattr("tokirecur.cli.subprocess.run", fake_run)
-    _probe_windows_gpu_device(
+    _probe_gpu_device(
         Path("/tmp/llama-server.exe"), r"\bVulkan\d+\b", "Vulkan", "update",
     )
     err = capsys.readouterr().err
@@ -1719,6 +2115,18 @@ def test_probe_windows_gpu_device_warns_when_no_device(monkeypatch, capsys):
                 "ggml-vulkan.dll": b"vk",
             },
             "  - Vulkan0 : AMD Radeon RX 7600 (8192 MiB, 8000 MiB free)",
+        ),
+        (
+            "openvino",
+            "llama-b12024-bin-win-openvino-2026.4.1-x64.zip",
+            {
+                "llama-server.exe": b"MZ",
+                "ggml-openvino.dll": b"ov",
+                "openvino.dll": b"core",
+                "openvino_intel_gpu_plugin.dll": b"gpu",
+            },
+            "  - OpenVINO0 : Intel(R) Arc(TM) A770 Graphics "
+            "(16384 MiB, 15000 MiB free)",
         ),
     ],
 )
@@ -1797,6 +2205,7 @@ def test_install_windows_gpu_backend_verifies_runtime(
     monkeypatch.setattr("sys.platform", "win32")
     monkeypatch.setattr("platform.machine", lambda: "AMD64")
     monkeypatch.setattr("shutil.which", lambda n: None)
+    monkeypatch.setattr(diagnose.winproc, "IS_WINDOWS", True)
     if backend == "vulkan":
         monkeypatch.setattr(diagnose, "vulkan_runtime_ready", lambda b: True)
 
@@ -1807,7 +2216,8 @@ def test_install_windows_gpu_backend_verifies_runtime(
 
     names = {p.name for p in bin_dir.iterdir()}
     assert set(files) <= names
-    assert "ggml-openvino.dll" not in names
+    if backend != "openvino":
+        assert "ggml-openvino.dll" not in names
     assert not any(n.endswith(".zip") for n in names)
     landed = diagnose.binary_backend(str(bin_dir / "llama-server.exe"))
     assert landed.lower() == backend
