@@ -90,6 +90,24 @@ def find_llama_server() -> str | None:
     return which("llama-server") or which("/usr/local/bin/llama-server")
 
 
+_HELP_CACHE: dict[str, str] = {}
+
+
+def _help_text(binary: str) -> str:
+    if binary not in _HELP_CACHE:
+        try:
+            result = subprocess.run(
+                [binary, "--help"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            _HELP_CACHE[binary] = result.stdout + result.stderr
+        except (OSError, subprocess.SubprocessError):
+            _HELP_CACHE[binary] = ""
+    return _HELP_CACHE[binary]
+
+
 def llama_default_args(
     model: str,
     port: int,
@@ -119,6 +137,23 @@ def llama_default_args(
         "--slot-save-path", str(slot_save_dir),
         "--embedding",
     ]
+    if n_gpu_layers == 0:
+        help_text = _help_text(binary)
+        if "--device" in help_text:
+            args += ["--device", "none"]
+        threads = None
+        try:
+            from .hardware import cpu_topology, effective_cpu_threads
+            threads = effective_cpu_threads(cpu_topology())
+        except Exception:
+            threads = None
+        if threads:
+            args += ["-t", str(max(2, threads))]
+        if "--mlock" in help_text:
+            args += ["--mlock"]
+        elif "--load-mode" in help_text:
+            args += ["--load-mode", "mmap+mlock"]
+        args += ["-b", "2048", "-ub", "512"]
     # The names a client may ask for. Without them the stack answers to
     # the model's file path, and a client that lists models — or matches on
     # the id it was configured with — is told the model does not exist.

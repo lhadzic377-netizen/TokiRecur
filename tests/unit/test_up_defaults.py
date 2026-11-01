@@ -75,3 +75,34 @@ def test_the_unified_cache_and_registry_parallel_reach_the_command_line():
     )
     assert "-kvu" in args
     assert args[args.index("--parallel") + 1] == "2"
+
+
+def test_cpu_mode_is_a_real_cpu_launch(monkeypatch):
+    import tokirecur.hardware as hardware
+
+    monkeypatch.setattr(lifecycle, "find_llama_server", lambda: "llama-server")
+    monkeypatch.setattr(
+        lifecycle, "_help_text", lambda binary: "--device --load-mode"
+    )
+    monkeypatch.setattr(hardware, "cpu_topology", lambda: {})
+    monkeypatch.setattr(hardware, "effective_cpu_threads", lambda topology: 8)
+    args = lifecycle.llama_default_args("/models/m/m.gguf", 8088, 4096, 0)
+    assert args[args.index("-ngl") + 1] == "0"
+    assert args[args.index("--device") + 1] == "none"
+    assert args[args.index("-t") + 1] == "8"
+    assert args[args.index("--load-mode") + 1] == "mmap+mlock"
+    assert "-b" in args
+    assert "-ub" in args
+
+
+def test_gpu_mode_does_not_add_cpu_flags(monkeypatch):
+    monkeypatch.setattr(lifecycle, "find_llama_server", lambda: "llama-server")
+    monkeypatch.setattr(
+        lifecycle, "_help_text", lambda binary: "--device --load-mode"
+    )
+    args = lifecycle.llama_default_args("/models/m/m.gguf", 8088, 4096, 99)
+    assert "--device" not in args
+    assert "-t" not in args
+    assert "--load-mode" not in args
+    assert "-b" not in args
+    assert "-ub" not in args
