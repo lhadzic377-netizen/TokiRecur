@@ -335,6 +335,8 @@ def record(
     logged once and swallowed: a recorder must never be the reason a
     completion fails.
     """
+    if "PYTEST_CURRENT_TEST" in os.environ and not os.environ.get("TOKI_TAP_DIR"):
+        return False
     if not is_enabled():
         return False
     return _write(build_record(
@@ -368,6 +370,8 @@ def raw_turn(
     numbers the client can honestly supply — which, on the raw path, is
     nothing about caching: there was no cache in front of it.
     """
+    if "PYTEST_CURRENT_TEST" in os.environ and not os.environ.get("TOKI_TAP_DIR"):
+        return False
     if not is_enabled():
         return False
     record = build_record(

@@ -68,23 +68,106 @@ def _strip_patterns(node: Any) -> Any:
     return node
 
 
+def _content_parts(content: Any) -> list[Any]:
+    if isinstance(content, list):
+        return [dict(part) if isinstance(part, dict) else part for part in content]
+    if content is None:
+        return []
+    return [{"type": "text", "text": str(content)}]
+
+
+def _merge_assistant(previous: dict, message: dict) -> None:
+    content = message.get("content")
+    if content not in (None, "", []):
+        previous_content = previous.get("content")
+        if previous_content in (None, "", []):
+            previous["content"] = content
+        elif isinstance(previous_content, str) and isinstance(content, str):
+            previous["content"] = previous_content + "\n" + content
+        else:
+            previous["content"] = (
+                _content_parts(previous_content) + _content_parts(content)
+            )
+    reasoning = message.get("reasoning_content")
+    if reasoning:
+        previous_reasoning = previous.get("reasoning_content")
+        previous["reasoning_content"] = (
+            previous_reasoning + "\n" + reasoning
+            if previous_reasoning
+            else reasoning
+        )
+    tool_calls = message.get("tool_calls")
+    if tool_calls:
+        previous["tool_calls"] = (
+            list(previous.get("tool_calls") or []) + list(tool_calls)
+        )
+    function_call = message.get("function_call")
+    if function_call and not previous.get("function_call"):
+        previous["function_call"] = function_call
+    name = message.get("name")
+    if name and not previous.get("name"):
+        previous["name"] = name
+
+
+def _normalize_messages(messages: list[dict]) -> list[dict]:
+    out: list[dict] = []
+    for raw in messages:
+        if not isinstance(raw, dict):
+            out.append(raw)
+            continue
+        message = dict(raw)
+        if (
+            message.get("role") == "assistant"
+            and out
+            and isinstance(out[-1], dict)
+            and out[-1].get("role") == "assistant"
+        ):
+            _merge_assistant(out[-1], message)
+            continue
+        out.append(message)
+    return out
+
+
+def _normalize_tool(tool: Any) -> dict | None:
+    if not isinstance(tool, dict):
+        return None
+    tool = dict(tool)
+    function = tool.get("function")
+    if not isinstance(function, dict):
+        name = tool.get("name")
+        if not name:
+            return tool
+        parameters = tool.get("parameters") or tool.get("input_schema") or {}
+        if isinstance(parameters, dict):
+            parameters = _strip_patterns(parameters)
+        tool = {
+            "type": "function",
+            "function": {
+                "name": name,
+                "description": tool.get("description", ""),
+                "parameters": parameters,
+            },
+        }
+        return tool
+    function = dict(function)
+    parameters = function.get("parameters")
+    if parameters is None:
+        parameters = function.get("input_schema")
+    if isinstance(parameters, dict):
+        parameters = _strip_patterns(parameters)
+    function["parameters"] = parameters or {}
+    tool["function"] = function
+    tool.setdefault("type", "function")
+    return tool
+
+
 def _sanitize_tools(tools: list) -> list:
-    """Return tools with function parameter schemas stripped of the
-    ``pattern`` keyword, which the laguna fork's grammar generator cannot
-    handle."""
+    """Return tools in OpenAI function-tool shape with ``pattern`` stripped."""
     out: list[dict] = []
     for tool in tools:
-        if isinstance(tool, dict):
-            tool = dict(tool)
-            fn = tool.get("function")
-            if isinstance(fn, dict):
-                fn = dict(fn)
-                params = fn.get("parameters")
-                if isinstance(params, dict):
-                    fn["parameters"] = _strip_patterns(params)
-                fn["parameters"] = fn.get("parameters") or {}
-                tool["function"] = fn
-        out.append(tool)
+        normalized = _normalize_tool(tool)
+        if normalized is not None:
+            out.append(normalized)
     return out
 
 
@@ -617,6 +700,7 @@ class LlamaServerBackend(LlamaBackend):
         ``tool_calls`` (assembled OpenAI tool-call list, or None) and
         ``finish_reason`` when the model requested tools.
         """
+        messages = _normalize_messages(messages)
         payload = {
             "messages": messages,
             "max_tokens": max_tokens,
@@ -733,6 +817,7 @@ class LlamaServerBackend(LlamaBackend):
         restarts the backend. Letting the producer finish lets the task
         complete and the slot be released.
         """
+        messages = _normalize_messages(messages)
         payload = {
             "messages": messages,
             "max_tokens": max_tokens,

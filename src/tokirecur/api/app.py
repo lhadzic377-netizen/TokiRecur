@@ -37,6 +37,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel, Field
 
 from .. import tap
+from ..backend import _normalize_messages
 from ..core.recycling import (
     LlamaBackend,
     RecyclingEngine,
@@ -2053,6 +2054,7 @@ def create_app(
         # Text-only active model + attached images: caption first, or the
         # projector-less backend 500s on pixels it cannot represent.
         messages = await _inline_images(messages)
+        messages = _normalize_messages(messages)
         temperature, sampling = _resolve_sampling(
             temperature=req.temperature,
             repeat_penalty=req.repeat_penalty,

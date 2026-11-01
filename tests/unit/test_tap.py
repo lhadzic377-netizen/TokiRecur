@@ -172,6 +172,15 @@ def test_a_failed_write_never_raises_into_a_request(monkeypatch):
     assert tap.record(endpoint="chat", model="m", result=_result()) is False
 
 
+def test_pytest_without_explicit_tap_dir_does_not_write(monkeypatch, tmp_path):
+    monkeypatch.delenv("TOKI_TAP_DIR", raising=False)
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", "test")
+    tap.set_enabled(True)
+    assert tap.record(endpoint="chat", model="m", result=_result()) is False
+    assert not list((tmp_path / "tokirecur" / "tap").glob("*.jsonl"))
+
+
 def test_sft_export_is_plain_messages():
     tap.set_enabled(True)
     tap.record(

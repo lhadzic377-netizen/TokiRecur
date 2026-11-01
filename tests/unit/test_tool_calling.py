@@ -403,3 +403,69 @@ def test_sanitize_tools_preserves_non_tool_entries():
     out = _sanitize_tools(tools)
     assert out[0] == {"not": "a tool"}
     assert out[1]["function"] == "bare"
+
+
+def test_sanitize_tools_wraps_flat_function_tools():
+    tools = [
+        {
+            "name": "read",
+            "description": "Read a file",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "pattern": "^/.*"}
+                },
+            },
+        }
+    ]
+    assert _sanitize_tools(tools) == [
+        {
+            "type": "function",
+            "function": {
+                "name": "read",
+                "description": "Read a file",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}},
+                },
+            },
+        }
+    ]
+
+
+def test_sanitize_tools_adds_type_and_uses_input_schema():
+    tools = [
+        {
+            "function": {
+                "name": "lookup",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"q": {"type": "string"}},
+                },
+            }
+        }
+    ]
+    out = _sanitize_tools(tools)
+    assert out[0]["type"] == "function"
+    assert out[0]["function"]["parameters"] == {
+        "type": "object",
+        "properties": {"q": {"type": "string"}},
+    }
+
+
+def test_sanitize_tools_wraps_flat_input_schema():
+    tools = [
+        {
+            "name": "lookup",
+            "input_schema": {
+                "type": "object",
+                "properties": {"q": {"type": "string"}},
+            },
+        }
+    ]
+    out = _sanitize_tools(tools)
+    assert out[0]["type"] == "function"
+    assert out[0]["function"]["parameters"] == {
+        "type": "object",
+        "properties": {"q": {"type": "string"}},
+    }
