@@ -99,9 +99,10 @@ Toki Recur is pure Python over the llama-server HTTP API — it runs on **any x8
 
 > **macOS note:** llama.cpp ships one universal Metal build; there is no
 > separate macOS CPU asset. It runs CPU-only with `-ngl 0` / `--device none`.
-> `install-llama --backend cpu` on macOS installs that same build and prints
-> the note; a Mac or VM without Metal falls back to CPU with an explicit
-> warning, not a false "installed Metal" claim.
+> `install-llama --backend cpu` on macOS installs that build (or a locally
+> built CPU-only `llama-server` when one is present) and prints the note; a
+> Mac or VM without Metal falls back to CPU with an explicit warning, not a
+> false "installed Metal" claim.
 
 > **Linux ROCm note (mid-2026):** llama.cpp stopped publishing Linux ROCm
 > release assets after **b10375**. `install-llama --backend rocm` still finds
