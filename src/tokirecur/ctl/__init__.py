@@ -3006,23 +3006,27 @@ def _llama_args(spec: ModelSpec, ctx_override: int | None = None,
     if ngl is not None:
         _warn_gpu_offload_without_gpu_binary(binary, ngl)
         args += ["-ngl", str(ngl)]
-    if ngl == 0 and _binary_supports(binary, "--device"):
+    # A registry-pinned -ngl 0 is a CPU run too. Without --device none
+    # llama.cpp's device fitter can still place layers on the GPU: -ngl 0
+    # is a hint to it, not an order.
+    cpu_mode = ngl == 0 or (ngl is None and _effective_ngl(spec) == 0)
+    if cpu_mode and _binary_supports(binary, "--device"):
         # Newer llama.cpp fits the model onto any visible device and
         # treats -ngl 0 as a hint, not an order: a "CPU" launch silently
         # ran on the Intel iGPU at 0.43 tok/s where the CPU does 25.
         # --device none is the only way to tell that fitter "no GPU".
         args += ["--device", "none"]
 
-    # CPU-mode tuning: when no GPU is in play (ngl == 0), use every
-    # physical core, plus mlock and batch sizes. None of these are
-    # useful on GPU paths — the GPU does the matmul, not the CPU.
-    # Thread count is recomputed fresh (never read from a cached or
-    # hand-edited profile) so a stale hardware.json cannot silently
-    # cap CPU throughput. ``effective_cpu_threads`` drops the slowest
-    # tier on hybrid chips (e.g. LPE on Core Ultra 155U) so the
-    # llama.cpp thread pool isn't gated by 1.5 GHz cores.
+    # CPU-mode tuning: when no GPU is in play, use every physical core,
+    # plus mlock and batch sizes. None of these are useful on GPU paths
+    # — the GPU does the matmul, not the CPU. Thread count is recomputed
+    # fresh (never read from a cached or hand-edited profile) so a stale
+    # hardware.json cannot silently cap CPU throughput.
+    # ``effective_cpu_threads`` drops the slowest tier on hybrid chips
+    # (e.g. LPE on Core Ultra 155U) so the llama.cpp thread pool isn't
+    # gated by 1.5 GHz cores.
     threads_added = False
-    if (ngl == 0) and not any(a in ("-t", "--threads") for a in spec.extra_args):
+    if cpu_mode and not any(a in ("-t", "--threads") for a in spec.extra_args):
         threads = None
         # TOKI_THREADS wins when set; otherwise auto-detect.
         if toki_threads:

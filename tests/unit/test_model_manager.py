@@ -1751,6 +1751,20 @@ def test_llama_args_cpu_mode_keeps_legacy_mlock(seeded_env, monkeypatch):
     assert "--device" not in args
 
 
+def test_llama_args_pinned_ngl_zero_disables_gpu_device(
+    seeded_env, monkeypatch,
+):
+    """A registry -ngl 0 pin is a CPU run; the device fitter must be
+    disabled there too, or the GPU can still take the layers."""
+    spec = _ngl_spec(seeded_env)
+    spec.extra_args = ["-ngl", "0"]
+    supported = {"--load-mode", "--device"}
+    monkeypatch.setattr(ctl, "_binary_supports", lambda b, f: f in supported)
+    args = ctl._llama_args(spec)
+    assert args[args.index("--device") + 1] == "none"
+    assert args[args.index("--load-mode") + 1] == "mmap+mlock"
+
+
 def test_llama_args_gpu_mode_does_not_disable_devices(seeded_env, monkeypatch):
     monkeypatch.setenv("TOKI_NGL", "99")
     monkeypatch.setattr(ctl, "_binary_supports", lambda b, f: True)
