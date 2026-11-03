@@ -115,7 +115,6 @@ def test_an_unknown_effort_is_ignored_not_guessed():
 
 
 def test_a_variant_id_carries_its_effort(monkeypatch, tmp_path):
-    spec = _spec(reasoning_efforts=["low", "high"])
     registry = tmp_path / "models.yaml"
     registry.write_text(
         "models:\n"

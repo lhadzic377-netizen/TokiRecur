@@ -12,7 +12,6 @@ Three faults, all found by driving `toki interactive` in a terminal:
   was printed instead.
 """
 
-import json
 
 import pytest
 

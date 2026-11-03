@@ -1,35 +1,121 @@
 document.addEventListener("DOMContentLoaded", () => {
   const navToggle = document.querySelector(".nav-toggle");
   const navLinks = document.getElementById("nav-links");
+  const mobileNav = window.matchMedia("(max-width: 900px)");
+
   if (navToggle && navLinks) {
-    const setNav = (open) => {
+    let navFocusTimer = 0;
+
+    const setNav = (open, returnFocus = false) => {
+      window.clearTimeout(navFocusTimer);
+      const isMobile = mobileNav.matches;
       document.body.classList.toggle("nav-open", open);
       navToggle.setAttribute("aria-expanded", String(open));
+      navToggle.setAttribute("aria-label", open ? "Close navigation" : "Open navigation");
+
+      if (isMobile) {
+        navLinks.inert = !open;
+        navLinks.setAttribute("aria-hidden", String(!open));
+      } else {
+        navLinks.inert = false;
+        navLinks.removeAttribute("aria-hidden");
+      }
+
+      if (open && isMobile) {
+        const first = navLinks.querySelector("a");
+        // The menu transitions from visibility:hidden; focusing before the
+        // style has committed silently fails, leaving focus on the button.
+        window.clearTimeout(navFocusTimer);
+        if (first) {
+          navFocusTimer = window.setTimeout(() => {
+            if (document.body.classList.contains("nav-open")) {
+              first.focus({ preventScroll: true });
+            }
+          }, 240);
+        }
+      } else if (returnFocus && isMobile) {
+        navToggle.focus({ preventScroll: true });
+      }
     };
+
+    const syncNav = () => {
+      if (mobileNav.matches) {
+        setNav(document.body.classList.contains("nav-open"));
+      } else {
+        document.body.classList.remove("nav-open");
+        navToggle.setAttribute("aria-expanded", "false");
+        navToggle.setAttribute("aria-label", "Open navigation");
+        navLinks.inert = false;
+        navLinks.removeAttribute("aria-hidden");
+      }
+    };
+
     navToggle.addEventListener("click", () => {
       setNav(!document.body.classList.contains("nav-open"));
     });
+
     navLinks.addEventListener("click", (e) => {
       if (e.target.closest("a")) setNav(false);
     });
+
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && document.body.classList.contains("nav-open")) {
+        setNav(false, true);
+      }
+    });
+
+    document.addEventListener("pointerdown", (e) => {
+      if (!mobileNav.matches || !document.body.classList.contains("nav-open")) return;
+      if (e.target.closest("#nav-links, .nav-toggle")) return;
+      setNav(false, true);
+    });
+
+    if (mobileNav.addEventListener) mobileNav.addEventListener("change", syncNav);
+    else mobileNav.addListener(syncNav);
+    syncNav();
   }
 
   document.querySelectorAll("pre.code").forEach((pre) => {
+    const code = pre.querySelector("code");
+    if (!code) return;
+
     const btn = document.createElement("button");
     btn.className = "copy";
     btn.type = "button";
     btn.textContent = "copy";
-    btn.addEventListener("click", () => {
-      const text = pre.querySelector("code").innerText;
-      navigator.clipboard.writeText(text).then(() => {
+    btn.setAttribute("aria-label", "Copy code to clipboard");
+
+    const status = document.createElement("span");
+    status.className = "copy-status";
+    status.setAttribute("role", "status");
+    status.setAttribute("aria-live", "polite");
+
+    const reset = () => {
+      window.setTimeout(() => {
+        btn.textContent = "copy";
+        btn.classList.remove("done");
+        status.textContent = "";
+      }, 1600);
+    };
+
+    btn.addEventListener("click", async () => {
+      const text = code.innerText;
+      try {
+        if (!navigator.clipboard) throw new Error("clipboard unavailable");
+        await navigator.clipboard.writeText(text);
         btn.textContent = "copied";
         btn.classList.add("done");
-        setTimeout(() => {
-          btn.textContent = "copy";
-          btn.classList.remove("done");
-        }, 1500);
-      });
+        status.textContent = "Copied to clipboard";
+        reset();
+      } catch {
+        btn.textContent = "copy failed";
+        btn.classList.remove("done");
+        status.textContent = "Select the code and copy it manually";
+        reset();
+      }
     });
+
+    pre.appendChild(status);
     pre.appendChild(btn);
   });
 
@@ -50,36 +136,59 @@ document.addEventListener("DOMContentLoaded", () => {
   );
   stagger(groups, 0.1);
 
-  const tabs = document.querySelectorAll(".bench-tab");
+  const tabs = Array.from(document.querySelectorAll(".bench-tab"));
+  const panels = Array.from(document.querySelectorAll(".bench-panel"));
+
   if (tabs.length) {
-    tabs.forEach((tab) => {
-      tab.addEventListener("click", () => {
-        tabs.forEach((t) => {
-          t.classList.remove("active");
-          t.setAttribute("aria-selected", "false");
-        });
-        tab.classList.add("active");
-        tab.setAttribute("aria-selected", "true");
-        document.querySelectorAll(".bench-panel").forEach((panel) => {
-          panel.classList.toggle("active", panel.id === tab.dataset.model);
-        });
-        const shown = document.getElementById(tab.dataset.model);
-        if (shown) {
-          shown.querySelectorAll(".reveal").forEach((el, i) => {
-            el.style.setProperty("--d", `${0.1 * i}s`);
-            el.classList.add("in-view");
-          });
-        }
+    const activateTab = (tab) => {
+      tabs.forEach((t) => {
+        const selected = t === tab;
+        t.classList.toggle("active", selected);
+        t.setAttribute("aria-selected", String(selected));
+        t.tabIndex = selected ? 0 : -1;
       });
+      panels.forEach((panel) => {
+        const selected = panel.id === tab.dataset.model;
+        panel.classList.toggle("active", selected);
+        panel.hidden = !selected;
+      });
+      const shown = document.getElementById(tab.dataset.model);
+      if (shown) {
+        shown.querySelectorAll(".reveal").forEach((el, i) => {
+          el.style.setProperty("--d", `${0.1 * i}s`);
+          el.classList.add("in-view");
+        });
+      }
+    };
+
+    tabs.forEach((tab, index) => {
+      tab.addEventListener("click", () => activateTab(tab));
+      tab.addEventListener("keydown", (event) => {
+        let next = null;
+        if (event.key === "ArrowRight") next = (index + 1) % tabs.length;
+        else if (event.key === "ArrowLeft") next = (index - 1 + tabs.length) % tabs.length;
+        else if (event.key === "Home") next = 0;
+        else if (event.key === "End") next = tabs.length - 1;
+        if (next === null) return;
+        event.preventDefault();
+        tabs[next].focus();
+        activateTab(tabs[next]);
+      });
+      tab.tabIndex = tab.classList.contains("active") ? 0 : -1;
     });
+
+    const initial = tabs.find((tab) => tab.classList.contains("active")) || tabs[0];
+    activateTab(initial);
   }
 
-  // The video is a poster until it is asked for.
+  // The video is a poster until it is asked for, and it is loaded from
+  // YouTube's no-cookie host. No third-party request before the click.
   document.querySelectorAll("[data-video]").forEach((btn) => {
     btn.addEventListener("click", () => {
       const frame = document.createElement("iframe");
-      frame.src = `https://www.youtube.com/embed/${btn.dataset.video}?autoplay=1&rel=0`;
+      frame.src = `https://www.youtube-nocookie.com/embed/${btn.dataset.video}?autoplay=1&rel=0`;
       frame.title = "Toki Recur — see it in action";
+      frame.loading = "lazy";
       frame.allow =
         "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture";
       frame.referrerPolicy = "strict-origin-when-cross-origin";
@@ -95,6 +204,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   if (!("IntersectionObserver" in window)) {
     reveals.forEach((el) => el.classList.add("in-view"));
+    document.documentElement.dataset.siteReady = "1";
     return;
   }
   const io = new IntersectionObserver(
@@ -115,6 +225,7 @@ document.addEventListener("DOMContentLoaded", () => {
     { threshold: 0.05 }
   );
   reveals.forEach((el) => io.observe(el));
+  document.documentElement.dataset.siteReady = "1";
 });
 
 /* ---------------------------------------------------------------------------
@@ -123,6 +234,8 @@ document.addEventListener("DOMContentLoaded", () => {
    --------------------------------------------------------------------------- */
 
 document.addEventListener("DOMContentLoaded", () => {
+  const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
   const navLinks = Array.from(
     document.querySelectorAll("#nav-links a[href^='#']")
   ).filter((a) => a.getAttribute("href").length > 1);
@@ -164,6 +277,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // "+96.2%" counts to 96.2; "0" counts to nothing but still settles.
   const countUp = (el) => {
+    if (reduceMotion) return;
     const raw = el.textContent.trim();
     const match = raw.match(/(-?\d+(?:\.\d+)?)/);
     if (!match) return;
@@ -185,7 +299,7 @@ document.addEventListener("DOMContentLoaded", () => {
   };
 
   const numbers = document.querySelectorAll(".stats .num");
-  if (numbers.length && "IntersectionObserver" in window) {
+  if (numbers.length && "IntersectionObserver" in window && !reduceMotion) {
     const counter = new IntersectionObserver(
       (entries) => {
         entries.forEach((entry) => {

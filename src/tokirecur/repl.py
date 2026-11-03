@@ -78,12 +78,12 @@ def _why_it_failed(error: Exception, port: int) -> str:
     text = str(error)
     if "401" in text or "Unauthorized" in text:
         return (
-            "the daemon on :%d wants a token — set TOKI_AUTH_TOKEN or put one "
-            "in ~/.config/tokirecur/auth" % port
+            f"the daemon on :{port} wants a token — set TOKI_AUTH_TOKEN or put one "
+            "in ~/.config/tokirecur/auth"
         )
     if "Connection refused" in text or "ConnectError" in text:
-        return "is the daemon running on :%d?" % port
-    return "is the daemon running on :%d?" % port
+        return f"is the daemon running on :{port}?"
+    return f"is the daemon running on :{port}?"
 
 
 def _active():

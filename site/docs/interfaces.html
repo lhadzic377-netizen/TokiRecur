@@ -5,33 +5,45 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Launcher &amp; shells: Toki Recur Docs</title>
 <meta name="description" content="The full-screen launcher, the interactive toki shell, the TUI chat, and the web chat UI.">
+<meta property="og:title" content="Launcher &amp; shells: Toki Recur Docs">
+<meta property="og:description" content="The full-screen launcher, the interactive toki shell, the TUI chat, and the web chat UI.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://tokirecur.com/docs/interfaces.html">
+<meta property="og:site_name" content="Toki Recur">
+<meta property="og:image" content="https://tokirecur.com/img/toki-bear.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Launcher &amp; shells: Toki Recur Docs">
+<meta name="twitter:description" content="The full-screen launcher, the interactive toki shell, the TUI chat, and the web chat UI.">
+<meta name="twitter:image" content="https://tokirecur.com/img/toki-bear.jpg">
+<link rel="canonical" href="https://tokirecur.com/docs/interfaces.html">
+<meta name="theme-color" content="#08090b">
 <link rel="icon" href="/favicon.png" type="image/png" sizes="any">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400..700&family=Geist+Mono:wght@400..600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/fonts.css">
 <link rel="stylesheet" href="/docs/docs.css">
-<script>document.documentElement.classList.add('js-ready');</script>
+<noscript><style>.reveal { opacity: 1 !important; transform: none !important; }</style></noscript>
+<script src="/head.js"></script>
 </head>
 <body>
+<a class="skip-link" href="#main">Skip to content</a>
 <header class="topbar">
-  <nav>
-    <a class="brand" href="/"><img class="logo" src="/img/logo.png" alt="" width="36" height="36"> Toki Recur</a>
+  <nav aria-label="Main navigation">
+    <a class="brand" href="/" aria-label="Toki Recur home"><img class="logo" src="/img/logo.png" alt="" width="36" height="36"> Toki Recur</a>
     <div class="links">
       <a href="/">Home</a>
-      <a href="/docs/" class="active">Docs</a>
+      <a href="/docs/" class="active" aria-current="page">Docs</a>
       <a href="https://github.com/lhadzic377-netizen/TokiRecur" target="_blank" rel="noopener">GitHub</a>
     </div>
   </nav>
 </header>
 
 <div class="layout">
-  <aside class="sidebar">
+  <aside class="sidebar" aria-label="Documentation">
     <div class="doc-title">Documentation</div>
     <a href="/docs/">Overview</a>
     <a href="/docs/install.html">Install</a>
     <a href="/docs/quickstart.html">Quick start</a>
     <a href="/docs/commands.html">Command reference</a>
-    <a href="/docs/interfaces.html" class="active">Launcher &amp; shells</a>
+    <a href="/docs/interfaces.html" class="active" aria-current="page">Launcher &amp; shells</a>
     <a href="/docs/architecture.html">Architecture</a>
     <a href="/docs/api.html">API reference</a>
     <a href="/docs/benchmark.html">Benchmark</a>
@@ -39,13 +51,13 @@
     <a href="/docs/development.html">Development</a>
   </aside>
 
-  <main class="doc">
+  <main class="doc" id="main" tabindex="-1">
     <h1 class="reveal">Launcher &amp; shells</h1>
 
     <h2>The launcher</h2>
     <p>Bare <code>toki</code> opens an Ollama-style full-screen launcher in a black + yellow design: a letter-spaced yellow <code>TOKI</code> wordmark with tagline and amber divider, then a vertically-centred column of app cards, toki Chat, OpenCode, Hermes, OpenClaw, web dashboards, each bound to the pinned model (shown as a right-aligned chip). The active row is highlighted with a yellow accent bar. A status line shows the pinned model, backend health dots, and key hints; keys <code>1</code>–<code>5</code> jump straight to an app (or model).</p>
 
-    <table>
+    <table tabindex="0">
       <thead><tr><th>Key</th><th>Action</th></tr></thead>
       <tbody>
         <tr><td><code>↑</code> / <code>↓</code> (or <code>k</code> / <code>j</code>)</td><td>navigate apps or models</td></tr>
@@ -85,7 +97,7 @@ exit / quit / q               exit shell</code></pre>
 
     <h2>TUI chat (<code>toki tui</code>)</h2>
     <p>The full-screen terminal chat client. Three modes, switched with <code>Ctrl+1/2/3</code> (or in-chat slash commands):</p>
-    <table>
+    <table tabindex="0">
       <thead><tr><th>Mode</th><th>What it does</th></tr></thead>
       <tbody>
         <tr><td><code>raw</code></td><td>Sends directly to llama-server (bypasses cache)</td></tr>
@@ -100,7 +112,7 @@ toki tui --daemon-url http://other:8787    # custom daemon</code></pre>
 
     <p>Features: live TTFT sparkline + running hit-rate counter in the right panel; per-backend connection health (green/yellow/red); a slot state panel showing which slots are in use and which session owns them; precision retention panel (<code>Ctrl+P</code>) with baseline/recycled byte-identity stats; session pinning via UUID so multi-turn chats reuse the same slot; persistent history at <code>~/.local/share/tokirecur/history.jsonl</code> (XDG); graceful degradation, if the daemon is unreachable, mode auto-switches to raw.</p>
 
-    <table>
+    <table tabindex="0">
       <thead><tr><th>Key</th><th>Action</th></tr></thead>
       <tbody>
         <tr><td><code>Ctrl+1/2/3</code></td><td>Switch to raw / cached / compare</td></tr>

@@ -5,27 +5,39 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Benchmark: Toki Recur Docs</title>
 <meta name="description" content="The toki bench workloads, composite scoring weights, and measured results on this hardware.">
+<meta property="og:title" content="Benchmark: Toki Recur Docs">
+<meta property="og:description" content="The toki bench workloads, composite scoring weights, and measured results on this hardware.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://tokirecur.com/docs/benchmark.html">
+<meta property="og:site_name" content="Toki Recur">
+<meta property="og:image" content="https://tokirecur.com/img/toki-bear.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Benchmark: Toki Recur Docs">
+<meta name="twitter:description" content="The toki bench workloads, composite scoring weights, and measured results on this hardware.">
+<meta name="twitter:image" content="https://tokirecur.com/img/toki-bear.jpg">
+<link rel="canonical" href="https://tokirecur.com/docs/benchmark.html">
+<meta name="theme-color" content="#08090b">
 <link rel="icon" href="/favicon.png" type="image/png" sizes="any">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400..700&family=Geist+Mono:wght@400..600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/fonts.css">
 <link rel="stylesheet" href="/docs/docs.css">
-<script>document.documentElement.classList.add('js-ready');</script>
+<noscript><style>.reveal { opacity: 1 !important; transform: none !important; }</style></noscript>
+<script src="/head.js"></script>
 </head>
 <body>
+<a class="skip-link" href="#main">Skip to content</a>
 <header class="topbar">
-  <nav>
-    <a class="brand" href="/"><img class="logo" src="/img/logo.png" alt="" width="36" height="36"> Toki Recur</a>
+  <nav aria-label="Main navigation">
+    <a class="brand" href="/" aria-label="Toki Recur home"><img class="logo" src="/img/logo.png" alt="" width="36" height="36"> Toki Recur</a>
     <div class="links">
       <a href="/">Home</a>
-      <a href="/docs/" class="active">Docs</a>
+      <a href="/docs/" class="active" aria-current="page">Docs</a>
       <a href="https://github.com/lhadzic377-netizen/TokiRecur" target="_blank" rel="noopener">GitHub</a>
     </div>
   </nav>
 </header>
 
 <div class="layout">
-  <aside class="sidebar">
+  <aside class="sidebar" aria-label="Documentation">
     <div class="doc-title">Documentation</div>
     <a href="/docs/">Overview</a>
     <a href="/docs/install.html">Install</a>
@@ -34,12 +46,12 @@
     <a href="/docs/interfaces.html">Launcher &amp; shells</a>
     <a href="/docs/architecture.html">Architecture</a>
     <a href="/docs/api.html">API reference</a>
-    <a href="/docs/benchmark.html" class="active">Benchmark</a>
+    <a href="/docs/benchmark.html" class="active" aria-current="page">Benchmark</a>
     <a href="/docs/deploy.html">Production deploy</a>
     <a href="/docs/development.html">Development</a>
   </aside>
 
-  <main class="doc">
+  <main class="doc" id="main" tabindex="-1">
     <h1 class="reveal">Benchmark</h1>
 
     <p class="reveal">The benchmark compares baseline (no cache) vs recycled (cache enabled) runs across TTFT, prefill throughput, end-to-end latency, cache hit rate, and output equivalence, then prints a composite score (0–100) with a letter grade.</p>
@@ -55,7 +67,7 @@ toki bench --model ~/Downloads/Qwen3.5-9B-Q4_K_M.gguf \
            --self-contained --ctx-size 8192 --n-gpu-layers 99</code></pre>
 
     <h2>Workloads</h2>
-    <table>
+    <table tabindex="0">
       <thead><tr><th>Workload</th><th>Expected hit rate</th><th>Best for</th></tr></thead>
       <tbody>
         <tr><td><code>agent_long_context</code></td><td>~90%</td><td>Agent systems with long fixed prompts</td></tr>
@@ -70,7 +82,7 @@ toki bench --model ~/Downloads/Qwen3.5-9B-Q4_K_M.gguf \
 
     <h2>Scoring</h2>
     <p>The composite score (0–100) is derived from weights that reflect production importance rather than end-to-end wall-clock:</p>
-    <table>
+    <table tabindex="0">
       <thead><tr><th>Component</th><th>Weight</th><th>What it measures</th></tr></thead>
       <tbody>
         <tr><td>Prefill skip</td><td>30%</td><td>% of prefill tokens served from cache</td></tr>
@@ -87,7 +99,7 @@ toki bench --model ~/Downloads/Qwen3.5-9B-Q4_K_M.gguf \
     <p>Run on an AMD Ryzen AI MAX+ 395 (Ryzen AI Halo), max-tokens=32. <strong>Disclaimer:</strong> all scores are based on multiple benchmark runs and depend on the hardware, environment, and model, the benchmark may score better or worse elsewhere.</p>
 
     <h3>Qwen3.5-9B-Q4_K_M</h3>
-    <table>
+    <table tabindex="0">
       <thead><tr><th>Workload</th><th>TTFT improvement</th><th>Prefill speedup</th><th>Cache hit rate</th><th>Composite</th><th>Grade</th></tr></thead>
       <tbody>
         <tr><td><code>realistic_mixed</code></td><td>+66.8%</td><td>+560.9%</td><td>88.1%</td><td>84.4</td><td>A</td></tr>
@@ -105,7 +117,7 @@ toki bench --model ~/Downloads/Qwen3.5-9B-Q4_K_M.gguf \
     <p>The headline number is <code>realistic_mixed</code>: 201 prompts across 5 real-world categories (RAG, tool-using, multi-turn, support, one-off), TTFT cut by two thirds, prefill nearly 6x faster, 88% cache hit rate, composite 84.4 (A). The <code>summarization</code> and <code>code_review</code> workloads are even stronger (A+). Low scores on <code>no_overlap</code> and the adversarial workloads are expected, zero-overlap prompts are the worst case for prefix caching, and the stress workload is designed to surface edge cases (false-positive hits from cosine similarity, minimal savings on short prompts, underperforming sequential growth).</p>
 
     <h3>Qwen3.6-35B-A3B (UD-Q4_K_M)</h3>
-    <table>
+    <table tabindex="0">
       <thead><tr><th>Workload</th><th>TTFT improvement</th><th>Prefill speedup</th><th>Cache hit rate</th><th>Composite</th><th>Grade</th></tr></thead>
       <tbody>
         <tr><td><code>realistic_mixed</code></td><td>+74.2%</td><td>+685.3%</td><td>87.6%</td><td>86.8</td><td>A</td></tr>
@@ -123,7 +135,7 @@ toki bench --model ~/Downloads/Qwen3.5-9B-Q4_K_M.gguf \
     <p>The 35B-A3B MoE benefits most from caching, its per-token compute is dominated by the 3B active experts, so skipping prefill shows up as larger relative TTFT and throughput gains than on the dense 9B (e.g. realistic_mixed 84.4 → 86.8 composite, summarization prefill speedup 1090% → 1187%). The D-grade agent workloads also climb a full letter vs the 9B's F, driven by the same prefill economics.</p>
 
     <h3>Qwen3.6-27B</h3>
-    <table>
+    <table tabindex="0">
       <thead><tr><th>Workload</th><th>TTFT improvement</th><th>Prefill speedup</th><th>Cache hit rate</th><th>Composite</th><th>Grade</th></tr></thead>
       <tbody>
         <tr><td><code>realistic_mixed</code></td><td>+62.4%</td><td>+412.7%</td><td>84.2%</td><td>78.2</td><td>B</td></tr>
@@ -139,7 +151,7 @@ toki bench --model ~/Downloads/Qwen3.5-9B-Q4_K_M.gguf \
     </table>
 
     <h3>Qwen3.5-122B-A10B (Q4_K_M, 3-split)</h3>
-    <table>
+    <table tabindex="0">
       <thead><tr><th>Workload</th><th>TTFT improvement</th><th>Prefill speedup</th><th>Cache hit rate</th><th>Composite</th><th>Grade</th></tr></thead>
       <tbody>
         <tr><td><code>realistic_mixed</code></td><td>+82.1%</td><td>+791.3%</td><td>90.2%</td><td>89.7</td><td>A</td></tr>

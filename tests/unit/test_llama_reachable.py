@@ -13,8 +13,6 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 
-import pytest
-
 from tokirecur import ctl
 
 

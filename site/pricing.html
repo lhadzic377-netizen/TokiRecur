@@ -9,18 +9,28 @@
 <meta property="og:description" content="One tier. One price. One joke. Toki Recur is $0/forever.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://tokirecur.com/pricing">
+<meta property="og:site_name" content="Toki Recur">
+<meta property="og:image" content="https://tokirecur.com/img/toki-bear.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="666">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Pricing · Toki Recur">
+<meta name="twitter:description" content="One tier. One price. Toki Recur is $0/forever.">
+<meta name="twitter:image" content="https://tokirecur.com/img/toki-bear.jpg">
+<meta name="theme-color" content="#08090b">
+<link rel="canonical" href="https://tokirecur.com/pricing">
 <link rel="icon" href="/favicon.png" type="image/png" sizes="any">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300..700&family=Geist+Mono:wght@400..600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/fonts.css">
 <link rel="stylesheet" href="/style.css?v=26">
-<script>document.documentElement.classList.add('js-ready');</script>
+<noscript><style>.reveal { opacity: 1 !important; transform: none !important; }</style></noscript>
+<script src="/head.js"></script>
 </head>
 <body>
+<a class="skip-link" href="#main">Skip to content</a>
 <header class="topbar">
-  <nav>
-    <a class="brand" href="/">
-      <img class="logo" src="/img/logo.png" alt="Toki Recur" width="30" height="30">
+  <nav aria-label="Main navigation">
+    <a class="brand" href="/" aria-label="Toki Recur home">
+      <img class="logo" src="/img/logo.png" alt="" width="30" height="30">
       toki<span class="wordmark-accent">recur</span>
     </a>
     <div class="links" id="nav-links">
@@ -28,18 +38,18 @@
       <a href="/#benchmarks">Benchmarks</a>
       <a href="/#quickstart">Quick start</a>
       <a href="/#architecture">Architecture</a>
-      <a href="/pricing" class="active">Pricing</a>
+      <a href="/pricing" class="active" aria-current="page">Pricing</a>
       <a href="https://huggingface.co/models?library=gguf" target="_blank" rel="noopener">Models</a>
       <a href="/docs/">Docs</a>
       <a href="https://github.com/lhadzic377-netizen/TokiRecur" target="_blank" rel="noopener" class="btn-nav">GitHub</a>
     </div>
-    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="nav-links" aria-label="Toggle navigation">
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="nav-links" aria-label="Open navigation">
       <span></span><span></span><span></span>
     </button>
   </nav>
 </header>
 
-<main>
+<main id="main" tabindex="-1">
   <section class="pricing-page">
     <p class="overline">Pricing</p>
     <h1 class="pricing-h1">One tier. One price. One joke.</h1>
@@ -50,7 +60,7 @@
         <div class="price">$0</div>
         <div class="price-suffix">/forever</div>
       </div>
-      <h3>Free.</h3>
+      <h2>Free.</h2>
       <p class="pricing-blurb">toki runs on your machine, against your GPU, on top of llama.cpp. There is no service to meter, no cloud to bill you for, and no investor who needs a per-seat licence to retire on a beach. So:</p>
       <ul class="pricing-includes">
         <li>Every feature in the repo, today and forever</li>
@@ -78,33 +88,28 @@
 <footer>
   <div class="footer-grid">
     <div class="footer-brand">
-      <a class="brand" href="/">
+      <a class="brand" href="/" aria-label="Toki Recur home">
         <img class="logo" src="/img/logo.png" alt="" width="30" height="30">
         toki<span class="wordmark-accent">recur</span>
       </a>
       <p>KV cache reuse for LLM inference. Drop-in prefix caching on llama.cpp, no patches, no vendor lock-in.</p>
     </div>
     <div class="footer-col">
-      <h4>Product</h4>
+      <h3>Product</h3>
       <a href="/#quickstart">Quick start</a>
       <a href="/#benchmarks">Benchmarks</a>
       <a href="/docs/">Docs</a>
       <a href="/pricing">Pricing</a>
     </div>
     <div class="footer-col">
-      <h4>Project</h4>
+      <h3>Project</h3>
       <a href="https://github.com/lhadzic377-netizen/TokiRecur" target="_blank" rel="noopener">GitHub</a>
       <a href="https://github.com/lhadzic377-netizen/TokiRecur/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
-    </div>
-    <div class="footer-col">
-      <h4>Deploy</h4>
-      <a href="https://tokirecur.com" target="_blank" rel="noopener">tokirecur.com</a>
-      <a href="https://chat.tokirecur.com" target="_blank" rel="noopener">chat.tokirecur.com</a>
     </div>
   </div>
   <div class="footer-bottom">
     <span>Toki Recur · MIT licensed</span>
-    <span><a href="mailto:contact@tokirecur.com">contact@tokirecur.com</a></span>
+    <span>Built on llama.cpp</span>
     <span>Mascot: <span class="accent">toki the bear</span></span>
   </div>
 </footer>

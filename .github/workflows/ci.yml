@@ -7,6 +7,19 @@ on:
     branches: [main]
 
 jobs:
+  site-build:
+    name: Site build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Build the public site
+        run: python scripts/build-site.py
+      - name: Check the deployed artifact
+        run: python scripts/check-site-build.py
+
   ruff:
     name: Ruff lint
     runs-on: ubuntu-latest

@@ -17,8 +17,8 @@ All widgets are designed for live updates without flickering.
 from __future__ import annotations
 
 import time
-from datetime import datetime, timedelta
 from collections import deque
+from datetime import datetime, timedelta
 from typing import Any
 
 from rich.console import Group, RenderableType

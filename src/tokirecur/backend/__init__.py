@@ -188,7 +188,7 @@ def _merge_sampling(payload: dict, sampling: dict | None) -> dict:
     return payload
 
 
-def _swallow_task_result(task: "asyncio.Task[Any]") -> None:
+def _swallow_task_result(task: asyncio.Task[Any]) -> None:
     """Retrieve a finished task's exception so asyncio does not warn that
     it was never retrieved — the task outlives its consumer on purpose."""
     try:

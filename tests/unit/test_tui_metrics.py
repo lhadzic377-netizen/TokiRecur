@@ -15,7 +15,6 @@ Two things were wrong:
 import pytest
 
 from tokirecur.tui.app import TokiApp
-from tokirecur.tui.client import DaemonClient
 
 _PROM = """
 # HELP toki_requests_total Total requests
@@ -39,7 +38,6 @@ toki_auth_failures_total 0.0
 
 def _parse(text: str) -> dict:
     """The same parse the client does, without the network."""
-    from tokirecur.tui import client as client_mod
 
     empty = {
         "requests_total": 0, "cache_hits": 0, "cache_misses": 0,

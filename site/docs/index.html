@@ -5,30 +5,41 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Docs: Toki Recur</title>
 <meta name="description" content="Documentation for Toki Recur, drop-in KV cache reuse for local LLM inference on llama.cpp.">
+<meta property="og:title" content="Docs: Toki Recur">
+<meta property="og:description" content="Documentation for Toki Recur, drop-in KV cache reuse for local LLM inference on llama.cpp.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://tokirecur.com/docs/">
+<meta property="og:site_name" content="Toki Recur">
+<meta property="og:image" content="https://tokirecur.com/img/toki-bear.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Docs: Toki Recur">
+<meta name="twitter:description" content="Documentation for Toki Recur, drop-in KV cache reuse for local LLM inference on llama.cpp.">
+<meta name="twitter:image" content="https://tokirecur.com/img/toki-bear.jpg">
+<link rel="canonical" href="https://tokirecur.com/docs/">
+<meta name="theme-color" content="#08090b">
 <link rel="icon" href="/favicon.png" type="image/png" sizes="any">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400..700&family=Geist+Mono:wght@400..600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/fonts.css">
 <link rel="stylesheet" href="/docs/docs.css">
-<script>document.documentElement.classList.add('js-ready');</script>
+<noscript><style>.reveal { opacity: 1 !important; transform: none !important; }</style></noscript>
+<script src="/head.js"></script>
 </head>
 <body>
+<a class="skip-link" href="#main">Skip to content</a>
 <header class="topbar">
-  <nav>
-    <a class="brand" href="/"><img class="logo" src="/img/logo.png" alt="" width="36" height="36"> Toki Recur</a>
+  <nav aria-label="Main navigation">
+    <a class="brand" href="/" aria-label="Toki Recur home"><img class="logo" src="/img/logo.png" alt="" width="36" height="36"> Toki Recur</a>
     <div class="links">
       <a href="/">Home</a>
-      <a href="/docs/" class="active">Docs</a>
+      <a href="/docs/" class="active" aria-current="page">Docs</a>
       <a href="https://github.com/lhadzic377-netizen/TokiRecur" target="_blank" rel="noopener">GitHub</a>
     </div>
   </nav>
 </header>
 
 <div class="layout">
-  <aside class="sidebar">
+  <aside class="sidebar" aria-label="Documentation">
     <div class="doc-title">Documentation</div>
-    <a href="/docs/" class="active">Overview</a>
+    <a href="/docs/" class="active" aria-current="page">Overview</a>
     <a href="/docs/install.html">Install</a>
     <a href="/docs/quickstart.html">Quick start</a>
     <a href="/docs/commands.html">Command reference</a>
@@ -40,7 +51,7 @@
     <a href="/docs/development.html">Development</a>
   </aside>
 
-  <main class="doc">
+  <main class="doc" id="main" tabindex="-1">
     <h1 class="reveal">Toki Recur documentation</h1>
     <p class="reveal">A standalone KV cache reuse system for LLM inference. Drop-in prefix caching that works across CUDA, ROCm, SYCL, OpenVINO, Vulkan, Metal, and CPU without any model modifications.</p>
 
@@ -50,7 +61,7 @@
 
     <h2>Real measured results</h2>
     <p>Run on an AMD Ryzen AI MAX+ 395 (Strix Halo, UMA, 125 GB RAM) with Qwen3.5-9B-Q4_K_M via llama-server, cache enabled vs. baseline:</p>
-    <table class="reveal">
+    <table class="reveal" tabindex="0">
       <thead>
         <tr><th>Metric</th><th>Baseline</th><th>Recycled</th><th>Δ</th></tr>
       </thead>

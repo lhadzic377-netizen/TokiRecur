@@ -95,10 +95,10 @@ def test_the_status_says_a_model_has_no_weights(tmp_path, monkeypatch):
     assignment is still its own — but a person reading the list would
     otherwise think they could switch to it.
     """
-    from tokirecur.cli import status
+    import yaml
     from click.testing import CliRunner
 
-    import yaml
+    from tokirecur.cli import status
 
     reg = tmp_path / "models.yaml"
     marker = tmp_path / "active"

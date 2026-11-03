@@ -22,8 +22,8 @@ from dataclasses import dataclass, field
 import pytest
 from fastapi.testclient import TestClient
 
-from tokirecur.api.app import create_app
 from tokirecur import diagnose
+from tokirecur.api.app import create_app
 
 
 @dataclass

@@ -5,41 +5,53 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Architecture: Toki Recur Docs</title>
 <meta name="description" content="The 5-step recycling algorithm, targets, and how KV save/restore works without patching llama.cpp.">
+<meta property="og:title" content="Architecture: Toki Recur Docs">
+<meta property="og:description" content="The 5-step recycling algorithm, targets, and how KV save/restore works without patching llama.cpp.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://tokirecur.com/docs/architecture.html">
+<meta property="og:site_name" content="Toki Recur">
+<meta property="og:image" content="https://tokirecur.com/img/toki-bear.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Architecture: Toki Recur Docs">
+<meta name="twitter:description" content="The 5-step recycling algorithm, targets, and how KV save/restore works without patching llama.cpp.">
+<meta name="twitter:image" content="https://tokirecur.com/img/toki-bear.jpg">
+<link rel="canonical" href="https://tokirecur.com/docs/architecture.html">
+<meta name="theme-color" content="#08090b">
 <link rel="icon" href="/favicon.png" type="image/png" sizes="any">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400..700&family=Geist+Mono:wght@400..600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/fonts.css">
 <link rel="stylesheet" href="/docs/docs.css">
-<script>document.documentElement.classList.add('js-ready');</script>
+<noscript><style>.reveal { opacity: 1 !important; transform: none !important; }</style></noscript>
+<script src="/head.js"></script>
 </head>
 <body>
+<a class="skip-link" href="#main">Skip to content</a>
 <header class="topbar">
-  <nav>
-    <a class="brand" href="/"><img class="logo" src="/img/logo.png" alt="" width="36" height="36"> Toki Recur</a>
+  <nav aria-label="Main navigation">
+    <a class="brand" href="/" aria-label="Toki Recur home"><img class="logo" src="/img/logo.png" alt="" width="36" height="36"> Toki Recur</a>
     <div class="links">
       <a href="/">Home</a>
-      <a href="/docs/" class="active">Docs</a>
+      <a href="/docs/" class="active" aria-current="page">Docs</a>
       <a href="https://github.com/lhadzic377-netizen/TokiRecur" target="_blank" rel="noopener">GitHub</a>
     </div>
   </nav>
 </header>
 
 <div class="layout">
-  <aside class="sidebar">
+  <aside class="sidebar" aria-label="Documentation">
     <div class="doc-title">Documentation</div>
     <a href="/docs/">Overview</a>
     <a href="/docs/install.html">Install</a>
     <a href="/docs/quickstart.html">Quick start</a>
     <a href="/docs/commands.html">Command reference</a>
     <a href="/docs/interfaces.html">Launcher &amp; shells</a>
-    <a href="/docs/architecture.html" class="active">Architecture</a>
+    <a href="/docs/architecture.html" class="active" aria-current="page">Architecture</a>
     <a href="/docs/api.html">API reference</a>
     <a href="/docs/benchmark.html">Benchmark</a>
     <a href="/docs/deploy.html">Production deploy</a>
     <a href="/docs/development.html">Development</a>
   </aside>
 
-  <main class="doc">
+  <main class="doc" id="main" tabindex="-1">
     <h1 class="reveal">Architecture</h1>
 
     <pre class="reveal"><code>┌─────────────────┐      ┌──────────────────┐      ┌────────────────┐

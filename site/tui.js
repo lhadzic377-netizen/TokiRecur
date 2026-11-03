@@ -409,6 +409,8 @@
     root.textContent = "";
     root.dataset.screen = state.screen;
     bodyEl = el("div", "tui-body");
+    bodyEl.tabIndex = 0;
+    bodyEl.setAttribute("aria-label", "Terminal output");
     root.appendChild(bodyEl);
     if (state.screen === "models") {
       renderModels();
@@ -431,7 +433,13 @@
     bodyEl = root;
     if (state.edit) renderEdit();
     const selected = root.querySelector(".tui-line.active");
-    if (selected) selected.scrollIntoView({ block: "nearest" });
+    if (selected) {
+      const scroller = selected.closest(".tui-body") || root;
+      const box = scroller.getBoundingClientRect();
+      const row = selected.getBoundingClientRect();
+      if (row.top < box.top) scroller.scrollTop -= box.top - row.top;
+      else if (row.bottom > box.bottom) scroller.scrollTop += row.bottom - box.bottom;
+    }
   }
 
   function setScreen(screen) {
@@ -510,7 +518,9 @@
     root = node;
     state = initial();
     root.setAttribute("tabindex", "0");
-    root.setAttribute("role", "application");
+    root.setAttribute("role", "group");
+    root.setAttribute("aria-roledescription", "interactive terminal simulation");
+    root.setAttribute("aria-describedby", "tui-summary");
     root.setAttribute(
       "aria-label",
       "The toki launcher: the agents it can start, its settings, and the model list. Arrow keys move, Enter opens, s opens the settings, the right arrow opens the model list, Escape goes back."
