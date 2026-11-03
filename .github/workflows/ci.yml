@@ -20,6 +20,26 @@ jobs:
       - name: Check the deployed artifact
         run: python scripts/check-site-build.py
 
+  site-a11y:
+    name: Site accessibility (axe)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Build the public site
+        run: python scripts/build-site.py
+      - name: Install the audit tooling
+        run: npm install --no-save playwright axe-core
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Audit every page
+        run: node scripts/check-site-a11y.mjs
+
   ruff:
     name: Ruff lint
     runs-on: ubuntu-latest

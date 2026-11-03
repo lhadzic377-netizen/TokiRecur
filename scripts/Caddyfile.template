@@ -47,5 +47,14 @@
 {{CHAT_DOMAIN}} {
     encode zstd gzip
     reverse_proxy 127.0.0.1:7777
+
+    # The chat UI is its own app with its own assets, so it does not get the
+    # site's CSP. These three do not break it.
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options SAMEORIGIN
+        Referrer-Policy strict-origin-when-cross-origin
+        -Server
+    }
 }
 # CHAT_END

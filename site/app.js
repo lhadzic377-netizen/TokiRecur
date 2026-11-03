@@ -121,20 +121,22 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // The stagger is a ripple, not a queue: without a cap the fortieth element
   // waits four seconds for its turn, and a page that scrolls fast looks
-  // broken rather than choreographed.
-  const stagger = (els, base = 0.08) =>
+  // broken rather than choreographed. The cap is also the window in which
+  // text is still fading in — keep it short enough that a number is never
+  // sitting at half opacity while somebody is trying to read it.
+  const stagger = (els, base = 0.08, cap = 0.24) =>
     els.forEach((el, i) =>
-      el.style.setProperty("--d", `${Math.min(base * i, 0.42)}s`),
+      el.style.setProperty("--d", `${Math.min(base * i, cap)}s`),
     );
 
   const hero = document.querySelectorAll(".hero .reveal");
-  stagger(hero, 0.12);
+  stagger(hero, 0.12, 0.42);
   hero.forEach((el) => el.classList.add("in-view"));
 
   const groups = document.querySelectorAll(
     ".cards .card, .steps .reveal, .stats .stat, #benchmarks tbody .reveal, .arch .reveal, #pricing .reveal, #watch .reveal, .cta-final .reveal, .code.reveal"
   );
-  stagger(groups, 0.1);
+  stagger(groups, 0.08, 0.24);
 
   const tabs = Array.from(document.querySelectorAll(".bench-tab"));
   const panels = Array.from(document.querySelectorAll(".bench-panel"));
@@ -155,7 +157,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const shown = document.getElementById(tab.dataset.model);
       if (shown) {
         shown.querySelectorAll(".reveal").forEach((el, i) => {
-          el.style.setProperty("--d", `${0.1 * i}s`);
+          el.style.setProperty("--d", `${Math.min(0.08 * i, 0.24)}s`);
           el.classList.add("in-view");
         });
       }

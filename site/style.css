@@ -1401,7 +1401,7 @@ footer {
 .js-ready .reveal {
   opacity: 0;
   transform: translateY(18px);
-  transition: opacity 0.7s var(--ease), transform 0.7s var(--ease);
+  transition: opacity 0.6s var(--ease), transform 0.6s var(--ease);
   transition-delay: var(--d, 0s);
 }
 
