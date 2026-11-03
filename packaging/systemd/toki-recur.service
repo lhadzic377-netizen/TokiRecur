@@ -19,6 +19,12 @@ LogsDirectory=toki-recur
 # Load secrets from a separate env file (chmod 600, owned by root).
 EnvironmentFile=/etc/toki-recur/toki.env
 
+# Where the daemon keeps its config and state. Explicit, so the paths do
+# not depend on what the environment happens to carry into the service.
+Environment=HOME=/var/lib/toki-recur
+Environment=XDG_CONFIG_HOME=/var/lib/toki-recur/.config
+Environment=XDG_STATE_HOME=/var/lib/toki-recur/.local/state
+
 # The daemon itself — listens on 127.0.0.1:8787 by default. Set
 # TOKI_AUTH_TOKEN in the env file to allow external clients.
 # (install.sh links /usr/local/bin/toki -> venv binary)

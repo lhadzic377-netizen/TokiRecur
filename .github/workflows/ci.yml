@@ -236,10 +236,16 @@ jobs:
         shell: bash
         run: |
           set -e
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            TOKI="$USERPROFILE/.local/bin/toki.exe"
-          else
-            TOKI="$HOME/.local/bin/toki"
+          # The CLI lands wherever the installer put it: pipx honours
+          # PIPX_BIN_DIR when the machine sets one, and the Windows
+          # installer uses its own venv. Ask the machine, do not guess.
+          TOKI="$(command -v toki 2>/dev/null || true)"
+          if [ -z "$TOKI" ]; then
+            if [ "$RUNNER_OS" = "Windows" ]; then
+              TOKI="$(ls "$LOCALAPPDATA"/tokirecur/venv/Scripts/toki.exe 2>/dev/null | head -1)"
+            else
+              TOKI="$(ls "$HOME"/.local/bin/toki /opt/pipx_bin/toki 2>/dev/null | head -1)"
+            fi
           fi
           test -x "$TOKI"
           "$TOKI" --version

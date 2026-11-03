@@ -144,6 +144,14 @@ def _drop_stale_enablement(keep: set[str]) -> list[str]:
 
 
 def install() -> int:
+    if not _systemd_available():
+        # The reason has to be the real one. "no models marked boot in the
+        # registry" is what a Linux box with an empty registry says, and
+        # telling a Windows user that is worse than saying nothing.
+        print("systemd is not available here, so there are no boot units to install.")
+        if not sys.platform.startswith("linux"):
+            print("On Windows: wrap `toki model use <name>` in NSSM or a scheduled task.")
+        return 1
     models = boot_models()
     if not models:
         print("no models marked boot in the registry; nothing to install.")
@@ -193,6 +201,9 @@ def install() -> int:
 
 
 def uninstall() -> int:
+    if not _systemd_available():
+        print("systemd is not available here, so there are no boot units to remove.")
+        return 1
     # Disable EVERY enabled instance — not just currently-boot-marked
     # models. Orphaned enablements (model unmarked boot / removed from
     # registry) are exactly the "starts for no reason" class.

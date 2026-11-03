@@ -1599,8 +1599,12 @@ def _make_path_stub(tmp_path, *, loader_exists, icd_dir_exists=True,
                     Path(lib).write_bytes(b"")
 
     real_Path = Path
+    # Subclass the concrete class, not Path: before 3.12 the flavour lives on
+    # PosixPath/WindowsPath, so a direct Path subclass cannot be instantiated
+    # (Python 3.11 raises "type object '_Stub' has no attribute '_flavour'").
+    concrete = type(Path())
 
-    class _Stub(real_Path):
+    class _Stub(concrete):
         def exists(self):
             s = str(self)
             if "libvulkan.so.1" in s:
@@ -1652,8 +1656,9 @@ def _make_drm_stub(tmp_path, vendors):
         cards.append(card)
 
     real_Path = Path
+    concrete = type(Path())
 
-    class _DRM(real_Path):
+    class _DRM(concrete):
         def is_dir(self):
             return real_Path(str(self)).is_dir()
 

@@ -19,6 +19,12 @@ LogsDirectory=toki-recur
 # TOKI_AUTH_TOKEN here gates the web UI behind the login page.
 EnvironmentFile=/etc/toki-recur/toki.env
 
+# Same explicit paths as the daemon: the web UI reads the registry and the
+# auth token from the config directory.
+Environment=HOME=/var/lib/toki-recur
+Environment=XDG_CONFIG_HOME=/var/lib/toki-recur/.config
+Environment=XDG_STATE_HOME=/var/lib/toki-recur/.local/state
+
 ExecStart=/usr/bin/toki web \
     --host 127.0.0.1 \
     --port 7777

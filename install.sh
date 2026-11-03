@@ -356,6 +356,15 @@ mkdir -p /var/log/toki-recur
 # Linux useradd), so the name would be an "illegal group name" there.
 TOKI_GID="$(id -g toki)"
 chown -R "toki:$TOKI_GID" /var/lib/toki-recur /var/log/toki-recur
+# The daemon's config and state live under the service user's home. HOME is
+# not enough on its own: sudo resets the environment, and a machine whose
+# sudoers keeps HOME would hand the daemon somebody else's home directory.
+# XDG_CONFIG_HOME/XDG_STATE_HOME are explicit, so the path never depends on
+# how the environment survived the privilege drop.
+install -d -m 0750 -o toki -g "$TOKI_GID" \
+    /var/lib/toki-recur/.config \
+    /var/lib/toki-recur/.local/state \
+    /var/lib/toki-recur/.local/bin
 
 # ---- Install llama-server binary (as the daemon user) ----
 #
@@ -365,6 +374,8 @@ chown -R "toki:$TOKI_GID" /var/lib/toki-recur /var/log/toki-recur
 
 echo "[+] fetching llama-server for this OS/arch (toki model install-llama)"
 sudo -u toki env HOME=/var/lib/toki-recur \
+    XDG_CONFIG_HOME=/var/lib/toki-recur/.config \
+    XDG_STATE_HOME=/var/lib/toki-recur/.local/state \
     GITHUB_TOKEN="${TOKI_INSTALL_TOKEN:-}" \
     "$TOKI" model install-llama
 
