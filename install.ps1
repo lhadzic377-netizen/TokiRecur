@@ -8,8 +8,9 @@
 # Full install from zero to a working CLI + llama-server:
 #   1. require Python 3.10+
 #   2. materialise the app source under %LOCALAPPDATA%\tokirecur\src
-#      (fetched as a tarball from the private GitHub repo using
-#      TOKI_INSTALL_TOKEN, a Contents:read PAT; no git required)
+#      (fetched as a zipball from the public GitHub repo; no git and no
+#      token required — set TOKI_INSTALL_TOKEN only to raise the API
+#      rate limit)
 #   3. venv at %LOCALAPPDATA%\tokirecur\venv + pip install .[embeddings]
 #   4. toki model install-llama (official llama-server.exe for this arch)
 #   5. add the venv Scripts dir to the user PATH (idempotent)
@@ -18,8 +19,8 @@
 # it in NSSM / a scheduled task:
 #   nssm install TokiRecur "<venv>\Scripts\toki.exe" serve
 #
-# One-liner (private repo - token required):
-#   $env:TOKI_INSTALL_TOKEN='<PAT>'; $j=irm -Headers @{Authorization='Bearer '+$env:TOKI_INSTALL_TOKEN} 'https://api.github.com/repos/lhadzic377-netizen/TokiRecur/contents/install.ps1?ref=main'; iex ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($j.content)))
+# One-liner (the repository is public, so no token is needed):
+#   irm 'https://raw.githubusercontent.com/lhadzic377-netizen/TokiRecur/main/install.ps1' | iex
 #
 # Re-runnable: re-runs re-fetch the source, reinstall the package, and
 # re-download the binary.
@@ -44,12 +45,6 @@ if ($LASTEXITCODE -ne 0 -or $PyVer -notmatch '^3\.(1[0-9]|[2-9][0-9])$') {
     exit 1
 }
 
-if (-not $env:TOKI_INSTALL_TOKEN) {
-    Write-Host "error: TOKI_INSTALL_TOKEN is required (fine-grained PAT with" -ForegroundColor Red
-    Write-Host "       Contents: read on lhadzic377-netizen/TokiRecur only)." -ForegroundColor Red
-    exit 1
-}
-
 # ---- Materialise the source tree ----
 
 $Base = Join-Path $env:LOCALAPPDATA 'tokirecur'
@@ -61,9 +56,16 @@ $Zip = Join-Path $Base 'src.zip'
 # zipball API endpoint: redirects to a signed codeload URL, so no basic
 # auth on codeload is needed (WebClient challenge-response never fires
 # because GitHub answers 404 instead of 401 without auth).
-irm -Headers @{Authorization = 'Bearer ' + $env:TOKI_INSTALL_TOKEN} `
-    -OutFile $Zip `
-    'https://api.github.com/repos/lhadzic377-netizen/TokiRecur/zipball/refs/heads/main'
+if ($env:TOKI_INSTALL_TOKEN) {
+    # A token is optional now that the repository is public; it is only
+    # used to raise the GitHub API rate limit.
+    irm -Headers @{Authorization = 'Bearer ' + $env:TOKI_INSTALL_TOKEN} `
+        -OutFile $Zip `
+        'https://api.github.com/repos/lhadzic377-netizen/TokiRecur/zipball/refs/heads/main'
+} else {
+    irm -OutFile $Zip `
+        'https://github.com/lhadzic377-netizen/TokiRecur/zipball/refs/heads/main'
+}
 if (Test-Path $Src) { Remove-Item -Recurse -Force $Src }
 Expand-Archive -Path $Zip -DestinationPath $Src
 Remove-Item -Force $Zip
@@ -106,8 +108,9 @@ if ($LASTEXITCODE -ne 0) {
 
 # Reuse the install token as GITHUB_TOKEN so the GitHub API lookup in
 # install-llama is authenticated (unauthenticated lookups can hit the
-# shared-IP rate limit when several machines install concurrently).
-$env:GITHUB_TOKEN = $env:TOKI_INSTALL_TOKEN
+# shared-IP rate limit when several machines install concurrently). The
+# token is optional: the repository and the release assets are public.
+if ($env:TOKI_INSTALL_TOKEN) { $env:GITHUB_TOKEN = $env:TOKI_INSTALL_TOKEN }
 Write-Host "[+] fetching llama-server for this OS/arch (toki model install-llama)"
 & $Toki model install-llama
 if ($LASTEXITCODE -ne 0) {

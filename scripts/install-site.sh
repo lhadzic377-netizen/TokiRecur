@@ -16,8 +16,9 @@
 #     --no-toki          Skip the tokirecur stack; site only
 #     --dry-run          Build the site and render the Caddyfile into a
 #                        temporary directory. Changes nothing on the machine.
-#     --git-token <pat>  Install tokirecur from the private repo using this
-#                        read-only PAT (used only if PyPI install fails)
+#     --git-token <pat>  Install tokirecur from the repository with this
+#                        read-only PAT. Optional: the repository is public and
+#                        the token only raises the GitHub API rate limit.
 #     -h, --help         Show this help
 #
 # Before running: point DNS A records at this machine's public IP:
@@ -129,11 +130,14 @@ if [[ "$WITH_TOKI" == "1" ]]; then
       log "Installing tokirecur into $VENV_DIR ..."
       python3 -m venv "$VENV_DIR"
       if ! "$VENV_DIR/bin/pip" install --quiet tokirecur 2>/dev/null; then
+        # Not on PyPI yet: install from the public repository. A token is
+        # optional and only raises the GitHub API rate limit.
         if [[ -n "$GIT_TOKEN" ]]; then
-          log "PyPI install failed — falling back to git+https with the provided PAT"
+          log "Installing from the repository with the provided token"
           "$VENV_DIR/bin/pip" install --quiet "tokirecur @ git+https://x-access-token:${GIT_TOKEN}@github.com/lhadzic377-netizen/TokiRecur.git"
         else
-          fail "PyPI install failed and no --git-token was given. Pass --git-token <PAT> to install from the private repo, or fix your network/PyPI access."
+          log "Installing from the public repository"
+          "$VENV_DIR/bin/pip" install --quiet "tokirecur @ git+https://github.com/lhadzic377-netizen/TokiRecur.git"
         fi
       fi
     else

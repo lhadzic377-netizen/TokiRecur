@@ -72,7 +72,7 @@ toki model pull bartowski/Kwaipilot_KAT-Coder-V2.5-Dev-GGUF --use
 # 3. Open the launcher (chat, web UI, model switching)
 toki</code></pre>
 
-    <p>Prefer a direct install without the clone? <code>pipx install "tokirecur[embeddings] @ git+https://x-access-token:&lt;PAT&gt;@github.com/lhadzic377-netizen/TokiRecur.git"</code> works too, see the <a href="/docs/install.html">install docs</a>.</p>
+    <p>Prefer a direct install without the clone? <code>pipx install "tokirecur[embeddings] @ git+https://github.com/lhadzic377-netizen/TokiRecur.git"</code> works too, see the <a href="/docs/install.html">install docs</a>.</p>
 
     <p>No models are installed or started at install time, <code>toki model use &lt;name&gt;</code> is the explicit, documented way to bring one up (it starts llama-server + the toki daemon, stops competing big-model stacks, and wires opencode/openclaw/hermes at it). <code>toki up --model &lt;path&gt;</code> is the single-model equivalent for a raw GGUF without a registry entry. <code>toki serve</code> is <strong>only</strong> the API daemon (default 127.0.0.1:8787) that proxies to an already-running llama-server; it warns loudly if the backend isn't reachable instead of failing silently.</p>
 

@@ -96,16 +96,39 @@ jobs:
         # the same everywhere.
         run: pytest tests/integration/test_fresh_install.py -q
 
+  installer-public:
+    name: Installer (public, no token)
+    runs-on: ubuntu-latest
+    steps:
+      # The repository is public, so the documented install path is anonymous.
+      # This job proves it: no token, no secret, just the public git URL.
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install from the public repository with no token
+        env:
+          TOKI_EXTRAS: ""
+        run: bash scripts/install-curl.sh
+      - name: Verify the CLI
+        run: |
+          set -e
+          TOKI="$HOME/.local/bin/toki"
+          test -x "$TOKI"
+          "$TOKI" --version
+      - name: The installer must not demand a token
+        run: |
+          set -e
+          ! grep -q "TOKI_INSTALL_TOKEN is required" install.sh
+          ! grep -q "TOKI_REPO_TOKEN is not set" scripts/install-curl.sh
+
   installer-linux:
     name: Installer (Linux systemd)
     runs-on: ubuntu-latest
     steps:
-      # The exact one-liner from the README: fetch install.sh from the
-      # private repo with the Actions token (repo-scoped Contents:read)
-      # and pipe it into a root shell. The contents API with the raw
-      # accept header is used instead of raw.githubusercontent.com — the
-      # raw CDN can serve stale content or 404 new file paths for a long
-      # time after a push.
+      # The one-liner from the README. The token is optional now that the
+      # repository is public: it is passed here only to raise the GitHub API
+      # rate limit while several jobs install at once.
       - name: One-liner install (curl | sudo bash)
         env:
           INSTALL_TOKEN: ${{ github.token }}

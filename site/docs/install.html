@@ -54,11 +54,11 @@
   <main class="doc" id="main" tabindex="-1">
     <h1 class="reveal">Install</h1>
 
-    <p class="reveal">Toki Recur is a Python app, install it with pipx, which isolates it in its own venv and puts <code>toki</code> on PATH. While the repo is private, the install URL carries a read-only token (a fine-grained PAT with <strong>Contents: read</strong> on <code>lhadzic377-netizen/TokiRecur</code> only). The token appears in your shell history; that's the private-repo tax.</p>
+    <p class="reveal">Toki Recur is a Python app, install it with pipx, which isolates it in its own venv and puts <code>toki</code> on PATH. The repository is public and MIT licensed, so every command below works anonymously: no token, no account, no rate limit to hit.</p>
 
     <h2>Simplest: clone, then run the installer</h2>
-    <p>Clone the repo once (your Git credentials do the auth) and run the
-    installer from the checkout. Cross-platform, no token required.</p>
+    <p>Clone the repo once and run the installer from the checkout.
+    Cross-platform, no token required.</p>
     <pre><code># Linux / macOS
 git clone https://github.com/lhadzic377-netizen/TokiRecur.git
 cd TokiRecur
@@ -72,40 +72,36 @@ install.bat</code></pre>
     <code>TOKI_EXTRAS= ./install.sh</code>.</p>
 
     <h2>Direct pipx install</h2>
-    <pre><code>pipx install "tokirecur[embeddings] @ git+https://x-access-token:&lt;PAT&gt;@github.com/lhadzic377-netizen/TokiRecur.git"</code></pre>
+    <pre><code>pipx install "tokirecur[embeddings] @ git+https://github.com/lhadzic377-netizen/TokiRecur.git"</code></pre>
 
     <p class="note">One-time: <code>sudo apt install pipx</code> or <code>python3 -m pip install --user pipx</code>.</p>
 
     <h2>Without pipx</h2>
     <p>Install into your own venv instead:</p>
     <pre><code>python3 -m venv .venv &amp;&amp; source .venv/bin/activate
-pip install "tokirecur[embeddings] @ git+https://x-access-token:&lt;PAT&gt;@github.com/lhadzic377-netizen/TokiRecur.git"</code></pre>
+pip install "tokirecur[embeddings] @ git+https://github.com/lhadzic377-netizen/TokiRecur.git"</code></pre>
     <p>If <code>toki</code> is not found after install, your PATH may not include the venv's bin directory, either activate the venv or use the full path (<code>./.venv/bin/toki</code>). On systems where <code>pip install -e</code> writes a shim to <code>~/.local/bin</code> that points at system Python, delete that shim and re-run <code>pip install -e .</code> from inside the activated venv so the shim is regenerated with the correct shebang.</p>
 
     <h2>curl / irm one-liner installers</h2>
-    <p>While the repo is private, fetching the installer <em>and</em> the package itself requires a token. Always pass it via the environment, never hardcode tokens in scripts or workflow files, never pass them as CLI arguments (they'd be visible in the process list), and scope them to the minimum (a fine-grained PAT with <strong>Contents: read</strong> on <code>lhadzic377-netizen/TokiRecur</code> only). The installers below are the scripts <code>scripts/install-curl.sh</code> and <code>scripts/install-irm.ps1</code>, fetched securely from the private repo and run locally, they install tokirecur via pipx using <code>TOKI_REPO_TOKEN</code>.</p>
+    <p>The installers below are <code>scripts/install-curl.sh</code> and <code>scripts/install-irm.ps1</code>. They install tokirecur with pipx from the public repository. No token is needed; if you set <code>TOKI_REPO_TOKEN</code> (or <code>GITHUB_TOKEN</code>) it is used instead, which only raises the GitHub API rate limit.</p>
 
     <h3>Linux / macOS (curl)</h3>
-    <pre><code>export TOKI_REPO_TOKEN="ghp_..."   # fine-grained PAT, Contents: read
-curl -sf -H "Authorization: Bearer $TOKI_REPO_TOKEN" \
-  -H "Accept: application/vnd.github.raw" \
-  "https://api.github.com/repos/lhadzic377-netizen/TokiRecur/contents/scripts/install-curl.sh" \
+    <pre><code>curl -sf "https://raw.githubusercontent.com/lhadzic377-netizen/TokiRecur/main/scripts/install-curl.sh" \
   -o /tmp/toki-install.sh
 bash /tmp/toki-install.sh</code></pre>
 
     <h3>Windows (irm / PowerShell)</h3>
-    <pre><code>$env:TOKI_REPO_TOKEN = "ghp_..."
-$installer = irm -Uri "https://api.github.com/repos/lhadzic377-netizen/TokiRecur/contents/scripts/install-irm.ps1" `
-  -Headers @{ Authorization = "Bearer $env:TOKI_REPO_TOKEN"; Accept = "application/vnd.github.raw" } -ErrorAction Stop
+    <pre><code>$installer = irm -Uri "https://raw.githubusercontent.com/lhadzic377-netizen/TokiRecur/main/scripts/install-irm.ps1" -ErrorAction Stop
 $installer | Out-File -Encoding utf8 "$env:TEMP\toki-install.ps1"
 pwsh -File "$env:TEMP\toki-install.ps1"</code></pre>
 
-    <p class="note"><code>curl -sf</code> (exit code 22 on HTTP errors) and <code>irm ... -ErrorAction Stop</code> fail fast on auth errors instead of silently downloading an error page. Both installers read the token from <code>TOKI_REPO_TOKEN</code> (or <code>GITHUB_TOKEN</code>) and refuse to run without it. After local testing, clear it: <code>unset TOKI_REPO_TOKEN</code> / <code>Remove-Item Env:\TOKI_REPO_TOKEN</code>.</p>
+    <p class="note"><code>curl -sf</code> (exit code 22 on HTTP errors) and <code>irm ... -ErrorAction Stop</code> fail fast instead of silently downloading an error page. Both installers use <code>TOKI_REPO_TOKEN</code> (or <code>GITHUB_TOKEN</code>) when it is set and fall back to the anonymous public URL when it is not.</p>
 
     <table tabindex="0">
       <thead><tr><th>Do</th><th>Don't</th></tr></thead>
       <tbody>
-        <tr><td>Pass the token via environment variables</td><td>Hardcode PATs in scripts or workflow files</td></tr>
+        <tr><td>Install anonymously; the repository is public</td><td>Ask people for a token they do not need</td></tr>
+        <tr><td>Pass a token via environment variables when you use one</td><td>Hardcode PATs in scripts or workflow files</td></tr>
         <tr><td>Scope tokens to minimum permissions (Contents: read for installs)</td><td>Use full-scope or admin tokens for simple installs</td></tr>
         <tr><td>Fail fast: <code>curl -sf</code> / <code>-ErrorAction Stop</code></td><td>Ignore HTTP status codes silently</td></tr>
         <tr><td>Rotate PATs regularly</td><td>Reuse the same PAT across multiple repos/services</td></tr>

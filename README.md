@@ -19,8 +19,8 @@ workloads, with the biggest gains on the largest MoE models.
 
 ## Quick start
 
-Clone the repo (your Git credentials do the auth) and run the installer from the
-checkout — cross-platform, no token needed:
+Clone the repo and run the installer from the checkout — cross-platform, no
+token needed. The repository is public and MIT licensed:
 
 ```bash
 # Linux / macOS

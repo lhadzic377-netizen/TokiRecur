@@ -11,7 +11,9 @@
 #
 #   System-daemon install (root, Linux systemd / macOS launchd):
 #     sudo ./install.sh          # from a checkout
-#     TOKI_INSTALL_TOKEN=<PAT> curl -fsSL ... | sudo bash   # one-liner
+#     curl -fsSL https://raw.githubusercontent.com/lhadzic377-netizen/TokiRecur/main/install.sh | sudo bash
+#   The repository is public, so the one-liner needs no token. Set
+#   TOKI_INSTALL_TOKEN=<PAT> only to raise the GitHub API rate limit.
 #   Bootstraps the full stack: /opt/toki-recur venv + package,
 #   llama-server binary, dedicated user, env file, service unit.
 #
@@ -279,18 +281,18 @@ elif [[ "$ROOT" != "$SRC" && -f "$ROOT/packaging/systemd/toki.env.example" ]]; t
     cp -a "$ROOT"/. "$SRC"/
     rm -rf "$SRC/.git" "$SRC/.venv"
 else
-    if [[ -z "${TOKI_INSTALL_TOKEN:-}" ]]; then
-        echo "error: TOKI_INSTALL_TOKEN is required for the curl-piped install." >&2
-        echo "       Create a fine-grained PAT with Contents: read on" >&2
-        echo "       lhadzic377-netizen/TokiRecur and pass it via" >&2
-        echo "       TOKI_INSTALL_TOKEN=<PAT> before the one-liner." >&2
-        exit 1
-    fi
     echo "[+] fetching TokiRecur source from GitHub"
     rm -rf "$SRC"
     mkdir -p "$SRC"
-    curl -fsSL -o /tmp/tokirecur-src.tar.gz \
-        "https://x-access-token:$TOKI_INSTALL_TOKEN@codeload.github.com/lhadzic377-netizen/TokiRecur/tar.gz/refs/heads/main"
+    if [[ -n "${TOKI_INSTALL_TOKEN:-}" ]]; then
+        # A token is optional now that the repository is public; it is only
+        # used to raise the GitHub API rate limit.
+        curl -fsSL -o /tmp/tokirecur-src.tar.gz \
+            "https://x-access-token:$TOKI_INSTALL_TOKEN@codeload.github.com/lhadzic377-netizen/TokiRecur/tar.gz/refs/heads/main"
+    else
+        curl -fsSL -o /tmp/tokirecur-src.tar.gz \
+            "https://codeload.github.com/lhadzic377-netizen/TokiRecur/tar.gz/refs/heads/main"
+    fi
     tar xzf /tmp/tokirecur-src.tar.gz -C "$SRC" --strip-components=1
     rm -f /tmp/tokirecur-src.tar.gz
 fi
