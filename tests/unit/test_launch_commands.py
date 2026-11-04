@@ -19,7 +19,7 @@ def _flags(argv: list[str]) -> list[str]:
     return [a for a in argv if a.startswith("-") and a != "--"]
 
 
-def test_opencode_is_launched_without_a_flag_it_does_not_have():
+def test_opencode_is_launched_without_a_flag_it_does_not_have(isolated_registry):
     """The model comes from the config, which is written on every switch."""
     from tokirecur import ctl
 
@@ -41,7 +41,7 @@ def _launch_argv(client: str) -> list[str]:
     "client",
     ["opencode", "mimo", "hermes", "qwen", "cline", "claude"],
 )
-def test_every_flag_the_launcher_passes_is_one_the_binary_knows(client):
+def test_every_flag_the_launcher_passes_is_one_the_binary_knows(client, isolated_registry):
     """Check the binary's own help for each flag.
 
     Skipped where the client is not installed: the point is to catch a
@@ -64,7 +64,7 @@ def test_every_flag_the_launcher_passes_is_one_the_binary_knows(client):
         assert flag in text, f"{client} does not know {flag}"
 
 
-def test_the_launcher_writes_the_config_the_client_reads(monkeypatch, tmp_path):
+def test_the_launcher_writes_the_config_the_client_reads(monkeypatch, tmp_path, isolated_registry):
     """The model the launch omits has to be in the config instead."""
     from tokirecur import ctl
 

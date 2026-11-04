@@ -6,6 +6,12 @@ var overrides it, so an autouse fixture points the whole client family at a
 temp dir. Without this, any test that calls ``sync_cli_configs`` writes real
 config files into ``~/.config`` — a failure mode that is invisible until a
 later run silently reads a fixture's model or token.
+
+The model registry gets the same treatment, for the same reason. A test that
+does ``ctl.load_registry()[0]`` was reading whatever the developer happened
+to have registered: green on a box with models, an IndexError on a clean CI
+runner, and a different answer on every machine. The registry is state, and
+state belongs in the test's tmp dir.
 """
 
 from __future__ import annotations
@@ -13,6 +19,34 @@ from __future__ import annotations
 import os
 
 import pytest
+import yaml
+
+
+@pytest.fixture
+def isolated_registry(tmp_path, monkeypatch):
+    """A model registry with the default models, inside the test's tmp dir.
+
+    Not autouse: a few tests assert on the *default* registry path and on a
+    registry that does not exist yet. Those opt out by not asking for this
+    fixture. The tests that just want "a model to exist" ask for it, so
+    they behave the same on a developer box and on a clean CI runner.
+    """
+    from tokirecur import ctl
+
+    reg = tmp_path / "models.yaml"
+    reg.write_text(yaml.safe_dump({"models": ctl.DEFAULT_MODELS}, sort_keys=False))
+    marker = tmp_path / "active-model"
+    # The default models are not always_on, so without an active marker
+    # `read_active()` returns None and every "launch the active model" test
+    # fails on a machine that has never run `toki model use`.
+    marker.write_text(str(ctl.DEFAULT_MODELS[0]["name"]) + "\n")
+    monkeypatch.setattr(ctl, "DEFAULT_REGISTRY", reg)
+    monkeypatch.setattr(ctl, "STATE_ROOT", tmp_path / "state")
+    monkeypatch.setattr(ctl, "ACTIVE_MARKER", marker)
+    ctl.invalidate_registry_cache()
+    yield reg
+    ctl.invalidate_registry_cache()
+
 
 # Env var -> path under the test's tmp dir. Keep in sync with the
 # `*_config_path` helpers in tokirecur.ctl.

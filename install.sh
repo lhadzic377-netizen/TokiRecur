@@ -361,8 +361,12 @@ chown -R "toki:$TOKI_GID" /var/lib/toki-recur /var/log/toki-recur
 # sudoers keeps HOME would hand the daemon somebody else's home directory.
 # XDG_CONFIG_HOME/XDG_STATE_HOME are explicit, so the path never depends on
 # how the environment survived the privilege drop.
-install -d -m 0750 -o toki -g "$TOKI_GID" \
-    /var/lib/toki-recur/.config \
+#
+# The config directory holds the auth token, so it is not world-readable.
+# The state directory holds the llama-server binary and the logs, and stays
+# traversable so an operator can inspect it.
+install -d -m 0750 -o toki -g "$TOKI_GID" /var/lib/toki-recur/.config
+install -d -m 0755 -o toki -g "$TOKI_GID" \
     /var/lib/toki-recur/.local/state \
     /var/lib/toki-recur/.local/bin
 

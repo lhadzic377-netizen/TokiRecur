@@ -113,7 +113,12 @@ jobs:
       - name: Verify the CLI
         run: |
           set -e
-          TOKI="$HOME/.local/bin/toki"
+          # pipx honours PIPX_BIN_DIR when the machine sets one, so ask
+          # the machine where the binary landed instead of assuming.
+          TOKI="$(command -v toki 2>/dev/null || true)"
+          if [ -z "$TOKI" ]; then
+            TOKI="$(ls "$HOME"/.local/bin/toki /opt/pipx_bin/toki 2>/dev/null | head -1)"
+          fi
           test -x "$TOKI"
           "$TOKI" --version
       - name: The installer must not demand a token

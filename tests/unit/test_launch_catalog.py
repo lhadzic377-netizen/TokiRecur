@@ -208,7 +208,7 @@ def test_removed_account_clients_are_not_offered():
 
 
 
-def test_dsh_profile_patch_binds_the_profile_to_the_bound_model(monkeypatch, tmp_path):
+def test_dsh_profile_patch_binds_the_profile_to_the_bound_model(monkeypatch, tmp_path, isolated_registry):
     """settings.yaml is not the user override layer for a named profile.
 
     `dsh --profile tui --dump-config` and `--dump-default-config` are
@@ -243,7 +243,7 @@ def test_dsh_profile_patch_binds_the_profile_to_the_bound_model(monkeypatch, tmp
     assert [m["id"] for m in provider["models"]] == [spec.model_id]
 
 
-def test_dsh_profile_patch_skips_a_profile_that_was_never_created(monkeypatch, tmp_path):
+def test_dsh_profile_patch_skips_a_profile_that_was_never_created(monkeypatch, tmp_path, isolated_registry):
     """Inventing a profile would install a plugin tree nobody asked for."""
     from tokirecur import ctl
 
@@ -254,7 +254,7 @@ def test_dsh_profile_patch_skips_a_profile_that_was_never_created(monkeypatch, t
     assert ctl._write_dsh_profile_patch(spec, "tui") is None
 
 
-def test_dsh_config_write_also_updates_the_profile_layer(monkeypatch, tmp_path):
+def test_dsh_config_write_also_updates_the_profile_layer(monkeypatch, tmp_path, isolated_registry):
     """One call keeps both layers in step; they cannot drift apart."""
     import yaml
 
@@ -278,7 +278,7 @@ def test_dsh_config_write_also_updates_the_profile_layer(monkeypatch, tmp_path):
             == by_id["llm-pi-ai"]["config"]["providers"]["tokirecur"]["baseURL"])
 
 
-def test_dsh_binds_every_profile_not_just_tui(monkeypatch, tmp_path):
+def test_dsh_binds_every_profile_not_just_tui(monkeypatch, tmp_path, isolated_registry):
     """An unbound `web` profile serves its UI and fails the first message.
 
     That reads as a broken web UI rather than a missing binding, which is
@@ -325,7 +325,7 @@ def test_dsh_web_is_offered_as_its_own_entry():
     assert dsh_web.model_binding is False
 
 
-def test_dsh_web_plan_detaches_and_lets_us_open_the_browser():
+def test_dsh_web_plan_detaches_and_lets_us_open_the_browser(isolated_registry):
     from tokirecur.selector import launch_cmd
 
     spec = ctl.get_model(ctl.load_registry()[0].name)
@@ -337,7 +337,7 @@ def test_dsh_web_plan_detaches_and_lets_us_open_the_browser():
     assert plan["url"] is None
 
 
-def test_dsh_web_does_not_shadow_the_chat_tui_launch():
+def test_dsh_web_does_not_shadow_the_chat_tui_launch(isolated_registry):
     """A branch in the chat block was unreachable, shadowed by the real one."""
     from tokirecur.selector import launch_cmd
 
@@ -430,7 +430,7 @@ def test_dsh_web_reuses_a_running_instance(tmp_path):
     assert _existing_dsh_web_url(str(tmp_path / "missing.log")) is None
 
 
-def test_dsh_chat_plan_brings_the_web_ui_alongside_the_tui():
+def test_dsh_chat_plan_brings_the_web_ui_alongside_the_tui(isolated_registry):
     """One selection, both surfaces - the TUI in the terminal, web in a tab."""
     from tokirecur.selector import launch_cmd
 
@@ -443,7 +443,7 @@ def test_dsh_chat_plan_brings_the_web_ui_alongside_the_tui():
     }
 
 
-def test_only_dsh_declares_a_companion():
+def test_only_dsh_declares_a_companion(isolated_registry):
     from tokirecur.selector import launch_cmd
 
     spec = ctl.get_model(ctl.load_registry()[0].name)

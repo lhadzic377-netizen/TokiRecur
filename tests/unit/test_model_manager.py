@@ -1550,7 +1550,7 @@ def test_pull_model_reasoning_field_persisted(env, hf):
     assert ctl.get_model("reasonoff").reasoning == "off"
 
 
-def test_llama_args_appends_reasoning_off_for_off_spec(seeded_env):
+def test_llama_args_appends_reasoning_off_for_off_spec(seeded_env, isolated_registry):
     # The default 9b entry points at a dev-machine path; point it at an
     # existing temp file so _llama_args' existence check passes on CI.
     gguf = seeded_env / "9b.gguf"
@@ -1565,7 +1565,7 @@ def test_llama_args_appends_reasoning_off_for_off_spec(seeded_env):
     assert "off" in ctl._llama_args(spec_off)
 
 
-def test_llama_args_appends_reasoning_on_for_on_spec(seeded_env):
+def test_llama_args_appends_reasoning_on_for_on_spec(seeded_env, isolated_registry):
     gguf = seeded_env / "9b.gguf"
     gguf.write_bytes(b"dummy")
     raw = dict(ctl.load_registry()[0].raw)
@@ -1940,7 +1940,7 @@ def test_repair_cli_heals_legacy_entry(seeded_env, hf, tmp_path, monkeypatch):
 # ── Settings: update_spec_field ───────────────────────────────────
 
 
-def test_update_spec_field_changes_value_and_persists(seeded_env):
+def test_update_spec_field_changes_value_and_persists(seeded_env, isolated_registry):
     spec = ctl.update_spec_field("9b", "ctx_size", "4096")
     assert spec.ctx_size == 4096
     assert ctl.get_model("9b").ctx_size == 4096
@@ -3473,7 +3473,7 @@ def test_flock_acquires_when_free(seeded_env):
         pass  # must not raise
 
 
-def test_sync_cli_configs_escalates_repeated_failures(seeded_env, monkeypatch, caplog):
+def test_sync_cli_configs_escalates_repeated_failures(seeded_env, monkeypatch, caplog, isolated_registry):
     """A persistently unwritable config escalates from warning to
     error after _SYNC_FAILURE_ESCALATE consecutive failures — a
     read-only config dir should not stay invisible."""
@@ -3569,7 +3569,7 @@ def test_auth_token_falls_back_to_random_when_nothing_is_configured(monkeypatch,
     assert len(token) >= 16
 
 
-def test_dsh_settings_use_the_daemon_token(monkeypatch, tmp_path):
+def test_dsh_settings_use_the_daemon_token(monkeypatch, tmp_path, isolated_registry):
     """A client config written from a stale token 401s on the first turn."""
     import yaml
 
