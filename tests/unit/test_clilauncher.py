@@ -261,6 +261,10 @@ def test_launch_agent_no_active_spec(monkeypatch, capsys):
     from tokirecur import clilauncher as cl
 
     monkeypatch.setattr(cl, "_active_spec", lambda: None)
+    # The agent binary is found, so the launcher gets as far as the model
+    # check. Whether opencode happens to be installed on this machine must
+    # not decide which message the launcher prints.
+    monkeypatch.setattr(cl.shutil, "which", lambda _: r"C:\bin\opencode.exe")
     monkeypatch.setattr(os, "name", "nt")
     called = {"popen": False}
     monkeypatch.setattr(

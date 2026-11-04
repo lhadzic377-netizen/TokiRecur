@@ -1441,6 +1441,8 @@ def test_pull_defaults_env_inherited_when_reference_has_env(env, tmp_path, monke
 
 def test_pull_defaults_fallback_when_no_reference(env, monkeypatch):
     monkeypatch.delenv("TOKI_LLAMA_SERVER", raising=False)
+    reference_binary = env / "llama-server"
+    reference_binary.write_bytes(b"")
     reg = env / "models.yaml"
     reg.write_text(yaml.safe_dump({"models": [
         {"name": "x", "gguf": "/tmp/x.gguf", "llama_port": 1, "daemon_port": 2,
@@ -2087,6 +2089,8 @@ def test_repair_heals_legacy_entry_without_source_field(env, monkeypatch):
     ``source`` field existed — they have no ``source`` in the raw
     dict. The repair should still heal them and tag them as pulled."""
     monkeypatch.delenv("TOKI_LLAMA_SERVER", raising=False)
+    reference_binary = env / "llama-server"
+    reference_binary.write_bytes(b"")
     reg = env / "models.yaml"
     reg.write_text(yaml.safe_dump({"models": [
         # Configured defaults (keep `source: default` explicit).
@@ -2097,11 +2101,14 @@ def test_repair_heals_legacy_entry_without_source_field(env, monkeypatch):
         {"name": "35b", "gguf": "/tmp/35b.gguf", "llama_port": 8089,
          "daemon_port": 8788, "ctx_size": 200000, "max_tokens": 100000,
          "model_id": "qwen3.6-35b-a3b", "source": "default"},
-        # Reference: a custom-build spec.
+        # Reference: a custom-build spec. The binary has to exist, and it
+        # has to live in this test's tmp dir: a path from somebody's
+        # machine is either missing (nothing to inherit) or, worse, a
+        # different answer on every box.
         {"name": "laguna", "gguf": "/tmp/lag.gguf", "llama_port": 8090,
          "daemon_port": 8789, "ctx_size": 131072, "max_tokens": 64000,
          "model_id": "laguna-s-2.1", "boot": True,
-         "binary": "/home/lukehadzic/llama.cpp/build/bin/llama-server",
+         "binary": str(reference_binary),
          "source": "default"},
         # Legacy pulled entry: no `source`, no `binary`, no `env`.
         {"name": "oldpull", "gguf": "/tmp/oldpull.gguf", "llama_port": 8091,
@@ -2111,7 +2118,7 @@ def test_repair_heals_legacy_entry_without_source_field(env, monkeypatch):
     healed = ctl.backfill_binary_env()
     assert healed == ["oldpull"]
     refreshed = ctl.get_model("oldpull")
-    assert refreshed.binary == "/home/lukehadzic/llama.cpp/build/bin/llama-server"
+    assert refreshed.binary == str(reference_binary)
     assert refreshed.source == "pulled"
     # Re-run is a no-op.
     assert ctl.backfill_binary_env() == []
@@ -2879,9 +2886,11 @@ def test_use_model_normalizes_legacy_ids_before_sync(env, monkeypatch):
 
     from tokirecur import ctl
 
+    weights = env / "Qwen3.5-0.8B-Q4_K_M.gguf"
+    weights.write_bytes(b"")
     reg = env / "models.yaml"
     reg.write_text(yaml.safe_dump({"models": [
-        {"name": "qwen3.5-0.8b-gguf", "gguf": "/tmp/Qwen3.5-0.8B-Q4_K_M.gguf",
+        {"name": "qwen3.5-0.8b-gguf", "gguf": str(weights),
          "llama_port": 18001, "daemon_port": 18002, "ctx_size": 100,
          "max_tokens": 90, "model_id": "unsloth/Qwen3.5-0.8B-GGUF"},
     ]}))
@@ -2906,9 +2915,11 @@ def test_heal_cli_configs_rewrites_stale_hermes_endpoint(env, monkeypatch):
     model id — the exact Mac/Windows failure state."""
     from tokirecur import ctl
 
+    weights = env / "Qwen3.5-0.8B-Q4_K_M.gguf"
+    weights.write_bytes(b"")
     reg = env / "models.yaml"
     reg.write_text(yaml.safe_dump({"models": [
-        {"name": "qwen3.5-0.8b-gguf", "gguf": "/tmp/Qwen3.5-0.8B-Q4_K_M.gguf",
+        {"name": "qwen3.5-0.8b-gguf", "gguf": str(weights),
          "llama_port": 18001, "daemon_port": 18002, "ctx_size": 100,
          "max_tokens": 90, "model_id": "unsloth/Qwen3.5-0.8B-GGUF"},
     ]}))
