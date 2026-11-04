@@ -156,6 +156,7 @@ def test_signal_handlers_skip_when_already_installed(monkeypatch):
     assert calls == []  # nothing installed because SIG_IGN was there
 
 
+@pytest.mark.skipif(os.name != "posix", reason="signal handlers are installed on POSIX only")
 def test_signal_handlers_install_when_default(monkeypatch):
     """When the previous handler is SIG_DFL, install() must put
     our handler in place so SIGTERM from logout doesn't skip
