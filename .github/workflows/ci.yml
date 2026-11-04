@@ -225,6 +225,15 @@ jobs:
         os: [ubuntu-latest, macos-14, windows-latest]
     steps:
       - uses: actions/checkout@v4
+      # The installer needs Python 3.10+. On the Windows runner the
+      # default `python` is the Microsoft Store stub, which sends the
+      # installer down its "install Python for you" path — that path is
+      # not what this job is about. Give it a real interpreter, like the
+      # install.ps1 job does.
+      - uses: actions/setup-python@v5
+        if: runner.os == 'Windows'
+        with:
+          python-version: "3.13"
       # The clone-and-run path from the README: TOKI_EXTRAS= skips the
       # embeddings extra (torch) and TOKI_SKIP_LLAMA=1 skips the llama-server
       # download (covered by the install-llama matrix) so CI stays fast
