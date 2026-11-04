@@ -1662,6 +1662,15 @@ def _make_drm_stub(tmp_path, vendors):
 
     class _DRM(concrete):
         def is_dir(self):
+            s = str(self)
+            # The DRM root exists because the scenario put it there. On a
+            # machine without /sys/class/drm (macOS) the real path does
+            # not exist, and the check would answer "no Intel GPU" before
+            # it ever looked at the fake cards.
+            if s == "/sys/class/drm" or s == str(drm_root):
+                return True
+            if s.startswith(str(drm_root)):
+                return real_Path(str(self)).is_dir()
             return real_Path(str(self)).is_dir()
 
         def glob(self, pattern):
