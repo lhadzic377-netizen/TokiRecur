@@ -47,9 +47,16 @@ rem Store python (PythonSoftwareFoundation alias under WindowsApps)
 rem silently redirects venv files under %%LOCALAPPDATA%% into its own
 rem sandbox, so the venv is created in a place the PATH hook and every
 rem later process cannot see. Detect it and swap in the python.org build.
+rem
+rem Ask the interpreter that will actually run where it lives. Scanning
+rem PATH for "WindowsApps" is not the same thing: the Store alias is
+rem present on every modern Windows, so it used to send every machine
+rem with a perfectly good Python down the install path.
 set "STORE_PY="
-for /f "delims=" %%p in ('where python 2^>nul') do (
-  echo %%p | findstr /i "WindowsApps" >nul
+set "PY_EXE="
+for /f "delims=" %%p in ('python -c "import sys; print(sys.executable)" 2^>nul') do set "PY_EXE=%%p"
+if defined PY_EXE (
+  echo !PY_EXE! | findstr /i "WindowsApps" >nul
   if not errorlevel 1 set "STORE_PY=1"
 )
 if "%STORE_PY%"=="1" echo [i] Microsoft Store python detected - installing the full python.org build...
