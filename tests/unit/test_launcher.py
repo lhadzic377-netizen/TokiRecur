@@ -47,6 +47,8 @@ def test_launcher_warns_when_restart_pending_marker_present(tmp_path, monkeypatc
     # Point HOME at tmp_path so ``Path.home()`` resolves inside the
     # test; the launcher reads ``~/.local/state/tokirecur/restart-pending``.
     monkeypatch.setenv("HOME", str(tmp_path))
+    # Windows resolves the home directory from USERPROFILE, not HOME.
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     marker = tmp_path / ".local" / "state" / "tokirecur" / "restart-pending"
     marker.parent.mkdir(parents=True)
     marker.write_text("12345")

@@ -171,13 +171,15 @@ def test_signal_handlers_install_when_default(monkeypatch):
     monkeypatch.setattr(_cleanup.signal, "getsignal",
                         lambda s: signal.SIG_DFL)
     _cleanup._install_signal_handlers()
-    # SIGINT, SIGTERM, SIGHUP — three handlers installed.
+    # SIGINT and SIGTERM everywhere; SIGHUP only exists on POSIX.
     installed = [s for s, _ in calls]
     assert signal.SIGINT in installed
     assert signal.SIGTERM in installed
-    assert signal.SIGHUP in installed
+    if hasattr(signal, "SIGHUP"):
+        assert signal.SIGHUP in installed
 
 
+@pytest.mark.skipif(os.name != "posix", reason="termios and pty are POSIX only")
 def test_restore_now_restores_termios_on_posix(monkeypatch):
     """Snapshot a known-good termios, switch to raw mode, call
     restore_now, and assert the original termios is back. This is

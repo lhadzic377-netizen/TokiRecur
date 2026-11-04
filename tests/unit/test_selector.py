@@ -1,7 +1,10 @@
 """Tests for the interactive launcher selector and systemd service mgmt."""
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
+
+import pytest
 
 from tokirecur.selector import _launch_foreground, default_index, launch_cmd
 from tokirecur.service import unit_text
@@ -119,6 +122,7 @@ def test_unknown_combo_raises():
         launch_cmd("desktop", "opencode", spec())
 
 
+@pytest.mark.skipif(os.name != "posix", reason="the POSIX terminal restore is POSIX only")
 def test_foreground_launch_restores_terminal_before_exec(monkeypatch):
     calls = []
     monkeypatch.setattr("tokirecur.selector.restore_now", lambda: calls.append("restore"))

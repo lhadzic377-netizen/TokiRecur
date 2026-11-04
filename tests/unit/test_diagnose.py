@@ -278,6 +278,7 @@ def test_binary_backend_windows_cpu(monkeypatch, tmp_path):
     assert diagnose.binary_backend(str(exe)) == "CPU"
 
 
+@pytest.mark.skipif(os.name == "nt", reason="the sibling .so layout is Linux")
 def test_binary_backend_linux_rocm(monkeypatch, tmp_path):
     monkeypatch.setattr(os, "name", "posix")
     exe = tmp_path / "llama-server"
@@ -305,6 +306,7 @@ def test_binary_backend_missing(tmp_path):
     assert diagnose.binary_backend(str(tmp_path / "nope")) is None
 
 
+@pytest.mark.skipif(os.name == "nt", reason="the sibling .so layout is Linux")
 def test_binary_backend_linux_cuda_sibling_wins_over_none(monkeypatch, tmp_path):
     # The sibling libggml-*.so check is Linux-only; say so here so
     # the branch is exercised wherever the test runs.
@@ -321,6 +323,7 @@ def test_binary_backend_linux_cuda_sibling_wins_over_none(monkeypatch, tmp_path)
     assert diagnose.binary_backend(str(exe)) == "CUDA"
 
 
+@pytest.mark.skipif(os.name == "nt", reason="the sibling .so layout is Linux")
 def test_binary_backend_linux_sycl_sibling(monkeypatch, tmp_path):
     # The sibling libggml-*.so check is Linux-only; say so here so
     # the branch is exercised wherever the test runs.
@@ -332,6 +335,7 @@ def test_binary_backend_linux_sycl_sibling(monkeypatch, tmp_path):
     assert diagnose.binary_backend(str(exe)) == "SYCL"
 
 
+@pytest.mark.skipif(os.name == "nt", reason="the sibling .so layout is Linux")
 def test_binary_backend_linux_openvino_sibling(monkeypatch, tmp_path):
     # The sibling libggml-*.so check is Linux-only; say so here so
     # the branch is exercised wherever the test runs.
@@ -343,6 +347,7 @@ def test_binary_backend_linux_openvino_sibling(monkeypatch, tmp_path):
     assert diagnose.binary_backend(str(exe)) == "OpenVINO"
 
 
+@pytest.mark.skipif(os.name == "nt", reason="the sibling .so layout is Linux")
 def test_cuda_runtime_ready_linux_sibling(monkeypatch, tmp_path):
     monkeypatch.setattr(diagnose, "_cuda_lib_dirs", lambda: [])
     monkeypatch.setattr(diagnose, "_ldconfig_has", lambda *names: False)
@@ -354,6 +359,7 @@ def test_cuda_runtime_ready_linux_sibling(monkeypatch, tmp_path):
     assert diagnose.cuda_runtime_libs(tmp_path) == ["libcudart.so.13"]
 
 
+@pytest.mark.skipif(os.name == "nt", reason="the sibling .so layout is Linux")
 def test_rocm_runtime_ready_linux_sibling(monkeypatch, tmp_path):
     monkeypatch.setattr(diagnose, "_ldconfig_has", lambda *names: False)
     monkeypatch.setattr(
@@ -366,6 +372,7 @@ def test_rocm_runtime_ready_linux_sibling(monkeypatch, tmp_path):
     assert diagnose.rocm_runtime_ready(str(exe))
 
 
+@pytest.mark.skipif(os.name == "nt", reason="the sibling .so layout is Linux")
 def test_vulkan_runtime_ready_linux_sibling(monkeypatch, tmp_path):
     monkeypatch.setattr(diagnose, "_ldconfig_has", lambda *names: False)
     monkeypatch.setattr(
@@ -379,6 +386,7 @@ def test_vulkan_runtime_ready_linux_sibling(monkeypatch, tmp_path):
     assert diagnose.vulkan_runtime_ready(str(exe))
 
 
+@pytest.mark.skipif(os.name == "nt", reason="the sibling .so layout is Linux")
 def test_sycl_runtime_ready_linux_sibling(monkeypatch, tmp_path):
     monkeypatch.setattr(diagnose, "_sycl_lib_dirs", lambda: [])
     monkeypatch.setattr(diagnose, "_ldconfig_has", lambda *names: False)
@@ -393,6 +401,7 @@ def test_sycl_runtime_ready_linux_sibling(monkeypatch, tmp_path):
     assert diagnose.sycl_runtime_missing(str(exe)) == []
 
 
+@pytest.mark.skipif(os.name == "nt", reason="the sibling .so layout is Linux")
 def test_openvino_runtime_and_gpu_plugin_linux(monkeypatch, tmp_path):
     monkeypatch.setattr(diagnose, "_openvino_lib_dirs", lambda: [])
     monkeypatch.setattr(diagnose, "_ldconfig_has", lambda *names: False)
@@ -463,6 +472,7 @@ def test_run_includes_sections(monkeypatch, iso_env):
     assert "model gpu: CUDA" in out
 
 
+@pytest.mark.skipif(os.name == "nt", reason="ldd is POSIX only")
 def test_binary_backend_asks_the_binary_before_ldd(monkeypatch, tmp_path):
     """A GPU build dlopens its backend; ldd alone reads it as CPU.
 
@@ -681,6 +691,7 @@ def test_gpu_state_modern_metal(iso_env):
     assert st["device"] == "Apple M2"
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="the Metal build is macOS")
 def test_binary_backend_macos_metal(monkeypatch, tmp_path):
     exe = tmp_path / "llama-server"
     exe.write_bytes(b"x")
@@ -711,6 +722,7 @@ def test_binary_backend_macos_cpu_from_none(monkeypatch, tmp_path):
     assert diagnose.binary_backend(str(exe)) == "CPU"
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="the Metal build is macOS")
 def test_binary_backend_macos_metal_from_sibling_dylib(monkeypatch, tmp_path):
     """No ldd on macOS; the release ships libggml-metal*.dylib."""
     exe = tmp_path / "llama-server"
@@ -731,6 +743,7 @@ def test_binary_backend_macos_cpu_from_sibling_dylib(monkeypatch, tmp_path):
     assert diagnose.binary_backend(str(exe)) == "CPU"
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="otool is macOS only")
 def test_binary_backend_macos_otool_metal(monkeypatch, tmp_path):
     exe = tmp_path / "llama-server"
     exe.write_bytes(b"x")

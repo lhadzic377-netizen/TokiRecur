@@ -7,6 +7,7 @@ and no real processes are spawned.
 """
 
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -714,6 +715,7 @@ def _tar_bytes(files: dict[str, bytes]) -> bytes:
     return buf.getvalue()
 
 
+@pytest.mark.skipif(os.name == "nt", reason="the paired cudart check is Linux")
 def test_install_linux_cuda_pulls_paired_cudart(tmp_path, monkeypatch):
     """Linux CUDA ships cudart/cublas as a separate archive too. The
     install must fetch it, drop the stale major, and verify a real
@@ -1451,6 +1453,7 @@ def test_linux_vulkan_icd_present_but_driver_missing_returns_false(tmp_path, mon
     assert ctl._linux_vulkan_works() is False
 
 
+@pytest.mark.skipif(os.name == "nt", reason="the ICD check is Linux")
 def test_linux_vulkan_icd_with_loadable_driver_returns_true(tmp_path, monkeypatch):
     """A real ICD JSON pointing at a library that actually exists on disk
     means llama.cpp's Vulkan build can initialise a device."""
@@ -1515,6 +1518,7 @@ def test_linux_vulkan_swiftshader_software_icd_returns_false(tmp_path, monkeypat
     assert ctl._linux_vulkan_works() is False
 
 
+@pytest.mark.skipif(os.name == "nt", reason="the ICD check is Linux")
 def test_linux_vulkan_lavapipe_and_real_icd_returns_true(tmp_path, monkeypatch):
     """Lavapipe alongside a real discrete-GPU ICD (radeon/amdvlk/nouveau)
     must still count: the real ICD is what matters."""
@@ -1541,6 +1545,7 @@ def test_linux_vulkan_lavapipe_and_real_icd_returns_true(tmp_path, monkeypatch):
     assert ctl._linux_vulkan_works() is True
 
 
+@pytest.mark.skipif(os.name == "nt", reason="the DRM check is Linux")
 def test_intel_igpu_only_linux_true_for_intel_only(tmp_path, monkeypatch):
     from tokirecur import ctl
 
@@ -1927,6 +1932,7 @@ def test_prune_foreign_gpu_libs_missing_bin_dir_is_noop(tmp_path):
     _prune_foreign_gpu_libs(tmp_path / "does-not-exist", "cpu")
 
 
+@pytest.mark.skipif(os.name == "nt", reason="LLAMA_CPP_BLD is a Linux build path")
 def test_find_local_llama_server_prefers_LLAMA_CPP_BLD_env(tmp_path, monkeypatch):
     """``LLAMA_CPP_BLD`` env var wins over the default search paths —
     this is how ``scripts/build_llama_cpp.sh`` points at its build dir."""
@@ -2288,6 +2294,7 @@ def test_prune_foreign_gpu_libs_cpu_removes_metal_dylibs(tmp_path):
         ),
     ],
 )
+@pytest.mark.skipif(sys.platform != "darwin", reason="the Metal fallback is macOS")
 def test_install_macos_metal_and_cpu_fallback(
     tmp_path, monkeypatch, capsys, requested_backend, device_output, expected,
 ):

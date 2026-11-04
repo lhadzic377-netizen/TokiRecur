@@ -126,7 +126,11 @@ def test_web_starts_ui_when_port_closed(monkeypatch, quit_after, capsys):
     monkeypatch.setattr(clilauncher, "_port_open", fake_port_open)
     monkeypatch.setattr(clilauncher, "_wait_for_port", lambda port, timeout: True)
     assert quit_after(str(len(clilauncher.AGENTS) + 3)) == 0
-    assert "toki" in spawned[0][0] and "web" in spawned[0]
+    # The web UI is started either as the console script ("toki web") or,
+    # on Windows, as the interpreter running the module
+    # ("python -m tokirecur.cli web"). Both name the CLI.
+    assert "web" in spawned[0]
+    assert any("toki" in part.lower() for part in spawned[0])
     assert "http://127.0.0.1:7777" in opened
 
 
@@ -313,7 +317,10 @@ def test_agent_launch_cmd_wrapper(monkeypatch, capsys):
 
     monkeypatch.setattr(cl.subprocess, "Popen", fake_popen)
     cl._launch_agent("opencode")
-    assert captured["argv"] == ["cmd.exe", "/c", r"C:\npm\opencode.cmd"]
+    # cmd.exe may be resolved to its full path; what matters is that the
+    # .cmd shim is launched through cmd.exe and not directly.
+    assert captured["argv"][0].lower().endswith("cmd.exe")
+    assert captured["argv"][1:] == ["/c", r"C:\npm\opencode.cmd"]
     assert "pid 4242" in capsys.readouterr().out
 
 

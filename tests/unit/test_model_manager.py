@@ -210,7 +210,8 @@ def test_mimo_config_writer_prefers_existing_jsonc(env, with_pulled_model, monke
     data = json.loads(out.read_text())
     assert data["mcp"] == {"server": True}
     assert data["model"] == ctl._mimo_model_ref(spec)
-    assert out.stat().st_mode & 0o777 == 0o600
+    if os.name == "posix":
+        assert out.stat().st_mode & 0o777 == 0o600
 
 
 def test_mimo_config_writer_uses_raw_mode(env, with_pulled_model, monkeypatch):
@@ -520,7 +521,8 @@ def test_sync_cli_configs_writes_all(env, with_pulled_model, monkeypatch):
     assert len(paths) == 15
     for p in paths.values():
         assert Path(p).exists()
-        assert Path(p).stat().st_mode & 0o777 == 0o600
+        if os.name == "posix":
+            assert Path(p).stat().st_mode & 0o777 == 0o600
     # And every CLI config picked up the pulled provider.
     pulled_name = with_pulled_model["pulled"].name
     oc = json.loads(paths["opencode"].read_text())
@@ -567,14 +569,16 @@ def test_new_client_config_writers_bind_active_model(env, with_pulled_model, mon
     assert provider["settings"]["contextWindow"] == ctl._effective_ctx(spec)
     assert provider["settings"]["maxTokens"] == ctl._client_output_limit(spec)
     assert provider["updatedAt"].endswith("Z")
-    assert paths["cline"].stat().st_mode & 0o777 == 0o600
+    if os.name == "posix":
+        assert paths["cline"].stat().st_mode & 0o777 == 0o600
 
     claude = json.loads(paths["claude"].read_text())
     assert claude["env"]["ANTHROPIC_BASE_URL"] == f"{spec.daemon_url}/anthropic"
     assert claude["env"]["ANTHROPIC_MODEL"] == spec.model_id
     assert claude["env"]["ANTHROPIC_API_KEY"] == "test-tok-0123456789abcdef"
     assert "ANTHROPIC_AUTH_TOKEN" not in claude["env"]
-    assert paths["claude"].stat().st_mode & 0o777 == 0o600
+    if os.name == "posix":
+        assert paths["claude"].stat().st_mode & 0o777 == 0o600
 
     dsh = yaml.safe_load(paths["dsh"].read_text())
     assert dsh["agent-default-model"] == {"provider": "tokirecur", "model": spec.model_id}
@@ -1394,6 +1398,7 @@ def test_pull_defaults_reference_spec_binary(seeded_env, tmp_path, monkeypatch):
     assert env_vars == {}
 
 
+@pytest.mark.skipif(os.name == "nt", reason="the dead-path rule is about POSIX build paths")
 def test_pull_defaults_skips_dead_reference_binary(seeded_env, monkeypatch):
     """A reference spec whose binary path does not exist on this machine
     (registry shipped from another box) must NOT be inherited — new pulls
@@ -1496,6 +1501,7 @@ def test_backfill_heals_bare_binary_to_installed(env, monkeypatch):
     assert healed.binary == str(bin_dir / exe_name)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="the installed build is llama-server.exe on Windows")
 def test_resolve_binary_prefers_custom_then_installed(env, tmp_path, monkeypatch):
     """Launch-time resolution: a custom binary wins; a bare PATH default
     falls back to the installed build; bare name only as last resort; a
@@ -3461,6 +3467,7 @@ def test_update_spec_field_restart_failed_returns_spec_anyway(seeded_env, monkey
     assert ctl.get_model("9b").ctx_size == 8192
 
 
+@pytest.mark.skipif(os.name != "posix", reason="fcntl is POSIX only")
 def test_flock_times_out_loudly(seeded_env, monkeypatch):
     """When another process holds the registry lock past the timeout,
     _flock raises RuntimeError with the lockfile path instead of

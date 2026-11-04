@@ -6,8 +6,12 @@ Windows (process signalling, port->pid lookup, browser opening).
 
 from __future__ import annotations
 
+import os
 import signal
+import sys
 from types import SimpleNamespace
+
+import pytest
 
 from tokirecur import ctl, lifecycle, selector, winproc
 
@@ -16,6 +20,7 @@ def _clear_port_cache() -> None:
     ctl._PORT_PID_CACHE.clear()
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process groups only")
 def test_signal_proc_uses_killpg_when_available(monkeypatch):
     seen = {}
 
@@ -61,6 +66,7 @@ def test_detach_kwargs_posix_uses_start_new_session(monkeypatch):
 
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process groups only")
 def test_signal_proc_falls_back_to_kill_when_killpg_raises(monkeypatch):
     # POSIX fallback path: process group gone, signal the pid directly.
     monkeypatch.setattr(ctl.os, "killpg", lambda pgid, sig: (_ for _ in ()).throw(ProcessLookupError()))
@@ -121,6 +127,7 @@ def test_hard_kill_windows_uses_taskkill(monkeypatch):
     assert seen == [["taskkill", "/pid", "12345", "/f"]]
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX signals only")
 def test_hard_kill_posix_uses_sigkill(monkeypatch):
     monkeypatch.setattr(ctl.os, "name", "posix")
     monkeypatch.setattr(
@@ -235,6 +242,7 @@ def test_pid_on_port_none_when_unparsable(monkeypatch):
     assert ctl._pid_on_port(8787) is None
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS opens open")
 def test_open_browser_macos_uses_open(monkeypatch):
     monkeypatch.setattr(selector.sys, "platform", "darwin")
     seen = []
@@ -248,6 +256,7 @@ def test_open_browser_macos_uses_open(monkeypatch):
     assert seen[0][1] is True
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux opens xdg-open")
 def test_open_browser_linux_uses_xdg_open(monkeypatch):
     monkeypatch.setattr(selector.sys, "platform", "linux")
     seen = []
@@ -265,6 +274,7 @@ def test_is_alive_zero_or_negative(monkeypatch):
     assert ctl._is_alive(-1) is False
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX signals only")
 def test_is_alive_posix_uses_kill(monkeypatch):
     monkeypatch.setattr(ctl.os, "name", "posix")
     seen = {}

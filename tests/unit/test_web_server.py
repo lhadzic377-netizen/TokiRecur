@@ -135,7 +135,11 @@ class TestBuildMessages:
 
 
 class TestCompletionPayload:
-    def test_raw_uses_llama_server_openai_with_cache_prompt(self):
+    def test_raw_uses_llama_server_openai_with_cache_prompt(self, monkeypatch):
+        # The product disables cache_prompt on Windows on purpose
+        # (the CPU build can hang on the multi-turn path). The
+        # documented override makes the intent explicit here.
+        monkeypatch.setenv("TOKI_CACHE_PROMPT", "1")
         endpoint, payload = _completion_payload(
             messages=[{"role": "user", "content": "hi"}],
             max_tokens=16,
@@ -428,7 +432,11 @@ class TestWsChat:
         assert sent["session_id"] == "s1"
         assert "chat_template_kwargs" not in sent
 
-    def test_raw_uses_llama_server_openai_with_cache_prompt(self, fake_async_client):
+    def test_raw_uses_llama_server_openai_with_cache_prompt(self, fake_async_client, monkeypatch):
+        # The product disables cache_prompt on Windows on purpose
+        # (the CPU build can hang on the multi-turn path). The
+        # documented override makes the intent explicit here.
+        monkeypatch.setenv("TOKI_CACHE_PROMPT", "1")
         fake = FakeHttpx(
             stream_response=FakeStreamResponse(
                 sse({"choices": [{"index": 0, "delta": {"content": "yo"}, "finish_reason": None}]})

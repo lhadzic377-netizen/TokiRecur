@@ -591,6 +591,10 @@ class TestChatStreamRawCacheFlag:
 
     @pytest.mark.asyncio
     async def test_raw_payload_requests_cache_prompt(self, monkeypatch, tmp_path):
+        # The product disables cache_prompt on Windows on purpose
+        # (the CPU build can hang on the multi-turn path). The
+        # documented override makes the intent explicit here.
+        monkeypatch.setenv("TOKI_CACHE_PROMPT", "1")
         monkeypatch.setattr(
             "tokirecur.tui.client.Path.home", lambda: tmp_path,
         )
