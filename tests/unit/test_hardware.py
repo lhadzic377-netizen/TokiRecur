@@ -458,7 +458,10 @@ def test_recommend_defaults_picks_cpu_for_intel_igpu_only_box():
     assert "P-core" in rec.get("build_hint", "") or "CPU" in rec.get("build_hint", "")
 
 
-def test_recommend_defaults_picks_cuda_for_discrete_nvidia():
+def test_recommend_defaults_picks_cuda_for_discrete_nvidia(monkeypatch):
+    # Apple silicon is Metal; the recommendation under test is the CUDA
+    # one, so the test has to declare the platform it means.
+    monkeypatch.setattr(hardware.sys, "platform", "linux")
     cpu = CPUProfile(
         vendor="GenuineIntel", name="i7-13700K",
         family=6, model=183,

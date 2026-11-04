@@ -91,6 +91,9 @@ def test_gpu_state_cpu_only(iso_env):
 
 
 def test_gpu_hardware_nvidia(monkeypatch):
+    # The darwin branch of gpu_hardware() returns Metal before it ever
+    # looks for a GPU, so this test has to say it is on Linux.
+    monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/nvidia-smi")
     monkeypatch.setattr(
         subprocess,
@@ -303,6 +306,9 @@ def test_binary_backend_missing(tmp_path):
 
 
 def test_binary_backend_linux_cuda_sibling_wins_over_none(monkeypatch, tmp_path):
+    # The sibling libggml-*.so check is Linux-only; say so here so
+    # the branch is exercised wherever the test runs.
+    monkeypatch.setattr(diagnose.sys, "platform", "linux")
     """A GPU build with no runtime enumerates (none); the sibling module
     still identifies the build so the doctor can name the missing lib."""
     exe = tmp_path / "llama-server"
@@ -316,6 +322,9 @@ def test_binary_backend_linux_cuda_sibling_wins_over_none(monkeypatch, tmp_path)
 
 
 def test_binary_backend_linux_sycl_sibling(monkeypatch, tmp_path):
+    # The sibling libggml-*.so check is Linux-only; say so here so
+    # the branch is exercised wherever the test runs.
+    monkeypatch.setattr(diagnose.sys, "platform", "linux")
     exe = tmp_path / "llama-server"
     exe.write_bytes(b"x")
     (tmp_path / "libggml-sycl.so").write_bytes(b"x")
@@ -324,6 +333,9 @@ def test_binary_backend_linux_sycl_sibling(monkeypatch, tmp_path):
 
 
 def test_binary_backend_linux_openvino_sibling(monkeypatch, tmp_path):
+    # The sibling libggml-*.so check is Linux-only; say so here so
+    # the branch is exercised wherever the test runs.
+    monkeypatch.setattr(diagnose.sys, "platform", "linux")
     exe = tmp_path / "llama-server"
     exe.write_bytes(b"x")
     (tmp_path / "libggml-openvino.so").write_bytes(b"x")
@@ -557,6 +569,7 @@ def test_sycl_runtime_ready(monkeypatch, tmp_path):
 
 def _win_gpu(monkeypatch, gpus):
     monkeypatch.setattr(diagnose.winproc, "IS_WINDOWS", True)
+    monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(diagnose.shutil, "which", lambda _: None)
     monkeypatch.setattr(diagnose.os.path, "exists", lambda _: False)
     monkeypatch.setattr(

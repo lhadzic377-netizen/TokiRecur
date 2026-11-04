@@ -1544,6 +1544,8 @@ def test_linux_vulkan_lavapipe_and_real_icd_returns_true(tmp_path, monkeypatch):
 def test_intel_igpu_only_linux_true_for_intel_only(tmp_path, monkeypatch):
     from tokirecur import ctl
 
+    monkeypatch.setattr(ctl.sys, "platform", "linux")
+
     _fake_drm(tmp_path, vendors=["0x8086"])
     monkeypatch.setattr("tokirecur.ctl.Path", _make_drm_stub(tmp_path, ["0x8086"]))
     assert ctl._intel_igpu_only_linux() is True
@@ -1968,6 +1970,10 @@ def test_install_refuses_to_overwrite_gpu_binary_with_cpu(tmp_path, monkeypatch)
 
     from tokirecur.cli import cli
 
+    # macOS ships one universal Metal build, so a CPU "asset" does not
+    # exist there and the downgrade check never runs. The check is about
+    # the Linux layout, so the test says it is on Linux.
+    monkeypatch.setattr("tokirecur.cli.sys.platform", "linux")
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     existing = bin_dir / "llama-server"
@@ -2000,6 +2006,10 @@ def test_install_force_downgrade_env_overrides_gpu_to_cpu_guard(tmp_path, monkey
 
     from tokirecur.cli import cli
 
+    # macOS ships one universal Metal build, so a CPU "asset" does not
+    # exist there and the downgrade check never runs. The check is about
+    # the Linux layout, so the test says it is on Linux.
+    monkeypatch.setattr("tokirecur.cli.sys.platform", "linux")
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     existing = bin_dir / "llama-server"

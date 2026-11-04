@@ -101,6 +101,8 @@ def test_uninstall_removes_every_enabled_instance_even_without_boot_models(
         service, "_systemctl",
         lambda *args: type("R", (), {"returncode": 0, "stdout": ""})(),
     )
+    # The cleanup logic is under test, not the platform.
+    monkeypatch.setattr(service, "_systemd_available", lambda: True)
 
     rc = service.uninstall()
     assert rc == 0
@@ -129,6 +131,9 @@ def test_install_cleans_stale_enablement_before_enabling(
         return type("R", (), {"returncode": 0, "stdout": ""})()
 
     monkeypatch.setattr(service, "_systemctl", fake_systemctl)
+    # The unit logic is under test, not the platform: install() refuses
+    # outright where systemd does not exist, so say it is available.
+    monkeypatch.setattr(service, "_systemd_available", lambda: True)
     monkeypatch.setattr(
         service.subprocess, "run",
         lambda *a, **k: type("R", (), {"returncode": 0, "stdout": ""})(),

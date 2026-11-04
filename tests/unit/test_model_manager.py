@@ -964,6 +964,10 @@ def test_pull_model_auto_ctx_caps_at_model_max(env, hf, monkeypatch):
     monkeypatch.setattr(ctl, "read_gguf_meta", lambda p: GgufMeta(
         n_embd=1024, n_layer=16, n_head=16, n_head_kv=8,
         context_length=8192))
+    # The window is also clamped to what the RAM of *this* machine holds,
+    # so the budget is fixed: a small CI runner would otherwise get a
+    # 512-token window and the test would pass or fail with the host.
+    monkeypatch.setattr(ctl, "_available_gb", lambda: 64.0)
     spec = ctl.pull_model("acme/My-Model-GGUF", "auto")
     assert spec.ctx_size == 8192
     assert spec.max_tokens == 4096
