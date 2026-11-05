@@ -690,6 +690,16 @@ section > h2 + .section-sub { margin-top: var(--s4); }
   margin-left: 4px;
 }
 
+/* The poster is the video's own thumbnail. It is a bright object on a dark
+   page, so it gets a frame to sit in rather than a raw edge. */
+.video-poster {
+  border-radius: var(--radius-lg);
+}
+
+.video-poster img {
+  filter: saturate(0.96) contrast(1.02);
+}
+
 .video-poster:hover .video-play {
   transform: translate(-50%, -50%) scale(1.07);
 }
