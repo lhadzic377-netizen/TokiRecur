@@ -72,6 +72,7 @@
       <figcaption class="terminal-bar"><span class="terminal-dot"></span>toki &mdash; the launcher</figcaption>
       <img src="/img/tui-launcher.png?v=3" alt="The toki terminal launcher: the TOKI wordmark, the model in use, and the agents it can start" width="620" height="550" loading="eager" fetchpriority="high">
     </figure>
+    <!-- DESIGN:EXTRA -->
 
     <div class="stats">
       <div class="stat reveal"><div class="num">+96.2%</div><div class="label">time-to-first-token reduction vs. a fresh cache</div></div>
@@ -80,6 +81,53 @@
       <div class="stat reveal"><div class="num">0</div><div class="label">model patches or vendor lock-in</div></div>
     </div>
     <p class="note stats-source reveal">Best measured result: Qwen3.5-122B-A10B, summarization, 65k context, AMD Ryzen AI MAX+ 395. <a href="#benchmarks">See the full table and method.</a></p>
+  </section>
+
+  <div class="backend-strip" role="presentation">
+    <div class="backend-track">
+      <span class="backend-lead">drop-in prefix caching on every backend llama-server ships</span>
+      <span>CUDA</span><span>ROCm</span><span>SYCL</span><span>OpenVINO</span><span>Vulkan</span><span>Metal</span><span>CPU</span>
+      <span class="backend-lead" aria-hidden="true">drop-in prefix caching on every backend llama-server ships</span>
+      <span aria-hidden="true">CUDA</span><span aria-hidden="true">ROCm</span><span aria-hidden="true">SYCL</span><span aria-hidden="true">OpenVINO</span><span aria-hidden="true">Vulkan</span><span aria-hidden="true">Metal</span><span aria-hidden="true">CPU</span>
+    </div>
+  </div>
+
+  <section class="mechanism" id="mechanism">
+    <div class="mech-grid">
+      <div class="mech-copy">
+        <p class="overline reveal">The mechanism</p>
+        <h2 class="reveal">The prompt arrives. The prefix matches.<br>The prefill disappears.</h2>
+        <p class="section-sub reveal">Every request is compared against the KV blocks already in memory, token by token. The
+          longest identical prefix is replayed instead of recomputed. That is the whole trick &mdash; there is no
+          second model, no separate cache server, no client change.</p>
+      </div>
+      <figure class="mech-stage reveal" aria-hidden="true">
+        <figcaption class="mech-head">
+          <span class="mech-title">incoming prompt &rarr; prefix matcher</span>
+          <span class="mech-readout"><b data-mech-replayed>0</b> replayed<span class="mech-dot">&middot;</span><b data-mech-computed>0</b> computed</span>
+        </figcaption>
+        <div class="mech-cells" data-mech-cells><div class="mech-scan" data-mech-scan></div></div>
+        <div class="mech-legend">
+          <span><i class="dot-replay"></i>replayed from KV cache</span>
+          <span><i class="dot-compute"></i>computed</span>
+          <span><i class="dot-new"></i>not in the prefix</span>
+        </div>
+      </figure>
+      <dl class="mech-facts reveal">
+        <div>
+          <dt>match</dt>
+          <dd>exact prefix, byte for byte</dd>
+        </div>
+        <div>
+          <dt>cache</dt>
+          <dd>one KV pool, shared by every client</dd>
+        </div>
+        <div>
+          <dt>client</dt>
+          <dd>OpenAI-compatible &mdash; point at the daemon and keep going</dd>
+        </div>
+        </dl>
+    </div>
   </section>
 
   <section class="app-demo" id="demo">
@@ -513,6 +561,8 @@ toki</code></pre>
 </footer>
 
 <script src="/app.js?v=15" defer></script>
+<script src="/mechanism.js?v=1" defer></script>
+<script src="/motion.js?v=1" defer></script>
 <script src="/tui.js?v=33" defer></script>
 </body>
 </html>

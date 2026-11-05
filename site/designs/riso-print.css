@@ -1,0 +1,488 @@
+/* ==========================================================================
+   19 · riso-print
+   Two spot inks on warm stock, deliberately misregistered. The headline is
+   printed twice in blue and orange; the halftone gives the flats their
+   texture. Nothing here is a gradient.
+   ========================================================================== */
+
+[data-design="riso-print"] {
+  --bg: #f2ece1;
+  --bg-2: #e9e2d4;
+  --panel: #f7f2e8;
+  --panel-2: #fffdf7;
+  --line: rgba(38, 46, 60, 0.22);
+  --line-strong: rgba(38, 46, 60, 0.55);
+  --fg: #22303f;
+  --fg-dim: #46545f;
+  --muted: #6d7681;
+  --brand: #1f3d8f;
+  --brand-ink: #f7f2e8;
+  --brand-soft: rgba(31, 61, 143, 0.1);
+  --brand-line: rgba(31, 61, 143, 0.4);
+  --cream: #f2ece1;
+  --orange: #e0562a;
+
+  --sans: "Archivo", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", monospace;
+  --step--1: 0.78rem;
+  --step-0: 0.98rem;
+  --step-1: 1.16rem;
+  --step-2: 1.5rem;
+  --step-3: 2.1rem;
+  --step-4: 3.2rem;
+  --radius: 2px;
+  --radius-lg: 3px;
+  --container: 1160px;
+}
+
+[data-design="riso-print"] body {
+  font-family: var(--sans);
+  background:
+    radial-gradient(90% 70% at 12% 0%, rgba(31, 61, 143, 0.09), transparent 60%),
+    radial-gradient(80% 60% at 92% 12%, rgba(224, 86, 42, 0.08), transparent 60%),
+    var(--bg);
+  color: var(--fg);
+  line-height: 1.58;
+}
+
+/* the halftone */
+[data-design="riso-print"] body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.4;
+  background-image: radial-gradient(rgba(38, 46, 60, 0.22) 0.7px, transparent 0.8px);
+  background-size: 4px 4px;
+}
+
+[data-design="riso-print"] main,
+[data-design="riso-print"] .topbar nav,
+[data-design="riso-print"] footer > * {
+  position: relative;
+  z-index: 1;
+}
+
+[data-design="riso-print"] .topbar {
+  background: var(--bg);
+  border-bottom: 3px solid var(--fg);
+  backdrop-filter: none;
+}
+
+[data-design="riso-print"] .topbar nav {
+  max-width: var(--container);
+  height: 64px;
+  padding: 0 var(--gutter);
+}
+
+[data-design="riso-print"] .brand {
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  font-size: 1.2rem;
+  text-transform: lowercase;
+}
+
+[data-design="riso-print"] .wordmark-accent {
+  color: var(--orange);
+}
+
+[data-design="riso-print"] .links a {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+}
+
+[data-design="riso-print"] .links a:hover {
+  color: var(--orange);
+}
+
+[data-design="riso-print"] .btn-nav {
+  border: 2px solid var(--fg);
+  background: transparent;
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* hero: two inks, slightly off register */
+[data-design="riso-print"] .hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+  gap: var(--s8);
+  align-items: center;
+  padding-top: var(--s8) !important;
+  padding-bottom: var(--s8) !important;
+}
+
+[data-design="riso-print"] .kicker {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--orange);
+}
+
+[data-design="riso-print"] .kicker .accent {
+  color: var(--brand);
+}
+
+[data-design="riso-print"] h1 {
+  position: relative;
+  font-size: clamp(2.4rem, 1.3rem + 4vw, 4.6rem);
+  line-height: 0.98;
+  font-weight: 800;
+  letter-spacing: -0.045em;
+  margin-top: var(--s5);
+  text-transform: lowercase;
+}
+
+[data-design="riso-print"] h1::before {
+  content: attr(data-text);
+  position: absolute;
+  left: 5px;
+  top: 5px;
+  color: var(--orange);
+  z-index: -1;
+  mix-blend-mode: multiply;
+}
+
+[data-design="riso-print"] h1 .accent {
+  color: var(--brand);
+}
+
+[data-design="riso-print"] .lede {
+  font-size: 1.1rem;
+  color: var(--fg-dim);
+  max-width: 46ch;
+  margin-top: var(--s6);
+}
+
+[data-design="riso-print"] .cta {
+  margin-top: var(--s6);
+}
+
+[data-design="riso-print"] .btn {
+  border-radius: 2px;
+  font-weight: 700;
+  font-size: 0.85rem;
+  padding: 13px 22px;
+}
+
+[data-design="riso-print"] .btn.primary {
+  background: var(--brand);
+  color: var(--brand-ink);
+}
+
+[data-design="riso-print"] .btn.ghost {
+  border: 2px solid var(--fg);
+  color: var(--fg);
+  background: transparent;
+}
+
+[data-design="riso-print"] .hero-visual {
+  border: 2px solid var(--fg);
+  background: var(--panel-2);
+  padding: 6px;
+  box-shadow: 10px 10px 0 var(--orange);
+}
+
+[data-design="riso-print"] .hero-visual .terminal-bar {
+  display: none;
+}
+
+/* stats printed as blocks of ink */
+[data-design="riso-print"] .stats {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  border: 2px solid var(--fg);
+  padding: 0;
+}
+
+[data-design="riso-print"] .stat {
+  border-right: 2px solid var(--fg);
+  padding: var(--s5);
+}
+
+[data-design="riso-print"] .stat:last-child {
+  border-right: none;
+}
+
+[data-design="riso-print"] .stat:nth-child(odd) {
+  background: var(--brand-soft);
+}
+
+[data-design="riso-print"] .stat .num {
+  font-family: var(--mono);
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+[data-design="riso-print"] .stat .label {
+  font-size: 0.76rem;
+  color: var(--fg-dim);
+  margin-top: var(--s2);
+}
+
+[data-design="riso-print"] .stats-source {
+  grid-column: 1 / -1;
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  color: var(--muted);
+  border: 2px solid var(--fg);
+  border-top: none;
+  padding: var(--s3) var(--s5);
+}
+
+/* sections */
+[data-design="riso-print"] main > section {
+  max-width: var(--container);
+  padding-top: var(--s7);
+  padding-bottom: var(--s7);
+  border-top: 2px solid var(--fg);
+}
+
+[data-design="riso-print"] section > h2,
+[data-design="riso-print"] .demo-head h2 {
+  font-size: clamp(1.7rem, 1.2rem + 2vw, 2.7rem);
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  text-transform: lowercase;
+  max-width: 20ch;
+}
+
+[data-design="riso-print"] .overline {
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--orange);
+}
+
+[data-design="riso-print"] .section-sub {
+  color: var(--fg-dim);
+  max-width: 58ch;
+}
+
+[data-design="riso-print"] .feature-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--s4);
+}
+
+[data-design="riso-print"] .feature {
+  border: 2px solid var(--fg);
+  background: var(--panel);
+  padding: var(--s5);
+}
+
+[data-design="riso-print"] .feature:nth-child(3n + 2) {
+  background: var(--orange);
+  color: #fff5ef;
+}
+
+[data-design="riso-print"] .feature:nth-child(3n + 2) h3,
+[data-design="riso-print"] .feature:nth-child(3n + 2) p {
+  color: #fff5ef;
+}
+
+[data-design="riso-print"] .feature-icon {
+  width: 18px;
+  height: 18px;
+  color: var(--brand);
+}
+
+[data-design="riso-print"] .feature:nth-child(3n + 2) .feature-icon {
+  color: #fff5ef;
+}
+
+[data-design="riso-print"] .feature h3 {
+  font-size: 1.05rem;
+  font-weight: 800;
+  color: var(--fg);
+  margin-bottom: var(--s2);
+}
+
+[data-design="riso-print"] .feature p {
+  color: var(--fg-dim);
+  font-size: 0.9rem;
+}
+
+[data-design="riso-print"] ol.steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--s4);
+}
+
+[data-design="riso-print"] ol.steps > li {
+  display: block;
+  border: 2px solid var(--fg);
+  background: var(--panel-2);
+  padding: var(--s5);
+}
+
+[data-design="riso-print"] ol.steps > li::before {
+  content: attr(data-n);
+  display: block;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  color: var(--orange);
+  margin-bottom: var(--s2);
+}
+
+[data-design="riso-print"] .reuse-loop {
+  border: 2px solid var(--fg);
+  background: var(--panel-2);
+  padding: var(--s4);
+}
+
+[data-design="riso-print"] .loop-block {
+  fill: var(--bg);
+  stroke: var(--fg);
+  stroke-width: 1.6;
+}
+
+[data-design="riso-print"] .loop-block.hit {
+  fill: var(--orange);
+  stroke: var(--fg);
+}
+
+[data-design="riso-print"] .loop-label {
+  fill: var(--muted);
+  font-family: var(--mono);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+[data-design="riso-print"] .bench-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+  border: 2px solid var(--fg);
+}
+
+[data-design="riso-print"] .bench-tab {
+  border: none;
+  border-right: 2px solid var(--fg);
+  background: var(--panel);
+  color: var(--fg-dim);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  padding: 10px 14px;
+}
+
+[data-design="riso-print"] .bench-tab:last-child {
+  border-right: none;
+}
+
+[data-design="riso-print"] .bench-tab.active {
+  background: var(--brand);
+  color: var(--brand-ink);
+}
+
+[data-design="riso-print"] .table-wrap {
+  border: 2px solid var(--fg);
+  background: var(--panel-2);
+}
+
+[data-design="riso-print"] thead th {
+  background: var(--fg);
+  color: var(--bg);
+  font-family: var(--mono);
+  font-size: 0.64rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+[data-design="riso-print"] tbody td {
+  color: var(--fg-dim);
+  border-bottom: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: 0.8rem;
+}
+
+[data-design="riso-print"] .grade {
+  background: var(--brand);
+  color: var(--brand-ink);
+  border-radius: 2px;
+  font-family: var(--mono);
+}
+
+[data-design="riso-print"] .code {
+  background: var(--fg);
+  color: #f2ece1;
+  border: 2px solid var(--fg);
+  border-radius: 2px;
+}
+
+[data-design="riso-print"] .code-label {
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--orange);
+}
+
+[data-design="riso-print"] .demo-terminal {
+  border: 2px solid var(--fg);
+  background: #10100e;
+  box-shadow: 10px 10px 0 var(--brand);
+}
+
+[data-design="riso-print"] .honesty {
+  border: 2px solid var(--fg);
+  background: var(--panel);
+  padding: var(--s6);
+}
+
+[data-design="riso-print"] .arch-node {
+  border: 2px solid var(--fg);
+  background: var(--panel-2);
+}
+
+[data-design="riso-print"] .arch-node.core {
+  background: var(--brand);
+  color: var(--brand-ink);
+}
+
+[data-design="riso-print"] .arch-node.core small {
+  color: rgba(247, 242, 232, 0.8);
+}
+
+[data-design="riso-print"] footer {
+  border-top: 2px solid var(--fg);
+  background: var(--bg-2);
+}
+
+[data-design="riso-print"] .footer-grid {
+  grid-template-columns: 1.6fr 1fr 1fr;
+}
+
+[data-design="riso-print"] .footer-col h3 {
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--orange);
+}
+
+@media (max-width: 900px) {
+  [data-design="riso-print"] .hero {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  [data-design="riso-print"] .feature-grid,
+  [data-design="riso-print"] ol.steps {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  [data-design="riso-print"] .stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

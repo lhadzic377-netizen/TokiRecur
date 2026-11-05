@@ -351,6 +351,7 @@ section > h2 + .section-sub { margin-top: var(--s4); }
 
 .hero {
   position: relative;
+  grid-template-columns: minmax(0, 1.12fr) minmax(0, 1fr);
   /* The glow is drawn, not photographed. A JPEG with a hard right edge shows
      the moment the viewport moves, and it tints the headline's yellow into
      an orange gradient nobody chose. */
@@ -364,8 +365,8 @@ section > h2 + .section-sub { margin-top: var(--s4); }
   grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
   gap: clamp(28px, 4vw, 52px);
   align-items: center;
-  padding-top: clamp(56px, 9vw, 120px) !important;
-  padding-bottom: clamp(56px, 8vw, 110px) !important;
+  padding-top: clamp(48px, 6.5vw, 96px) !important;
+  padding-bottom: clamp(48px, 6.5vw, 88px) !important;
   overflow: hidden;
 }
 
@@ -1800,5 +1801,524 @@ main > section.app-demo {
     font-weight: 700;
     letter-spacing: 0.34em;
     margin: 0 0 0.6em;
+  }
+}
+
+/* ==========================================================================
+   ink-quiet — the finished direction
+   --------------------------------------------------------------------------
+   Black, Geist, one yellow. The craft is in the spacing, the rhythm and
+   the two elements that carry the idea: the backend strip and the prefix
+   matcher. Nothing here is decoration for its own sake; every band on the
+   page says something the page needs to say.
+   ========================================================================== */
+
+:root {
+  /* Two semantic inks the rest of the page can borrow: what was replayed
+     and what had to be computed. They appear in the matcher and nowhere
+     else, so they mean one thing. */
+  --hit: #4fd6e0;
+  --compute: #ff9b5e;
+
+  --hairline: rgba(255, 255, 255, 0.11);
+  --hairline-strong: rgba(255, 255, 255, 0.2);
+}
+
+/* ── hero: the one screen that has to land ───────────────────────────── */
+
+.hero h1 {
+  font-size: clamp(2.3rem, 1.45rem + 2.9vw, 3.55rem);
+  line-height: 1.04;
+  font-weight: 560;
+  letter-spacing: -0.036em;
+  text-wrap: balance;
+  margin-top: var(--s5);
+}
+
+.hero .lede {
+  font-size: 1.12rem;
+  line-height: 1.6;
+  max-width: 46ch;
+  margin-top: var(--s5);
+}
+
+.hero .kicker {
+  font-size: 0.84rem;
+  letter-spacing: 0.01em;
+}
+
+.hero-visual {
+  max-width: 470px;
+  justify-self: end;
+  border-color: var(--hairline-strong);
+  box-shadow:
+    0 60px 120px -60px rgba(0, 0, 0, 0.92),
+    0 0 90px -50px rgba(255, 214, 10, 0.28);
+}
+
+/* The stats are a ledger, not four cards: figures that line up like a
+   table, with the rule above them doing the separating. */
+.hero .stats {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--s5) var(--s7);
+  padding-top: var(--s6);
+  border-top: 1px solid var(--hairline);
+}
+
+.hero .stat {
+  padding: 0;
+  border-left: 0;
+}
+
+.hero .stat .num {
+  font-size: 1.85rem;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em;
+}
+
+.hero .stat .label {
+  font-size: 0.86rem;
+  max-width: 26ch;
+  margin-top: var(--s2);
+}
+
+.hero .stats-source {
+  padding-top: var(--s5);
+  margin-top: var(--s5);
+  border-top: 1px solid var(--hairline);
+  max-width: 78ch;
+}
+
+/* ── the backend strip ────────────────────────────────────────────────── */
+/* A slow, honest list of the backends this actually runs on. */
+
+.backend-strip {
+  position: relative;
+  overflow: hidden;
+  border-top: 1px solid var(--hairline);
+  border-bottom: 1px solid var(--hairline);
+  background: var(--bg-2);
+  padding: var(--s4) 0;
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 6%, #000 94%, transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 6%, #000 94%, transparent);
+}
+
+.backend-track {
+  display: flex;
+  align-items: center;
+  gap: var(--s7);
+  width: max-content;
+  animation: backend-scroll 46s linear infinite;
+}
+
+.backend-strip:hover .backend-track {
+  animation-play-state: paused;
+}
+
+.backend-track span {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.backend-track .backend-lead {
+  color: var(--brand);
+  letter-spacing: 0.1em;
+  text-transform: none;
+  font-size: 0.82rem;
+}
+
+.backend-track span::after {
+  content: "·";
+  margin-left: var(--s7);
+  color: var(--hairline-strong);
+}
+
+@keyframes backend-scroll {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+
+/* ── the mechanism: the prefix matcher ────────────────────────────────── */
+
+.mechanism {
+  position: relative;
+  padding-top: clamp(72px, 9vw, 132px);
+  padding-bottom: clamp(72px, 9vw, 132px);
+}
+
+/* A drawn band: the same grid paper an engineer would sketch on. */
+.mechanism::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  left: 50%;
+  width: 100vw;
+  transform: translateX(-50%);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.022), transparent 70%),
+    linear-gradient(rgba(255, 255, 255, 0.022) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.022) 1px, transparent 1px);
+  background-size: 100% 100%, 44px 44px, 44px 44px;
+  z-index: -1;
+  pointer-events: none;
+}
+
+.mech-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr);
+  gap: clamp(32px, 5vw, 80px);
+  align-items: center;
+  max-width: var(--container);
+  margin: 0 auto;
+}
+
+.mech-copy h2 {
+  font-size: clamp(1.7rem, 1.1rem + 2vw, 2.8rem);
+  font-weight: 560;
+  letter-spacing: -0.032em;
+  line-height: 1.12;
+  max-width: 22ch;
+}
+
+.mech-copy .section-sub {
+  max-width: 52ch;
+}
+
+/* Three facts under the drawing: the labels are the terms, the values are
+   the sentence. */
+.mech-facts {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--s6);
+  margin: var(--s7) 0 0;
+  padding-top: var(--s5);
+  border-top: 1px solid var(--hairline);
+}
+
+.mech-facts > div {
+  display: grid;
+  gap: var(--s2);
+  align-content: start;
+}
+
+.mech-facts dt {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--brand);
+}
+
+.mech-facts dd {
+  margin: 0;
+  color: var(--fg-dim);
+  font-size: 0.98rem;
+}
+
+/* the stage */
+/* Without JavaScript there is no matcher to show, so the stage steps aside
+   instead of leaving an empty box where the drawing should be. */
+html:not(.js-ready) .mech-stage {
+  display: none;
+}
+
+.mech-stage {
+  margin: 0;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-lg);
+  background: rgba(8, 9, 11, 0.72);
+  backdrop-filter: blur(8px);
+  padding: var(--s6);
+  box-shadow: 0 50px 100px -70px rgba(0, 0, 0, 0.9);
+  overflow: hidden;
+}
+
+.mech-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s3);
+  justify-content: space-between;
+  align-items: baseline;
+  padding-bottom: var(--s5);
+  border-bottom: 1px solid var(--hairline);
+}
+
+.mech-title {
+  font-family: var(--mono);
+  font-size: 0.74rem;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.mech-readout {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.mech-readout b {
+  color: var(--fg);
+  font-weight: 500;
+}
+
+.mech-dot {
+  margin: 0 0.55em;
+  color: var(--hairline-strong);
+}
+
+.mech-cells {
+  position: relative;
+  display: flex;
+  gap: 3px;
+  margin: var(--s6) 0 var(--s5);
+  padding: 0 2px;
+}
+
+.mech-cell {
+  flex: 1 1 0;
+  height: 52px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid transparent;
+  transition: background 0.22s var(--ease), border-color 0.22s var(--ease), transform 0.22s var(--ease);
+}
+
+.mech-cell.is-replay {
+  background: color-mix(in srgb, var(--hit) 26%, transparent);
+  border-color: color-mix(in srgb, var(--hit) 55%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+
+.mech-cell.is-compute {
+  background: color-mix(in srgb, var(--compute) 26%, transparent);
+  border-color: color-mix(in srgb, var(--compute) 55%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+
+.mech-cell.is-current {
+  border-color: var(--brand);
+  transform: translateY(-3px);
+}
+
+/* the matcher itself: a line that walks the prompt */
+.mech-scan {
+  position: absolute;
+  top: -7px;
+  bottom: -7px;
+  left: 0;
+  width: 2px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, transparent, var(--brand) 14%, var(--brand) 86%, transparent);
+  box-shadow: 0 0 14px rgba(255, 214, 10, 0.55);
+  transform: translateX(0);
+  transition: transform 0.09s linear;
+  will-change: transform;
+  pointer-events: none;
+}
+
+.mech-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s3) var(--s5);
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+
+.mech-legend i {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  margin-right: 7px;
+  vertical-align: -1px;
+}
+
+.dot-replay { background: var(--hit); }
+.dot-compute { background: var(--compute); }
+.dot-new { background: rgba(255, 255, 255, 0.16); }
+
+/* ── the demo section gets a raised surface so the page has a pulse ──── */
+
+#demo {
+  position: relative;
+}
+
+#demo::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  left: 50%;
+  width: 100vw;
+  transform: translateX(-50%);
+  background: rgba(255, 255, 255, 0.016);
+  border-top: 1px solid var(--hairline);
+  border-bottom: 1px solid var(--hairline);
+  z-index: -1;
+  pointer-events: none;
+}
+
+/* ── benchmarks read as a printed ledger ───────────────────────────────── */
+
+#benchmarks .table-wrap {
+  border: none;
+  border-top: 1px solid var(--hairline-strong);
+  border-bottom: 1px solid var(--hairline-strong);
+  border-radius: 0;
+  background: transparent;
+}
+
+#benchmarks thead th {
+  background: transparent;
+  border-bottom: 1px solid var(--hairline-strong);
+  color: var(--muted);
+  font-size: 0.68rem;
+  letter-spacing: 0.14em;
+}
+
+#benchmarks tbody td {
+  font-variant-numeric: tabular-nums;
+  border-bottom: 1px solid var(--hairline);
+}
+
+#benchmarks tbody tr:hover td {
+  background: rgba(255, 214, 10, 0.035);
+}
+
+#benchmarks .grade {
+  border-radius: 4px;
+}
+
+@media (max-width: 1000px) {
+  .mech-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 900px) {
+  .hero .stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--s5) var(--s6);
+  }
+  .hero-visual {
+    max-width: 100%;
+    justify-self: stretch;
+  }
+  .mech-cell {
+    height: 34px;
+  }
+  .mech-cells {
+    gap: 2px;
+  }
+}
+
+@media (max-width: 760px) {
+  .mech-facts {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--s5);
+  }
+}
+
+@media (max-width: 620px) {
+  .backend-strip {
+    padding: var(--s3) 0;
+  }
+}
+
+/* ── the small motions ──────────────────────────────────────────────── */
+
+/* The cards light up where the pointer is. --mx/--my are written by
+   motion.js; the gradient is painted by the compositor. */
+.feature {
+  position: relative;
+  isolation: isolate;
+}
+
+.feature::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: radial-gradient(
+    240px circle at var(--mx, 50%) var(--my, 50%),
+    rgba(255, 214, 10, 0.07),
+    transparent 62%
+  );
+  opacity: 0;
+  transition: opacity 0.3s var(--ease);
+  pointer-events: none;
+}
+
+.feature:hover::after {
+  opacity: 1;
+}
+
+/* The reuse diagram carries something along the path: the arc is drawn in
+   a moving dash and the runner carries a light with it. */
+.loop-arc {
+  stroke-dasharray: 5 7;
+  animation: loop-dash 1.4s linear infinite;
+}
+
+.loop-arc-back {
+  animation-direction: reverse;
+}
+
+@keyframes loop-dash {
+  to { stroke-dashoffset: -24; }
+}
+
+.loop-runner {
+  fill: var(--brand);
+  filter: drop-shadow(0 0 6px rgba(255, 214, 10, 0.75));
+}
+
+.loop-block.hit {
+  fill: rgba(255, 214, 10, 0.16);
+  stroke: var(--brand-line);
+}
+
+.loop-block {
+  transition: fill 0.4s var(--ease);
+}
+
+/* The architecture arrows carry traffic: a dash that moves. */
+.arch-arrow path {
+  stroke-dasharray: 4 5;
+  animation: loop-dash 1.1s linear infinite;
+}
+
+/* The play button breathes, once, until it is clicked. */
+.video-play {
+  transition: transform 0.3s var(--ease), box-shadow 0.3s var(--ease);
+}
+
+.video-poster:hover .video-play {
+  transform: translate(-50%, -50%) scale(1.06);
+  box-shadow: 0 0 0 14px rgba(255, 214, 10, 0.08);
+}
+
+/* The backend strip: a slow scroll, and it stops when it is hovered. */
+@media (prefers-reduced-motion: reduce) {
+  .loop-arc,
+  .loop-arc-back,
+  .arch-arrow path {
+    animation: none;
+  }
+  .backend-track {
+    animation: none;
+    transform: none;
+  }
+  .feature::after {
+    display: none;
   }
 }

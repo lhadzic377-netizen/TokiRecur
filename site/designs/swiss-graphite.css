@@ -1,0 +1,493 @@
+/* ==========================================================================
+   03 · swiss-graphite
+   Twelve columns, one red, no decoration. The page is a grid and the
+   grid is the design: rules do the work that boxes usually do, the
+   headline sets the scale, and everything else gets out of the way.
+   ========================================================================== */
+
+[data-design="swiss-graphite"] {
+  --bg: #0a0a0a;
+  --bg-2: #101010;
+  --panel: #121212;
+  --panel-2: #171717;
+  --line: rgba(255, 255, 255, 0.16);
+  --line-strong: rgba(255, 255, 255, 0.42);
+  --fg: #f5f5f5;
+  --fg-dim: #b4b4b4;
+  --muted: #7a7a7a;
+  --brand: #e5342a;
+  --brand-ink: #ffffff;
+  --brand-soft: rgba(229, 52, 42, 0.14);
+  --brand-line: rgba(229, 52, 42, 0.5);
+  --cream: #f5f5f5;
+
+  --sans: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --mono: "IBM Plex Mono", monospace;
+  --step--1: 0.78rem;
+  --step-0: 1rem;
+  --step-1: 1.18rem;
+  --step-2: 1.6rem;
+  --step-3: 2.4rem;
+  --step-4: 4.4rem;
+  --radius: 0px;
+  --radius-lg: 0px;
+  --container: 1240px;
+}
+
+[data-design="swiss-graphite"] body {
+  font-family: var(--sans);
+  background: var(--bg);
+  line-height: 1.5;
+}
+
+[data-design="swiss-graphite"] .topbar {
+  background: var(--bg);
+  border-bottom: 1px solid var(--fg);
+  backdrop-filter: none;
+}
+
+[data-design="swiss-graphite"] .topbar nav {
+  max-width: var(--container);
+  height: 58px;
+  padding: 0 var(--gutter);
+}
+
+[data-design="swiss-graphite"] .brand {
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  font-size: 1.15rem;
+}
+
+[data-design="swiss-graphite"] .wordmark-accent {
+  color: var(--brand);
+}
+
+[data-design="swiss-graphite"] .links a {
+  font-size: 0.86rem;
+  font-weight: 500;
+  color: var(--fg);
+}
+
+[data-design="swiss-graphite"] .links a:hover {
+  color: var(--brand);
+}
+
+[data-design="swiss-graphite"] .btn-nav {
+  background: var(--fg);
+  color: var(--bg);
+  border-radius: 0;
+  font-weight: 600;
+}
+
+/* hero: one enormous statement, image as a plate below-right */
+[data-design="swiss-graphite"] .hero {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: var(--s5);
+  padding-top: var(--s9) !important;
+  align-items: start;
+}
+
+[data-design="swiss-graphite"] .hero-copy {
+  grid-column: 1 / span 8;
+}
+
+[data-design="swiss-graphite"] .kicker {
+  font-size: 0.74rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  grid-column: 1 / -1;
+}
+
+[data-design="swiss-graphite"] .kicker .accent {
+  color: var(--brand);
+}
+
+[data-design="swiss-graphite"] h1 {
+  font-size: clamp(2.9rem, 1rem + 5.4vw, 6rem);
+  line-height: 0.92;
+  letter-spacing: -0.045em;
+  font-weight: 800;
+  text-transform: none;
+  margin-top: var(--s5);
+}
+
+[data-design="swiss-graphite"] h1 .accent {
+  color: var(--brand);
+}
+
+[data-design="swiss-graphite"] .lede {
+  font-size: 1.1rem;
+  color: var(--fg-dim);
+  max-width: 52ch;
+  margin-top: var(--s6);
+}
+
+[data-design="swiss-graphite"] .cta {
+  margin-top: var(--s7);
+}
+
+[data-design="swiss-graphite"] .btn {
+  border-radius: 0;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  padding: 14px 26px;
+}
+
+[data-design="swiss-graphite"] .btn.primary {
+  background: var(--brand);
+  color: #fff;
+}
+
+[data-design="swiss-graphite"] .btn.primary:hover {
+  background: #ff3b30;
+}
+
+[data-design="swiss-graphite"] .btn.ghost {
+  border: 1px solid var(--fg);
+  color: var(--fg);
+  background: transparent;
+}
+
+[data-design="swiss-graphite"] .hero-visual {
+  grid-column: 9 / -1;
+  grid-row: 2 / span 4;
+  border: none;
+  background: none;
+  box-shadow: none;
+}
+
+[data-design="swiss-graphite"] .hero-visual .terminal-bar {
+  border: 1px solid var(--fg);
+  border-bottom: none;
+  font-size: 0.7rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+[data-design="swiss-graphite"] .hero-visual img {
+  border: 1px solid var(--fg);
+}
+
+/* stats: a ruled table of figures */
+[data-design="swiss-graphite"] .stats {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-top: 2px solid var(--fg);
+  margin-top: var(--s8);
+  padding-top: 0;
+  gap: 0;
+}
+
+[data-design="swiss-graphite"] .stat {
+  border-left: 1px solid var(--line-strong);
+  padding: var(--s5) var(--s5) 0;
+}
+
+[data-design="swiss-graphite"] .stat:first-child {
+  border-left: none;
+  padding-left: 0;
+}
+
+[data-design="swiss-graphite"] .stat .num {
+  font-family: var(--sans);
+  font-size: 2.7rem;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  color: var(--brand);
+}
+
+[data-design="swiss-graphite"] .stat .label {
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-top: var(--s2);
+  line-height: 1.4;
+}
+
+[data-design="swiss-graphite"] .stats-source {
+  grid-column: 1 / -1;
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin-top: var(--s5);
+  padding-top: var(--s3);
+  border-top: 1px solid var(--line);
+}
+
+/* sections: rules and whitespace */
+[data-design="swiss-graphite"] main > section {
+  max-width: var(--container);
+  border-top: 1px solid var(--line-strong);
+  padding-top: var(--s8);
+  padding-bottom: var(--s8);
+}
+
+[data-design="swiss-graphite"] section > h2,
+[data-design="swiss-graphite"] .demo-head h2 {
+  font-size: clamp(1.9rem, 1.1rem + 2.4vw, 3rem);
+  font-weight: 800;
+  letter-spacing: -0.035em;
+  line-height: 1;
+  max-width: 18ch;
+}
+
+[data-design="swiss-graphite"] .overline {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--brand);
+}
+
+[data-design="swiss-graphite"] .section-sub {
+  color: var(--fg-dim);
+  max-width: 56ch;
+}
+
+/* features: numbered grid with hairline rules */
+[data-design="swiss-graphite"] .feature-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0;
+  border-top: 1px solid var(--line-strong);
+}
+
+[data-design="swiss-graphite"] .feature {
+  counter-increment: feature;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  padding: var(--s6);
+  background: none;
+  border-radius: 0;
+  position: relative;
+}
+
+[data-design="swiss-graphite"] .feature:nth-child(3n) {
+  border-right: none;
+}
+
+[data-design="swiss-graphite"] .feature::before {
+  content: counter(feature, decimal-leading-zero);
+  position: absolute;
+  top: var(--s6);
+  right: var(--s6);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--brand);
+}
+
+[data-design="swiss-graphite"] .feature-icon {
+  display: none;
+}
+
+[data-design="swiss-graphite"] .feature h3 {
+  font-size: 1.22rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--fg);
+  margin-bottom: var(--s3);
+}
+
+[data-design="swiss-graphite"] .feature p {
+  color: var(--fg-dim);
+  font-size: 0.94rem;
+}
+
+/* steps */
+[data-design="swiss-graphite"] ol.steps > li {
+  border-top: 1px solid var(--line);
+  padding: var(--s5) 0;
+  grid-template-columns: 120px minmax(0, 1fr);
+}
+
+[data-design="swiss-graphite"] ol.steps > li::before {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  color: var(--brand);
+  font-weight: 600;
+}
+
+[data-design="swiss-graphite"] .reuse-loop svg {
+  max-width: 100%;
+}
+
+[data-design="swiss-graphite"] .loop-block {
+  fill: none;
+  stroke: var(--fg);
+}
+
+[data-design="swiss-graphite"] .loop-block.hit {
+  fill: var(--brand);
+  stroke: var(--brand);
+}
+
+[data-design="swiss-graphite"] .loop-label {
+  fill: var(--muted);
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+/* bench */
+[data-design="swiss-graphite"] .bench-tabs {
+  border-bottom: 2px solid var(--fg);
+}
+
+[data-design="swiss-graphite"] .bench-tab {
+  border-radius: 0;
+  border: none;
+  background: none;
+  font-weight: 700;
+  font-size: 0.86rem;
+  color: var(--muted);
+  padding: var(--s3) var(--s4) var(--s3) 0;
+  margin-right: var(--s4);
+}
+
+[data-design="swiss-graphite"] .bench-tab.active {
+  color: var(--fg);
+  box-shadow: inset 0 -2px 0 var(--brand);
+}
+
+[data-design="swiss-graphite"] .table-wrap {
+  border-radius: 0;
+  border: 1px solid var(--line-strong);
+}
+
+[data-design="swiss-graphite"] thead th {
+  background: var(--fg);
+  color: var(--bg);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-size: 0.68rem;
+}
+
+[data-design="swiss-graphite"] tbody td {
+  color: var(--fg-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+[data-design="swiss-graphite"] tbody tr:hover td {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+[data-design="swiss-graphite"] .grade {
+  background: none;
+  border: 1px solid var(--line-strong);
+  color: var(--fg);
+  border-radius: 0;
+}
+
+[data-design="swiss-graphite"] .grade.mid {
+  background: var(--brand);
+  color: #fff;
+  border-color: var(--brand);
+}
+
+[data-design="swiss-graphite"] .grade.bad {
+  background: none;
+  color: var(--muted);
+}
+
+/* code */
+[data-design="swiss-graphite"] .code {
+  border-radius: 0;
+  border: 1px solid var(--line-strong);
+  border-left: 3px solid var(--brand);
+  background: var(--bg-2);
+  font-size: 0.88rem;
+}
+
+[data-design="swiss-graphite"] .code-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--brand);
+}
+
+/* terminals stay technical */
+[data-design="swiss-graphite"] .demo-terminal,
+[data-design="swiss-graphite"] .terminal {
+  border-radius: 0;
+  border: 1px solid var(--line-strong);
+  box-shadow: none;
+}
+
+/* honesty */
+[data-design="swiss-graphite"] .honesty {
+  border-top: 2px solid var(--brand);
+  background: none;
+  padding: var(--s7) 0;
+}
+
+[data-design="swiss-graphite"] .honesty h2 {
+  font-weight: 800;
+  letter-spacing: -0.035em;
+  max-width: 22ch;
+}
+
+/* architecture */
+[data-design="swiss-graphite"] .arch-node {
+  border-radius: 0;
+  border: 1px solid var(--line-strong);
+  background: none;
+}
+
+[data-design="swiss-graphite"] .arch-node.core {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: #fff;
+}
+
+[data-design="swiss-graphite"] .arch-node.core small {
+  color: rgba(255, 255, 255, 0.82);
+}
+
+/* footer */
+[data-design="swiss-graphite"] footer {
+  border-top: 2px solid var(--fg);
+  background: var(--bg);
+}
+
+[data-design="swiss-graphite"] .footer-grid {
+  grid-template-columns: 1.6fr 1fr 1fr;
+}
+
+[data-design="swiss-graphite"] .footer-col h3 {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--brand);
+}
+
+@media (max-width: 1080px) {
+  [data-design="swiss-graphite"] .hero-visual {
+    grid-column: 1 / -1;
+    grid-row: auto;
+    margin-top: var(--s6);
+  }
+}
+
+@media (max-width: 900px) {
+  [data-design="swiss-graphite"] .feature-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  [data-design="swiss-graphite"] .feature {
+    border-right: none;
+  }
+  [data-design="swiss-graphite"] .stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--s5) 0;
+  }
+  [data-design="swiss-graphite"] .stat:nth-child(3) {
+    border-left: none;
+    padding-left: 0;
+  }
+}

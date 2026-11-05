@@ -1,0 +1,513 @@
+/* ==========================================================================
+   06 · blueprint-cyan
+   A technical drawing that happens to be a website: graph paper under
+   everything, dimension lines, tick marks, and a cyan that reads as a
+   plotter pen rather than a brand colour.
+   ========================================================================== */
+
+[data-design="blueprint-cyan"] {
+  --bg: #061627;
+  --bg-2: #08203a;
+  --panel: #0a2743;
+  --panel-2: #0d3053;
+  --line: rgba(126, 216, 255, 0.22);
+  --line-strong: rgba(126, 216, 255, 0.5);
+  --fg: #e2f4ff;
+  --fg-dim: #a8cde6;
+  --muted: #7ba6c4;
+  --brand: #7ed8ff;
+  --brand-ink: #02121f;
+  --brand-soft: rgba(126, 216, 255, 0.12);
+  --brand-line: rgba(126, 216, 255, 0.45);
+  --cream: #e2f4ff;
+
+  --sans: "Space Grotesk", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", monospace;
+  --step--1: 0.76rem;
+  --step-0: 0.96rem;
+  --step-1: 1.12rem;
+  --step-2: 1.5rem;
+  --step-3: 2.1rem;
+  --step-4: 3.2rem;
+  --radius: 3px;
+  --radius-lg: 4px;
+  --container: 1180px;
+}
+
+[data-design="blueprint-cyan"] body {
+  font-family: var(--sans);
+  background-color: var(--bg);
+  background-image:
+    linear-gradient(rgba(126, 216, 255, 0.055) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(126, 216, 255, 0.055) 1px, transparent 1px),
+    linear-gradient(rgba(126, 216, 255, 0.11) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(126, 216, 255, 0.11) 1px, transparent 1px);
+  background-size: 24px 24px, 24px 24px, 120px 120px, 120px 120px;
+  background-position: -1px -1px;
+  line-height: 1.6;
+}
+
+[data-design="blueprint-cyan"] .topbar {
+  background: rgba(6, 22, 39, 0.9);
+  border-bottom: 1px solid var(--line-strong);
+  backdrop-filter: blur(6px);
+}
+
+[data-design="blueprint-cyan"] .topbar nav {
+  max-width: var(--container);
+  height: 58px;
+  padding: 0 var(--gutter);
+}
+
+[data-design="blueprint-cyan"] .brand {
+  font-family: var(--mono);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+[data-design="blueprint-cyan"] .wordmark-accent {
+  color: var(--brand);
+}
+
+[data-design="blueprint-cyan"] .links a {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  color: var(--fg-dim);
+  position: relative;
+}
+
+[data-design="blueprint-cyan"] .links a::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -4px;
+  height: 1px;
+  background: var(--brand);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 0.25s var(--ease);
+}
+
+[data-design="blueprint-cyan"] .links a:hover::after {
+  transform: scaleX(1);
+}
+
+[data-design="blueprint-cyan"] .btn-nav {
+  border: 1px solid var(--brand-line);
+  color: var(--brand);
+  background: transparent;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+}
+
+/* hero as a dimensioned drawing */
+[data-design="blueprint-cyan"] .hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+  gap: var(--s8);
+  padding-top: var(--s9) !important;
+  align-items: center;
+  position: relative;
+}
+
+[data-design="blueprint-cyan"] .hero-copy {
+  position: relative;
+  padding: var(--s7);
+  border: 1px solid var(--line);
+  background: rgba(10, 39, 67, 0.45);
+}
+
+[data-design="blueprint-cyan"] .hero-copy::before,
+[data-design="blueprint-cyan"] .hero-copy::after {
+  content: "";
+  position: absolute;
+  background: var(--brand);
+  opacity: 0.75;
+}
+
+/* corner ticks, like a drawing sheet */
+[data-design="blueprint-cyan"] .hero-copy::before {
+  top: -1px;
+  left: -1px;
+  width: 26px;
+  height: 26px;
+  background: linear-gradient(var(--brand), var(--brand)) top left / 26px 1px no-repeat,
+    linear-gradient(var(--brand), var(--brand)) top left / 1px 26px no-repeat;
+  opacity: 1;
+}
+
+[data-design="blueprint-cyan"] .hero-copy::after {
+  bottom: -1px;
+  right: -1px;
+  width: 26px;
+  height: 26px;
+  background: linear-gradient(var(--brand), var(--brand)) bottom right / 26px 1px no-repeat,
+    linear-gradient(var(--brand), var(--brand)) bottom right / 1px 26px no-repeat;
+  opacity: 1;
+}
+
+[data-design="blueprint-cyan"] .kicker {
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--muted);
+  display: flex;
+  gap: var(--s3);
+  align-items: center;
+}
+
+[data-design="blueprint-cyan"] .kicker .accent {
+  color: var(--brand);
+}
+
+[data-design="blueprint-cyan"] h1 {
+  font-size: clamp(2.2rem, 1.3rem + 3.2vw, 3.9rem);
+  line-height: 1.06;
+  font-weight: 500;
+  letter-spacing: -0.028em;
+  margin-top: var(--s5);
+}
+
+[data-design="blueprint-cyan"] h1 .accent {
+  color: var(--brand);
+}
+
+[data-design="blueprint-cyan"] .lede {
+  color: var(--fg-dim);
+  max-width: 52ch;
+  margin-top: var(--s5);
+  font-size: 1rem;
+}
+
+[data-design="blueprint-cyan"] .cta {
+  margin-top: var(--s6);
+}
+
+[data-design="blueprint-cyan"] .btn {
+  border-radius: 2px;
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  padding: 12px 20px;
+}
+
+[data-design="blueprint-cyan"] .btn.primary {
+  background: var(--brand);
+  color: var(--brand-ink);
+}
+
+[data-design="blueprint-cyan"] .btn.ghost {
+  border: 1px solid var(--line-strong);
+  color: var(--fg);
+  background: transparent;
+}
+
+[data-design="blueprint-cyan"] .hero-visual {
+  border: 1px solid var(--line-strong);
+  background: rgba(10, 39, 67, 0.5);
+  padding: var(--s4);
+}
+
+[data-design="blueprint-cyan"] .hero-visual .terminal-bar {
+  display: none;
+}
+
+[data-design="blueprint-cyan"] .hero-visual img {
+  border: 1px solid var(--line);
+  display: block;
+}
+
+/* a drawn dimension line under the hero */
+[data-design="blueprint-cyan"] .hero::after {
+  content: "";
+  grid-column: 1 / -1;
+  height: 1px;
+  background: linear-gradient(90deg, var(--brand), transparent 70%);
+  opacity: 0.5;
+  margin-top: var(--s6);
+}
+
+[data-design="blueprint-cyan"] .stats {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  border: 1px solid var(--line);
+  border-top: none;
+  padding-top: 0;
+}
+
+[data-design="blueprint-cyan"] .stat {
+  padding: var(--s5);
+  border-right: 1px solid var(--line);
+}
+
+[data-design="blueprint-cyan"] .stat:last-child {
+  border-right: none;
+}
+
+[data-design="blueprint-cyan"] .stat .num {
+  font-family: var(--mono);
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--brand);
+}
+
+[data-design="blueprint-cyan"] .stat .label {
+  font-size: 0.76rem;
+  color: var(--muted);
+  margin-top: var(--s2);
+  line-height: 1.45;
+}
+
+[data-design="blueprint-cyan"] .stats-source {
+  grid-column: 1 / -1;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--muted);
+  border-left: 2px solid var(--brand-line);
+  padding-left: var(--s4);
+}
+
+/* sections */
+[data-design="blueprint-cyan"] main > section {
+  max-width: var(--container);
+  padding-top: var(--s8);
+  padding-bottom: var(--s8);
+  border-top: 1px solid var(--line);
+}
+
+[data-design="blueprint-cyan"] section > h2,
+[data-design="blueprint-cyan"] .demo-head h2 {
+  font-size: 1.55rem;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  max-width: 26ch;
+}
+
+[data-design="blueprint-cyan"] .overline {
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--brand);
+}
+
+[data-design="blueprint-cyan"] .section-sub {
+  color: var(--fg-dim);
+  max-width: 64ch;
+}
+
+[data-design="blueprint-cyan"] .feature-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--s4);
+}
+
+[data-design="blueprint-cyan"] .feature {
+  border: 1px solid var(--line);
+  background: rgba(10, 39, 67, 0.4);
+  padding: var(--s5);
+  border-radius: 2px;
+  position: relative;
+}
+
+[data-design="blueprint-cyan"] .feature::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 18px;
+  height: 2px;
+  background: var(--brand);
+}
+
+[data-design="blueprint-cyan"] .feature-icon {
+  width: 18px;
+  height: 18px;
+  color: var(--brand);
+  margin-bottom: var(--s3);
+}
+
+[data-design="blueprint-cyan"] .feature h3 {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--fg);
+  margin-bottom: var(--s2);
+}
+
+[data-design="blueprint-cyan"] .feature p {
+  color: var(--fg-dim);
+  font-size: 0.9rem;
+}
+
+[data-design="blueprint-cyan"] ol.steps {
+  gap: 0;
+  border: 1px solid var(--line);
+}
+
+[data-design="blueprint-cyan"] ol.steps > li {
+  border-bottom: 1px solid var(--line);
+  padding: var(--s5);
+  grid-template-columns: 70px minmax(0, 1fr);
+}
+
+[data-design="blueprint-cyan"] ol.steps > li:last-child {
+  border-bottom: none;
+}
+
+[data-design="blueprint-cyan"] ol.steps > li::before {
+  font-family: var(--mono);
+  font-size: 0.74rem;
+  color: var(--brand);
+}
+
+[data-design="blueprint-cyan"] .reuse-loop {
+  border: 1px solid var(--line);
+  background: rgba(10, 39, 67, 0.4);
+  padding: var(--s4);
+}
+
+[data-design="blueprint-cyan"] .loop-block {
+  fill: none;
+  stroke: var(--brand);
+  stroke-width: 1.2;
+}
+
+[data-design="blueprint-cyan"] .loop-block.hit {
+  fill: rgba(126, 216, 255, 0.2);
+}
+
+[data-design="blueprint-cyan"] .loop-label {
+  fill: var(--muted);
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+}
+
+[data-design="blueprint-cyan"] .loop-arc {
+  stroke: var(--brand);
+  stroke-dasharray: 6 5;
+}
+
+[data-design="blueprint-cyan"] .bench-tabs {
+  border: 1px solid var(--line);
+  background: rgba(10, 39, 67, 0.5);
+}
+
+[data-design="blueprint-cyan"] .bench-tab {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--muted);
+  border: none;
+  border-right: 1px solid var(--line);
+  background: none;
+  padding: var(--s3) var(--s4);
+}
+
+[data-design="blueprint-cyan"] .bench-tab.active {
+  color: var(--brand-ink);
+  background: var(--brand);
+}
+
+[data-design="blueprint-cyan"] .table-wrap {
+  border: 1px solid var(--line);
+  background: rgba(10, 39, 67, 0.4);
+}
+
+[data-design="blueprint-cyan"] thead th {
+  background: rgba(126, 216, 255, 0.08);
+  color: var(--brand);
+  font-family: var(--mono);
+  font-size: 0.64rem;
+  letter-spacing: 0.14em;
+}
+
+[data-design="blueprint-cyan"] tbody td {
+  color: var(--fg-dim);
+  font-family: var(--mono);
+  font-size: 0.8rem;
+}
+
+[data-design="blueprint-cyan"] tbody td:first-child {
+  color: var(--fg);
+}
+
+[data-design="blueprint-cyan"] .grade {
+  background: none;
+  border: 1px solid var(--brand-line);
+  color: var(--brand);
+  border-radius: 2px;
+  font-family: var(--mono);
+}
+
+[data-design="blueprint-cyan"] .code {
+  background: rgba(4, 16, 30, 0.7);
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  font-family: var(--mono);
+}
+
+[data-design="blueprint-cyan"] .code-label {
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+[data-design="blueprint-cyan"] .demo-terminal {
+  border: 1px solid var(--line-strong);
+  background: #04101d;
+}
+
+[data-design="blueprint-cyan"] .honesty {
+  border: 1px solid var(--line-strong);
+  background: rgba(10, 39, 67, 0.4);
+  padding: var(--s7);
+}
+
+[data-design="blueprint-cyan"] .arch-node {
+  border: 1px solid var(--line);
+  background: rgba(10, 39, 67, 0.5);
+  border-radius: 2px;
+}
+
+[data-design="blueprint-cyan"] .arch-node.core {
+  border-color: var(--brand);
+  color: var(--brand);
+}
+
+[data-design="blueprint-cyan"] footer {
+  border-top: 1px solid var(--line-strong);
+  background: rgba(6, 22, 39, 0.8);
+}
+
+[data-design="blueprint-cyan"] .footer-grid {
+  grid-template-columns: 1.6fr 1fr 1fr;
+}
+
+[data-design="blueprint-cyan"] .footer-col h3 {
+  font-family: var(--mono);
+  font-size: 0.64rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--brand);
+}
+
+@media (max-width: 900px) {
+  [data-design="blueprint-cyan"] .hero {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  [data-design="blueprint-cyan"] .feature-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  [data-design="blueprint-cyan"] .stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  [data-design="blueprint-cyan"] .stat:nth-child(2n) {
+    border-right: none;
+  }
+}

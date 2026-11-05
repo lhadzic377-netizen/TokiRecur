@@ -33,6 +33,8 @@ PUBLIC_FILES = (
     "fonts.css",
     "head.js",
     "app.js",
+    "mechanism.js",
+    "motion.js",
     "tui.js",
     "favicon.png",
     "favicon.ico",

@@ -1,0 +1,518 @@
+/* ==========================================================================
+   02 · instrument-editorial
+   A magazine about a system. Instrument Serif carries the voice, oxblood
+   carries the emphasis, and the layout behaves like a spread: rules,
+   an asymmetric measure, captions in the margin.
+   ========================================================================== */
+
+[data-design="instrument-editorial"] {
+  --bg: #0d0c0b;
+  --bg-2: #131211;
+  --panel: #161514;
+  --panel-2: #1c1a18;
+  --line: rgba(242, 236, 225, 0.14);
+  --line-strong: rgba(242, 236, 225, 0.3);
+  --fg: #f2ece1;
+  --fg-dim: #c9c1b4;
+  --muted: #8f887c;
+  --brand: #c8543a;
+  --brand-ink: #120604;
+  --brand-soft: rgba(200, 84, 58, 0.12);
+  --brand-line: rgba(200, 84, 58, 0.4);
+  --cream: #f2ece1;
+
+  --sans: "Instrument Serif", Georgia, serif;
+  --mono: "IBM Plex Mono", ui-monospace, monospace;
+  --step--1: 0.82rem;
+  --step-0: 1.02rem;
+  --step-1: 1.22rem;
+  --step-2: 1.65rem;
+  --step-3: 2.4rem;
+  --step-4: 4.2rem;
+  --radius: 2px;
+  --radius-lg: 3px;
+  --container: 1120px;
+}
+
+[data-design="instrument-editorial"] body {
+  font-family: var(--sans);
+  font-size: 1.02rem;
+  line-height: 1.62;
+  background: var(--bg);
+}
+
+[data-design="instrument-editorial"] h1,
+[data-design="instrument-editorial"] h2,
+[data-design="instrument-editorial"] h3,
+[data-design="instrument-editorial"] .stat .num,
+[data-design="instrument-editorial"] .btn {
+  font-family: var(--sans);
+  font-weight: 400;
+}
+
+[data-design="instrument-editorial"] .topbar {
+  background: rgba(13, 12, 11, 0.9);
+  border-bottom: 1px solid var(--line);
+}
+
+[data-design="instrument-editorial"] .topbar nav {
+  max-width: var(--container);
+  padding: 0 var(--gutter);
+  height: 64px;
+}
+
+[data-design="instrument-editorial"] .brand {
+  font-family: var(--sans);
+  font-size: 1.35rem;
+  letter-spacing: -0.01em;
+}
+
+[data-design="instrument-editorial"] .wordmark-accent {
+  color: var(--brand);
+  font-style: italic;
+}
+
+[data-design="instrument-editorial"] .links a {
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+}
+
+[data-design="instrument-editorial"] .links a:hover {
+  color: var(--brand);
+}
+
+[data-design="instrument-editorial"] .btn-nav {
+  border: 1px solid var(--brand-line);
+  color: var(--brand);
+  background: transparent;
+  border-radius: 2px;
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+/* ── hero: a spread ─────────────────────────────────────────────────── */
+
+[data-design="instrument-editorial"] .hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  gap: var(--s8);
+  align-items: end;
+  padding-top: var(--s10) !important;
+  padding-bottom: var(--s9) !important;
+  position: relative;
+}
+
+[data-design="instrument-editorial"] .hero::before {
+  content: "";
+  position: absolute;
+  inset: 0 calc(var(--gutter) * -1);
+  background:
+    radial-gradient(90% 70% at 88% 8%, rgba(200, 84, 58, 0.13), transparent 62%),
+    linear-gradient(180deg, rgba(242, 236, 225, 0.035), transparent 30%);
+  pointer-events: none;
+}
+
+[data-design="instrument-editorial"] .hero-copy {
+  position: relative;
+}
+
+[data-design="instrument-editorial"] .kicker {
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: var(--s6);
+}
+
+[data-design="instrument-editorial"] .kicker .accent {
+  color: var(--brand);
+}
+
+[data-design="instrument-editorial"] h1 {
+  font-size: clamp(2.6rem, 1.4rem + 4.2vw, 5.1rem);
+  line-height: 0.98;
+  letter-spacing: -0.022em;
+  font-weight: 400;
+  max-width: 15ch;
+}
+
+[data-design="instrument-editorial"] h1 .accent {
+  color: var(--brand);
+  font-style: italic;
+}
+
+[data-design="instrument-editorial"] .lede {
+  font-size: 1.16rem;
+  line-height: 1.58;
+  color: var(--fg-dim);
+  max-width: 46ch;
+  margin-top: var(--s6);
+}
+
+[data-design="instrument-editorial"] .cta {
+  margin-top: var(--s7);
+}
+
+[data-design="instrument-editorial"] .btn {
+  border-radius: 2px;
+  padding: 13px 24px;
+  font-size: 1rem;
+}
+
+[data-design="instrument-editorial"] .btn.primary {
+  background: var(--brand);
+  color: var(--brand-ink);
+}
+
+[data-design="instrument-editorial"] .btn.primary:hover {
+  background: #d9654b;
+}
+
+[data-design="instrument-editorial"] .btn.ghost {
+  border: 1px solid var(--line-strong);
+  color: var(--fg);
+  background: transparent;
+}
+
+[data-design="instrument-editorial"] .hero-visual {
+  border: none;
+  background: none;
+  box-shadow: none;
+  overflow: visible;
+}
+
+[data-design="instrument-editorial"] .hero-visual .terminal-bar {
+  display: none;
+}
+
+[data-design="instrument-editorial"] .hero-visual img {
+  border-radius: 2px;
+  border: 1px solid var(--line-strong);
+  box-shadow: 24px 24px 0 -22px rgba(200, 84, 58, 0.55);
+}
+
+/* stats as a colophon row */
+[data-design="instrument-editorial"] .stats {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  border-top: 1px solid var(--line-strong);
+  border-bottom: 1px solid var(--line-strong);
+  padding-top: var(--s5);
+}
+
+[data-design="instrument-editorial"] .stat {
+  padding: 0 var(--s5);
+  border-left: 1px solid var(--line);
+}
+
+[data-design="instrument-editorial"] .stat:first-child {
+  border-left: none;
+  padding-left: 0;
+}
+
+[data-design="instrument-editorial"] .stat .num {
+  font-size: 2.4rem;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  color: var(--fg);
+}
+
+[data-design="instrument-editorial"] .stat .label {
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-top: var(--s3);
+  line-height: 1.5;
+}
+
+[data-design="instrument-editorial"] .stats-source {
+  grid-column: 1 / -1;
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  color: var(--muted);
+  margin-top: var(--s5);
+  padding-top: var(--s4);
+  border-top: 1px solid var(--line);
+}
+
+[data-design="instrument-editorial"] .stats-source a {
+  color: var(--brand);
+}
+
+/* ── sections ────────────────────────────────────────────────────────── */
+
+[data-design="instrument-editorial"] main > section {
+  max-width: var(--container);
+  padding-top: var(--s9);
+  padding-bottom: var(--s9);
+  border-top: 1px solid var(--line);
+}
+
+[data-design="instrument-editorial"] section > h2,
+[data-design="instrument-editorial"] .demo-head h2 {
+  font-size: clamp(2rem, 1.2rem + 2.6vw, 3.1rem);
+  line-height: 1.06;
+  letter-spacing: -0.018em;
+  max-width: 20ch;
+}
+
+[data-design="instrument-editorial"] .overline {
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--brand);
+}
+
+[data-design="instrument-editorial"] .section-sub {
+  font-size: 1.08rem;
+  color: var(--fg-dim);
+  max-width: 58ch;
+}
+
+/* features: two columns of editorial entries */
+[data-design="instrument-editorial"] .feature-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--s7) var(--s8);
+}
+
+[data-design="instrument-editorial"] .feature {
+  border-top: 1px solid var(--line-strong);
+  padding-top: var(--s5);
+  background: none;
+  border-radius: 0;
+}
+
+[data-design="instrument-editorial"] .feature-icon {
+  width: 18px;
+  height: 18px;
+  color: var(--brand);
+  margin-bottom: var(--s4);
+}
+
+[data-design="instrument-editorial"] .feature h3 {
+  font-size: 1.5rem;
+  line-height: 1.15;
+  color: var(--fg);
+  margin-bottom: var(--s3);
+}
+
+[data-design="instrument-editorial"] .feature p {
+  color: var(--fg-dim);
+  font-size: 0.98rem;
+}
+
+/* steps as a numbered essay */
+[data-design="instrument-editorial"] .steps {
+  counter-reset: step;
+  display: grid;
+  gap: var(--s6);
+}
+
+[data-design="instrument-editorial"] .steps > li {
+  display: grid;
+  grid-template-columns: 90px 1fr;
+  gap: var(--s5);
+  align-items: start;
+  border-top: 1px solid var(--line);
+  padding-top: var(--s5);
+}
+
+[data-design="instrument-editorial"] .steps > li::before {
+  content: attr(data-n);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.14em;
+  color: var(--brand);
+  padding-top: 4px;
+}
+
+[data-design="instrument-editorial"] .steps .body {
+  font-size: 1.06rem;
+  color: var(--fg-dim);
+}
+
+[data-design="instrument-editorial"] .steps strong {
+  color: var(--fg);
+  font-weight: 400;
+  font-style: italic;
+  font-size: 1.25rem;
+}
+
+[data-design="instrument-editorial"] code {
+  font-family: var(--mono);
+  font-size: 0.86em;
+  color: var(--brand);
+}
+
+/* bench table as a printed table */
+[data-design="instrument-editorial"] .bench-tabs {
+  border-bottom: 1px solid var(--line-strong);
+}
+
+[data-design="instrument-editorial"] .bench-tab {
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border: none;
+  background: none;
+  padding: var(--s3) var(--s4) var(--s3) 0;
+  margin-right: var(--s4);
+}
+
+[data-design="instrument-editorial"] .bench-tab.active {
+  color: var(--brand);
+  border-bottom: 1px solid var(--brand);
+}
+
+[data-design="instrument-editorial"] .table-wrap {
+  border: none;
+  border-top: 1px solid var(--line-strong);
+  border-radius: 0;
+  background: none;
+}
+
+[data-design="instrument-editorial"] table {
+  font-size: 0.92rem;
+}
+
+[data-design="instrument-editorial"] thead th {
+  background: none;
+  border-bottom: 1px solid var(--line-strong);
+  font-family: var(--mono);
+  font-size: 0.64rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+[data-design="instrument-editorial"] tbody td {
+  color: var(--fg-dim);
+  border-bottom: 1px solid var(--line);
+}
+
+[data-design="instrument-editorial"] .grade {
+  background: none;
+  border: 1px solid var(--line-strong);
+  color: var(--fg-dim);
+  border-radius: 2px;
+  font-family: var(--mono);
+}
+
+[data-design="instrument-editorial"] .grade.mid {
+  color: var(--brand);
+  border-color: var(--brand-line);
+  background: none;
+}
+
+/* code as a footnote block */
+[data-design="instrument-editorial"] .code {
+  background: var(--bg-2);
+  border: none;
+  border-left: 1px solid var(--brand-line);
+  border-radius: 0;
+  font-family: var(--mono);
+  font-size: 0.86rem;
+  padding: var(--s5) var(--s6);
+}
+
+[data-design="instrument-editorial"] .code-label {
+  font-family: var(--mono);
+  font-size: 0.64rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* the demo, framed like a plate */
+[data-design="instrument-editorial"] .demo-terminal {
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  box-shadow: none;
+  background: #0a0a09;
+}
+
+[data-design="instrument-editorial"] .demo-real img {
+  border: 1px solid var(--line);
+}
+
+/* meet toki */
+[data-design="instrument-editorial"] .meet-toke figure img:first-child {
+  border-radius: 2px;
+  filter: saturate(0.92) contrast(1.03);
+}
+
+[data-design="instrument-editorial"] .toke-tag {
+  font-family: var(--mono);
+  font-size: 0.64rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--brand);
+}
+
+/* honesty */
+[data-design="instrument-editorial"] .honesty {
+  background: var(--bg-2);
+  border: none;
+  border-top: 2px solid var(--brand);
+  padding: var(--s8);
+}
+
+[data-design="instrument-editorial"] .honesty-body {
+  font-size: 1.06rem;
+  color: var(--fg-dim);
+}
+
+/* footer */
+[data-design="instrument-editorial"] footer {
+  background: var(--bg-2);
+  border-top: 1px solid var(--line-strong);
+}
+
+[data-design="instrument-editorial"] .footer-grid {
+  grid-template-columns: 1.6fr 1fr 1fr;
+}
+
+[data-design="instrument-editorial"] .footer-col h3 {
+  font-family: var(--mono);
+  font-size: 0.64rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--brand);
+}
+
+[data-design="instrument-editorial"] .footer-col a {
+  font-size: 0.98rem;
+  color: var(--fg-dim);
+}
+
+@media (max-width: 900px) {
+  [data-design="instrument-editorial"] .hero {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--s7);
+  }
+  [data-design="instrument-editorial"] .stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--s5) 0;
+  }
+  [data-design="instrument-editorial"] .stat:nth-child(3) {
+    border-left: none;
+    padding-left: 0;
+  }
+  [data-design="instrument-editorial"] .feature-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

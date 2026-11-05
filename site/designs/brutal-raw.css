@@ -1,0 +1,458 @@
+/* ==========================================================================
+   09 · brutal-raw
+   No radius, no shadow, no politeness. The page is a document that has
+   decided to be readable: hard rules, system mono, and one magenta that
+   behaves like a highlighter.
+   ========================================================================== */
+
+[data-design="brutal-raw"] {
+  --bg: #080808;
+  --bg-2: #0e0e0e;
+  --panel: #111111;
+  --panel-2: #161616;
+  --line: rgba(255, 255, 255, 0.28);
+  --line-strong: rgba(255, 255, 255, 0.7);
+  --fg: #f2f2f2;
+  --fg-dim: #b8b8b8;
+  --muted: #8a8a8a;
+  --brand: #ff2d78;
+  --brand-ink: #080808;
+  --brand-soft: rgba(255, 45, 120, 0.16);
+  --brand-line: rgba(255, 45, 120, 0.7);
+  --cream: #f2f2f2;
+
+  --sans: "Space Mono", ui-monospace, monospace;
+  --mono: "Space Mono", ui-monospace, monospace;
+  --step--1: 0.78rem;
+  --step-0: 0.95rem;
+  --step-1: 1.1rem;
+  --step-2: 1.45rem;
+  --step-3: 2rem;
+  --step-4: 3rem;
+  --radius: 0px;
+  --radius-lg: 0px;
+  --container: 1120px;
+}
+
+[data-design="brutal-raw"] body {
+  font-family: var(--sans);
+  background: var(--bg);
+  line-height: 1.55;
+}
+
+[data-design="brutal-raw"] * {
+  border-radius: 0 !important;
+}
+
+[data-design="brutal-raw"] .topbar {
+  background: var(--bg);
+  border-bottom: 2px solid var(--fg);
+  backdrop-filter: none;
+}
+
+[data-design="brutal-raw"] .topbar nav {
+  max-width: var(--container);
+  height: 54px;
+  padding: 0 var(--gutter);
+}
+
+[data-design="brutal-raw"] .brand {
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+[data-design="brutal-raw"] .wordmark-accent {
+  background: var(--brand);
+  color: var(--brand-ink);
+  padding: 0 4px;
+}
+
+[data-design="brutal-raw"] .links a {
+  color: var(--fg);
+  text-decoration: underline;
+  text-decoration-color: var(--line-strong);
+  text-underline-offset: 4px;
+  font-size: 0.82rem;
+}
+
+[data-design="brutal-raw"] .links a:hover {
+  background: var(--brand);
+  color: var(--brand-ink);
+  text-decoration: none;
+}
+
+[data-design="brutal-raw"] .btn-nav {
+  border: 2px solid var(--fg);
+  background: transparent;
+  color: var(--fg);
+  font-weight: 700;
+}
+
+[data-design="brutal-raw"] .hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0;
+  padding-top: var(--s7) !important;
+  border-bottom: 2px solid var(--fg);
+}
+
+[data-design="brutal-raw"] .hero-copy {
+  padding-right: var(--s6);
+  border-right: 2px solid var(--fg);
+}
+
+[data-design="brutal-raw"] .kicker {
+  font-size: 0.74rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+[data-design="brutal-raw"] .kicker .accent {
+  color: var(--brand);
+}
+
+[data-design="brutal-raw"] h1 {
+  font-size: clamp(2rem, 1.2rem + 2.9vw, 3.5rem);
+  line-height: 1.06;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  margin-top: var(--s5);
+  text-transform: uppercase;
+}
+
+[data-design="brutal-raw"] h1 .accent {
+  background: var(--brand);
+  color: var(--brand-ink);
+  padding: 0 6px;
+}
+
+[data-design="brutal-raw"] .lede {
+  color: var(--fg-dim);
+  margin-top: var(--s5);
+  max-width: 54ch;
+}
+
+[data-design="brutal-raw"] .cta {
+  margin-top: var(--s6);
+}
+
+[data-design="brutal-raw"] .btn {
+  border: 2px solid var(--fg);
+  font-weight: 700;
+  font-size: 0.84rem;
+  padding: 12px 20px;
+  box-shadow: 4px 4px 0 var(--fg);
+  transition: transform 0.1s ease, box-shadow 0.1s ease;
+}
+
+[data-design="brutal-raw"] .btn:hover {
+  transform: translate(4px, 4px);
+  box-shadow: 0 0 0 var(--fg);
+}
+
+[data-design="brutal-raw"] .btn.primary {
+  background: var(--brand);
+  color: var(--brand-ink);
+  border-color: var(--brand);
+  box-shadow: 4px 4px 0 var(--fg);
+}
+
+[data-design="brutal-raw"] .btn.ghost {
+  background: transparent;
+  color: var(--fg);
+}
+
+[data-design="brutal-raw"] .hero-visual {
+  padding-left: var(--s6);
+  border: none;
+  background: none;
+  box-shadow: none;
+}
+
+[data-design="brutal-raw"] .hero-visual .terminal-bar {
+  border: 2px solid var(--fg);
+  border-bottom: none;
+  background: var(--bg);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+[data-design="brutal-raw"] .hero-visual img {
+  border: 2px solid var(--fg);
+}
+
+[data-design="brutal-raw"] .stats {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border: 2px solid var(--fg);
+  border-top: none;
+  padding: 0;
+}
+
+[data-design="brutal-raw"] .stat {
+  border-right: 2px solid var(--fg);
+  padding: var(--s5);
+}
+
+[data-design="brutal-raw"] .stat:last-child {
+  border-right: none;
+}
+
+[data-design="brutal-raw"] .stat .num {
+  color: var(--brand);
+  font-size: 1.7rem;
+  font-weight: 700;
+}
+
+[data-design="brutal-raw"] .stat .label {
+  color: var(--muted);
+  font-size: 0.72rem;
+  margin-top: var(--s2);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+[data-design="brutal-raw"] .stats-source {
+  grid-column: 1 / -1;
+  border: 2px solid var(--fg);
+  border-top: none;
+  padding: var(--s3) var(--s5);
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+[data-design="brutal-raw"] main > section {
+  max-width: var(--container);
+  padding-top: var(--s7);
+  padding-bottom: var(--s7);
+  border-bottom: 2px solid var(--fg);
+}
+
+[data-design="brutal-raw"] section > h2,
+[data-design="brutal-raw"] .demo-head h2 {
+  font-size: clamp(1.5rem, 1.1rem + 1.6vw, 2.3rem);
+  text-transform: uppercase;
+  letter-spacing: -0.02em;
+  max-width: 26ch;
+}
+
+[data-design="brutal-raw"] .overline {
+  color: var(--brand);
+  font-size: 0.74rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+[data-design="brutal-raw"] .section-sub {
+  color: var(--fg-dim);
+  max-width: 62ch;
+}
+
+[data-design="brutal-raw"] .feature-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--s5);
+}
+
+[data-design="brutal-raw"] .feature {
+  border: 2px solid var(--fg);
+  padding: var(--s5);
+  background: transparent;
+}
+
+[data-design="brutal-raw"] .feature:hover {
+  background: var(--brand);
+  color: var(--brand-ink);
+}
+
+[data-design="brutal-raw"] .feature:hover p,
+[data-design="brutal-raw"] .feature:hover h3 {
+  color: var(--brand-ink);
+}
+
+[data-design="brutal-raw"] .feature-icon {
+  width: 18px;
+  height: 18px;
+  color: var(--brand);
+}
+
+[data-design="brutal-raw"] .feature:hover .feature-icon {
+  color: var(--brand-ink);
+}
+
+[data-design="brutal-raw"] .feature h3 {
+  font-size: 0.95rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg);
+  margin-bottom: var(--s2);
+}
+
+[data-design="brutal-raw"] .feature p {
+  color: var(--fg-dim);
+  font-size: 0.86rem;
+}
+
+[data-design="brutal-raw"] ol.steps {
+  display: grid;
+  gap: 0;
+}
+
+[data-design="brutal-raw"] ol.steps > li {
+  border: 2px solid var(--fg);
+  border-bottom: none;
+  padding: var(--s5);
+  grid-template-columns: 70px minmax(0, 1fr);
+}
+
+[data-design="brutal-raw"] ol.steps > li:last-child {
+  border-bottom: 2px solid var(--fg);
+}
+
+[data-design="brutal-raw"] ol.steps > li::before {
+  color: var(--brand);
+  font-weight: 700;
+}
+
+[data-design="brutal-raw"] .reuse-loop {
+  border: 2px solid var(--fg);
+  padding: var(--s4);
+}
+
+[data-design="brutal-raw"] .loop-block {
+  fill: none;
+  stroke: var(--fg);
+  stroke-width: 2;
+}
+
+[data-design="brutal-raw"] .loop-block.hit {
+  fill: var(--brand);
+  stroke: var(--brand);
+}
+
+[data-design="brutal-raw"] .loop-label {
+  fill: var(--muted);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+[data-design="brutal-raw"] .bench-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+  border: 2px solid var(--fg);
+  border-bottom: none;
+}
+
+[data-design="brutal-raw"] .bench-tab {
+  border: none;
+  border-right: 2px solid var(--fg);
+  background: transparent;
+  color: var(--fg-dim);
+  font-size: 0.76rem;
+  padding: 10px 14px;
+}
+
+[data-design="brutal-raw"] .bench-tab.active {
+  background: var(--brand);
+  color: var(--brand-ink);
+}
+
+[data-design="brutal-raw"] .table-wrap {
+  border: 2px solid var(--fg);
+}
+
+[data-design="brutal-raw"] thead th {
+  background: var(--fg);
+  color: var(--bg);
+  text-transform: uppercase;
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+}
+
+[data-design="brutal-raw"] tbody td {
+  color: var(--fg-dim);
+  border-bottom: 1px solid var(--line);
+}
+
+[data-design="brutal-raw"] .grade {
+  background: transparent;
+  border: 2px solid var(--fg);
+  color: var(--fg);
+}
+
+[data-design="brutal-raw"] .code {
+  border: 2px solid var(--fg);
+  background: var(--bg-2);
+  font-size: 0.84rem;
+}
+
+[data-design="brutal-raw"] .code-label {
+  color: var(--brand);
+  font-size: 0.74rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+[data-design="brutal-raw"] .demo-terminal {
+  border: 2px solid var(--fg);
+  background: #000;
+}
+
+[data-design="brutal-raw"] .honesty {
+  border: 2px solid var(--fg);
+  border-left: 12px solid var(--brand);
+  padding: var(--s6);
+}
+
+[data-design="brutal-raw"] .arch-node {
+  border: 2px solid var(--fg);
+  background: transparent;
+}
+
+[data-design="brutal-raw"] .arch-node.core {
+  background: var(--brand);
+  color: var(--brand-ink);
+  border-color: var(--brand);
+}
+
+[data-design="brutal-raw"] footer {
+  border-top: 2px solid var(--fg);
+}
+
+[data-design="brutal-raw"] .footer-grid {
+  grid-template-columns: 1.6fr 1fr 1fr;
+}
+
+[data-design="brutal-raw"] .footer-col h3 {
+  color: var(--brand);
+  font-size: 0.74rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+@media (max-width: 900px) {
+  [data-design="brutal-raw"] .hero {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  [data-design="brutal-raw"] .hero-copy {
+    border-right: none;
+    border-bottom: 2px solid var(--fg);
+    padding-right: 0;
+    padding-bottom: var(--s6);
+  }
+  [data-design="brutal-raw"] .hero-visual {
+    padding-left: 0;
+    padding-top: var(--s6);
+  }
+  [data-design="brutal-raw"] .feature-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  [data-design="brutal-raw"] .stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

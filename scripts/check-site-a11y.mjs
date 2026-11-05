@@ -57,12 +57,12 @@ const TYPES = {
   ".xml": "application/xml",
 };
 
-async function resolveFile(pathname) {
+async function resolveFile(pathname, root = DIST) {
   const clean = normalize(decodeURIComponent(pathname)).replace(/^(\.\.[/\\])+/, "");
   const candidates = [
-    join(DIST, clean),
-    join(DIST, `${clean}.html`),
-    join(DIST, clean, "index.html"),
+    join(root, clean),
+    join(root, `${clean}.html`),
+    join(root, clean, "index.html"),
   ];
   for (const candidate of candidates) {
     try {
@@ -75,13 +75,13 @@ async function resolveFile(pathname) {
   return null;
 }
 
-function startServer() {
+function startServer(root) {
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, "http://localhost");
-    let file = await resolveFile(url.pathname);
+    let file = await resolveFile(url.pathname, root);
     let status = 200;
     if (!file) {
-      file = join(DIST, "404.html");
+      file = join(root, "404.html");
       status = 404;
     }
     try {
@@ -119,7 +119,9 @@ async function settle(page) {
 }
 
 async function main() {
-  const server = await startServer();
+  const rootArg = process.argv.find((a) => a.startsWith("--root="));
+  const root = rootArg ? rootArg.split("=")[1] : DIST;
+  const server = await startServer(root);
   const { port } = server.address();
   const browser = await chromium.launch({ headless: true });
   let failures = 0;

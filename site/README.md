@@ -15,13 +15,19 @@ site/                  source
   fonts.css            self-hosted Geist / Geist Mono
   head.js              runs before paint: adds .js-ready, sets the no-JS fallback
   app.js               nav, tabs, copy buttons, scroll reveals, count-ups
+  mechanism.js         the prefix matcher: the product's mechanism, animated
+  motion.js            the small motions: pointer light, hero drift
   tui.js               the launcher simulation (keyboard driven)
   docs/                documentation pages
   img/                 screenshots and marks
   fonts/               Geist woff2 subsets + the OFL license
+  designs/             twenty visual directions (never deployed)
 scripts/
   build-site.py        builds dist/site/ (the deployable artifact)
   check-site-build.py  checks the built artifact; fails the deploy if wrong
+  check-site-a11y.mjs  axe-core audit of the built site (and of candidates)
+  design-explorer.py   assembles the twenty design candidates
+  shoot-designs.mjs    renders the candidates so they can be compared
   install-site.sh      installs Caddy, deploys the artifact, wires the chat
   Caddyfile.template   the server config the installer fills in
   build-site-zip.sh    packages the artifact + installer as dist/toki-site.zip
@@ -73,6 +79,20 @@ unit into a temporary directory, then prints what a real run would do.
 - `Content-Security-Policy`, `Strict-Transport-Security`, `X-Content-Type-Options`,
   `Referrer-Policy` and `Permissions-Policy` on every response;
 - a `www` → apex redirect and a `chat.<domain>` reverse proxy for the web chat.
+
+## Design
+
+The page was redrawn twenty times before it shipped. The candidates, the
+screenshots and the reasoning are in `site/designs/README.md`; the winning
+direction is `ink-quiet`, and it is what `style.css` implements.
+
+```bash
+python3 scripts/design-explorer.py     # assemble dist/designs/<slug>/
+node scripts/shoot-designs.mjs         # render and measure them
+```
+
+`site/designs/` is source, not output: the build never copies it, so the
+candidate stylesheets and their typefaces never reach the server.
 
 ## Deliberately not deployed
 

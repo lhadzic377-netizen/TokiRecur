@@ -1,0 +1,529 @@
+/* ==========================================================================
+   01 · terminal-native
+   The page is a TUI. Not "styled like" one — the whole document behaves like
+   a program: mono everywhere, amber phosphor on black, window chrome on the
+   hero, `[ brackets ]` for actions, and a status line instead of a footer.
+   ========================================================================== */
+
+[data-design="terminal-native"] {
+  --bg: #06070a;
+  --bg-2: #0b0d12;
+  --panel: #0e1116;
+  --panel-2: #131820;
+  --line: rgba(255, 176, 0, 0.16);
+  --line-strong: rgba(255, 176, 0, 0.42);
+  --fg: #e8e6df;
+  --fg-dim: #a8a49a;
+  --muted: #7d7a72;
+  --brand: #ffb000;
+  --brand-ink: #140d00;
+  --brand-soft: rgba(255, 176, 0, 0.1);
+  --brand-line: rgba(255, 176, 0, 0.38);
+  --cream: #e8e6df;
+
+  --sans: "IBM Plex Mono", "Chivo Mono", ui-monospace, monospace;
+  --mono: "IBM Plex Mono", ui-monospace, monospace;
+  --step--1: 0.78rem;
+  --step-0: 0.95rem;
+  --step-1: 1.12rem;
+  --step-2: 1.5rem;
+  --step-3: 2.1rem;
+  --step-4: 3rem;
+  --radius: 4px;
+  --radius-lg: 6px;
+  --container: 1080px;
+}
+
+[data-design="terminal-native"] body {
+  font-family: var(--sans);
+  font-size: 0.95rem;
+  line-height: 1.7;
+  letter-spacing: -0.005em;
+  background:
+    radial-gradient(120% 80% at 50% -10%, rgba(255, 176, 0, 0.06), transparent 60%),
+    var(--bg);
+}
+
+[data-design="terminal-native"] body::after {
+  /* the phosphor grid */
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background-image:
+    repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.022) 0 1px, transparent 1px 3px);
+  opacity: 0.8;
+}
+
+[data-design="terminal-native"] main,
+[data-design="terminal-native"] .topbar nav {
+  position: relative;
+  z-index: 1;
+}
+
+/* ── chrome ─────────────────────────────────────────────────────────── */
+
+[data-design="terminal-native"] .topbar {
+  background: rgba(6, 7, 10, 0.86);
+  border-bottom: 1px solid var(--line);
+  backdrop-filter: blur(8px);
+}
+
+[data-design="terminal-native"] .topbar nav {
+  max-width: var(--container);
+  padding: 0 var(--gutter);
+  height: 52px;
+}
+
+[data-design="terminal-native"] .brand {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+[data-design="terminal-native"] .wordmark-accent {
+  color: var(--brand);
+}
+
+[data-design="terminal-native"] .links a {
+  font-size: 0.8rem;
+  color: var(--fg-dim);
+  text-transform: lowercase;
+}
+
+[data-design="terminal-native"] .links a:hover {
+  color: var(--brand);
+}
+
+[data-design="terminal-native"] .btn-nav {
+  border: 1px solid var(--brand-line);
+  color: var(--brand);
+  background: transparent;
+  border-radius: 3px;
+}
+
+/* ── hero: a window ─────────────────────────────────────────────────── */
+
+[data-design="terminal-native"] .hero {
+  display: block;
+  padding-top: var(--s8) !important;
+  max-width: var(--container);
+}
+
+[data-design="terminal-native"] .hero::before {
+  content: "";
+  display: block;
+  height: 30px;
+  margin-bottom: 0;
+  border: 1px solid var(--line-strong);
+  border-bottom: none;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  background:
+    radial-gradient(circle at 14px 15px, var(--brand) 3px, transparent 3.5px),
+    radial-gradient(circle at 26px 15px, rgba(255, 176, 0, 0.45) 3px, transparent 3.5px),
+    radial-gradient(circle at 38px 15px, rgba(255, 176, 0, 0.25) 3px, transparent 3.5px),
+    var(--panel);
+}
+
+[data-design="terminal-native"] .hero-copy {
+  border: 1px solid var(--line-strong);
+  border-top: none;
+  padding: var(--s7) var(--s6) var(--s6);
+  background:
+    linear-gradient(180deg, rgba(255, 176, 0, 0.035), transparent 42%),
+    var(--panel);
+}
+
+[data-design="terminal-native"] .kicker {
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+[data-design="terminal-native"] .kicker .accent {
+  color: var(--brand);
+}
+
+[data-design="terminal-native"] h1 {
+  font-size: clamp(1.7rem, 1.1rem + 2.1vw, 2.7rem);
+  line-height: 1.28;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--fg);
+  max-width: 26ch;
+}
+
+[data-design="terminal-native"] h1 .accent {
+  color: var(--brand);
+}
+
+[data-design="terminal-native"] h1::after {
+  content: "▊";
+  color: var(--brand);
+  margin-left: 0.35ch;
+  animation: tui-blink 1.1s steps(2, start) infinite;
+}
+
+@keyframes tui-blink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+
+[data-design="terminal-native"] .lede {
+  color: var(--fg-dim);
+  max-width: 62ch;
+  font-size: 0.92rem;
+}
+
+[data-design="terminal-native"] .cta {
+  gap: var(--s4);
+}
+
+[data-design="terminal-native"] .btn {
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  letter-spacing: 0.02em;
+  border-radius: 3px;
+}
+
+[data-design="terminal-native"] .btn.primary {
+  background: var(--brand);
+  color: var(--brand-ink);
+  box-shadow: none;
+}
+
+[data-design="terminal-native"] .btn.primary:hover {
+  background: #ffc23d;
+}
+
+[data-design="terminal-native"] .btn.ghost {
+  border: 1px solid var(--line-strong);
+  color: var(--fg);
+  background: transparent;
+}
+
+[data-design="terminal-native"] .hero-visual {
+  display: none;
+}
+
+[data-design="terminal-native"] .stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  border: 1px solid var(--line-strong);
+  border-top: none;
+  background: var(--panel);
+  padding: 0;
+}
+
+[data-design="terminal-native"] .stat {
+  padding: var(--s5);
+  border-right: 1px solid var(--line);
+}
+
+[data-design="terminal-native"] .stat:last-child {
+  border-right: none;
+}
+
+[data-design="terminal-native"] .stat .num {
+  color: var(--brand);
+  font-size: 1.3rem;
+  font-weight: 600;
+}
+
+[data-design="terminal-native"] .stat .label {
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
+  margin-top: var(--s2);
+}
+
+[data-design="terminal-native"] .stats-source {
+  border: 1px solid var(--line-strong);
+  border-top: none;
+  padding: var(--s3) var(--s5);
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+  background: var(--bg-2);
+}
+
+/* ── sections ────────────────────────────────────────────────────────── */
+
+[data-design="terminal-native"] main > section {
+  max-width: var(--container);
+  padding-top: var(--s8);
+  padding-bottom: var(--s8);
+}
+
+[data-design="terminal-native"] section > h2,
+[data-design="terminal-native"] .demo-head h2 {
+  font-size: 1.45rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--fg);
+  max-width: none;
+}
+
+[data-design="terminal-native"] section > h2::before,
+[data-design="terminal-native"] .demo-head h2::before {
+  content: "## ";
+  color: var(--brand);
+}
+
+[data-design="terminal-native"] .overline {
+  color: var(--muted);
+  font-size: 0.72rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+[data-design="terminal-native"] .section-sub {
+  color: var(--fg-dim);
+  max-width: 74ch;
+}
+
+/* features as a command list */
+[data-design="terminal-native"] .feature-grid {
+  display: block;
+  border: 1px solid var(--line);
+}
+
+[data-design="terminal-native"] .feature {
+  display: grid;
+  grid-template-columns: 30px 190px 1fr;
+  gap: var(--s4);
+  align-items: baseline;
+  padding: var(--s4) var(--s5);
+  border: none;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  border-radius: 0;
+}
+
+[data-design="terminal-native"] .feature:last-child {
+  border-bottom: none;
+}
+
+[data-design="terminal-native"] .feature-icon {
+  width: 16px;
+  height: 16px;
+  color: var(--brand);
+}
+
+[data-design="terminal-native"] .feature h3 {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--fg);
+  margin: 0;
+}
+
+[data-design="terminal-native"] .feature p {
+  color: var(--fg-dim);
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+[data-design="terminal-native"] .feature:hover {
+  background: rgba(255, 176, 0, 0.04);
+}
+
+/* code blocks */
+[data-design="terminal-native"] .code {
+  border: 1px solid var(--line-strong);
+  border-left: 3px solid var(--brand);
+  border-radius: 0;
+  background: var(--panel);
+  font-size: 0.85rem;
+}
+
+[data-design="terminal-native"] .code-label {
+  color: var(--brand);
+  letter-spacing: 0.1em;
+  font-size: 0.72rem;
+}
+
+/* bench table as a ledger */
+[data-design="terminal-native"] .bench-tabs {
+  border: 1px solid var(--line-strong);
+  border-bottom: none;
+  background: var(--bg-2);
+}
+
+[data-design="terminal-native"] .bench-tab {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--muted);
+  border: none;
+  border-right: 1px solid var(--line);
+  padding: var(--s3) var(--s4);
+}
+
+[data-design="terminal-native"] .bench-tab.active {
+  color: var(--brand);
+  background: var(--panel);
+}
+
+[data-design="terminal-native"] .table-wrap {
+  border: 1px solid var(--line-strong);
+  border-radius: 0;
+  background: var(--panel);
+}
+
+[data-design="terminal-native"] table {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+}
+
+[data-design="terminal-native"] thead th {
+  background: var(--bg-2);
+  color: var(--muted);
+  border-bottom: 1px solid var(--line-strong);
+  font-size: 0.68rem;
+}
+
+[data-design="terminal-native"] tbody td {
+  color: var(--fg-dim);
+  border-bottom: 1px solid var(--line);
+}
+
+[data-design="terminal-native"] tbody td:first-child {
+  color: var(--fg);
+}
+
+[data-design="terminal-native"] .grade {
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  color: var(--muted);
+  border-radius: 2px;
+  min-width: 26px;
+  height: 20px;
+  font-size: 0.68rem;
+}
+
+[data-design="terminal-native"] .grade.mid {
+  border-color: rgba(255, 176, 0, 0.5);
+  color: var(--brand);
+  background: transparent;
+}
+
+[data-design="terminal-native"] .grade.bad {
+  border-color: rgba(255, 176, 0, 0.28);
+  color: rgba(255, 176, 0, 0.7);
+  background: transparent;
+}
+
+/* the demo terminal is the one place with real glow */
+[data-design="terminal-native"] .demo-terminal {
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 0 60px rgba(255, 176, 0, 0.06);
+}
+
+[data-design="terminal-native"] .terminal-bar {
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--line);
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+[data-design="terminal-native"] .tui {
+  font-family: var(--mono);
+  background: #05060a;
+}
+
+[data-design="terminal-native"] .tui .wordmark {
+  color: var(--brand);
+}
+
+/* architecture as a chain */
+[data-design="terminal-native"] .arch {
+  gap: 0;
+  border: 1px solid var(--line-strong);
+  padding: var(--s5);
+  background: var(--panel);
+}
+
+[data-design="terminal-native"] .arch-node {
+  border: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--bg-2);
+  padding: var(--s4) var(--s5);
+}
+
+[data-design="terminal-native"] .arch-node.core {
+  border-color: var(--brand-line);
+  color: var(--brand);
+}
+
+[data-design="terminal-native"] .arch-arrow {
+  color: var(--brand);
+  transform: rotate(90deg);
+  height: 22px;
+}
+
+/* honesty block */
+[data-design="terminal-native"] .honesty {
+  border: 1px solid var(--line-strong);
+  border-left: 3px solid var(--brand);
+  background: var(--panel);
+  padding: var(--s7);
+}
+
+/* footer as a status line */
+[data-design="terminal-native"] footer {
+  background: var(--bg-2);
+  border-top: 1px solid var(--line-strong);
+  padding: var(--s6) var(--gutter);
+}
+
+[data-design="terminal-native"] .footer-grid {
+  max-width: var(--container);
+  grid-template-columns: 1.4fr 1fr 1fr;
+  gap: var(--s6);
+}
+
+[data-design="terminal-native"] .footer-mark {
+  display: none;
+}
+
+[data-design="terminal-native"] .footer-col h3 {
+  color: var(--brand);
+  font-size: 0.7rem;
+  letter-spacing: 0.16em;
+}
+
+[data-design="terminal-native"] .footer-col a {
+  font-size: 0.82rem;
+  color: var(--fg-dim);
+}
+
+[data-design="terminal-native"] .footer-bottom {
+  max-width: var(--container);
+  border-top: 1px solid var(--line);
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+[data-design="terminal-native"] .cta-final h2 {
+  font-size: 1.6rem;
+}
+
+@media (max-width: 900px) {
+  [data-design="terminal-native"] .hero {
+    padding-top: var(--s6) !important;
+  }
+  [data-design="terminal-native"] .stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  [data-design="terminal-native"] .stat:nth-child(2n) {
+    border-right: none;
+  }
+  [data-design="terminal-native"] .feature {
+    grid-template-columns: 24px 1fr;
+  }
+  [data-design="terminal-native"] .feature p {
+    grid-column: 2;
+  }
+}

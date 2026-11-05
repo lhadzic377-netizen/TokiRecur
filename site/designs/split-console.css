@@ -1,0 +1,455 @@
+/* ==========================================================================
+   12 · split-console
+   A hard vertical rule down the middle: the statement on the left, the
+   live launcher on the right. Nothing floats, nothing overlaps, and the
+   only colour is the one the product uses.
+   ========================================================================== */
+
+[data-design="split-console"] {
+  --bg: #050505;
+  --bg-2: #0b0b0b;
+  --panel: #101010;
+  --panel-2: #161616;
+  --line: rgba(255, 255, 255, 0.14);
+  --line-strong: rgba(255, 255, 255, 0.36);
+  --fg: #f4f4f2;
+  --fg-dim: #bcbcb8;
+  --muted: #82827e;
+  --brand: #ffd60a;
+  --brand-ink: #14140c;
+  --brand-soft: rgba(255, 214, 10, 0.1);
+  --brand-line: rgba(255, 214, 10, 0.45);
+  --cream: #f4f4f2;
+
+  --sans: "Space Grotesk", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", monospace;
+  --step--1: 0.78rem;
+  --step-0: 0.98rem;
+  --step-1: 1.16rem;
+  --step-2: 1.55rem;
+  --step-3: 2.2rem;
+  --step-4: 3.4rem;
+  --radius: 8px;
+  --radius-lg: 12px;
+  --container: 1320px;
+}
+
+[data-design="split-console"] body {
+  font-family: var(--sans);
+  background: var(--bg);
+  line-height: 1.6;
+}
+
+[data-design="split-console"] .topbar {
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+  backdrop-filter: none;
+}
+
+[data-design="split-console"] .topbar nav {
+  max-width: var(--container);
+  height: 60px;
+  padding: 0 var(--gutter);
+}
+
+[data-design="split-console"] .brand {
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  font-size: 1.1rem;
+}
+
+[data-design="split-console"] .wordmark-accent {
+  color: var(--brand);
+}
+
+[data-design="split-console"] .links a {
+  font-size: 0.9rem;
+  color: var(--fg-dim);
+}
+
+[data-design="split-console"] .links a:hover {
+  color: var(--brand);
+}
+
+[data-design="split-console"] .btn-nav {
+  border: 1px solid var(--brand-line);
+  color: var(--brand);
+  background: transparent;
+}
+
+/* the split */
+[data-design="split-console"] .hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0;
+  padding: 0 !important;
+  align-items: stretch;
+  border-bottom: 1px solid var(--line);
+}
+
+[data-design="split-console"] .hero-copy {
+  padding: var(--s9) var(--s8) var(--s9) 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  border-right: 1px solid var(--line-strong);
+  max-width: var(--container);
+  margin-left: auto;
+}
+
+[data-design="split-console"] .hero-visual {
+  border: none;
+  border-left: 1px solid var(--line-strong);
+  border-radius: 0;
+  background: var(--bg-2);
+  box-shadow: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--s8) var(--gutter);
+}
+
+[data-design="split-console"] .hero-visual .terminal-bar {
+  display: none;
+}
+
+[data-design="split-console"] .hero-visual img {
+  border-radius: 6px;
+  border: 1px solid var(--line-strong);
+  max-width: 100%;
+}
+
+[data-design="split-console"] .kicker {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+[data-design="split-console"] .kicker .accent {
+  color: var(--brand);
+}
+
+[data-design="split-console"] h1 {
+  font-size: clamp(2.2rem, 1.2rem + 3.4vw, 4rem);
+  line-height: 1.02;
+  font-weight: 500;
+  letter-spacing: -0.04em;
+  margin-top: var(--s5);
+}
+
+[data-design="split-console"] h1 .accent {
+  color: var(--brand);
+}
+
+[data-design="split-console"] .lede {
+  color: var(--fg-dim);
+  font-size: 1.05rem;
+  max-width: 46ch;
+  margin-top: var(--s5);
+}
+
+[data-design="split-console"] .cta {
+  margin-top: var(--s7);
+}
+
+[data-design="split-console"] .btn {
+  font-weight: 600;
+  padding: 13px 24px;
+}
+
+[data-design="split-console"] .btn.primary {
+  background: var(--brand);
+  color: var(--brand-ink);
+}
+
+[data-design="split-console"] .btn.ghost {
+  border: 1px solid var(--line-strong);
+  color: var(--fg);
+  background: transparent;
+}
+
+/* stats: a band under the split */
+[data-design="split-console"] .stats {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border: none;
+  border-top: 1px solid var(--line);
+  padding: var(--s6) 0;
+  max-width: var(--container);
+  margin: 0 auto;
+}
+
+[data-design="split-console"] .stat {
+  padding: 0 var(--s6);
+  border-left: 1px solid var(--line);
+}
+
+[data-design="split-console"] .stat:first-child {
+  border-left: none;
+  padding-left: 0;
+}
+
+[data-design="split-console"] .stat .num {
+  font-family: var(--mono);
+  font-size: 1.8rem;
+  font-weight: 600;
+  color: var(--brand);
+  letter-spacing: -0.03em;
+}
+
+[data-design="split-console"] .stat .label {
+  font-size: 0.82rem;
+  color: var(--muted);
+  margin-top: var(--s2);
+}
+
+[data-design="split-console"] .stats-source {
+  grid-column: 1 / -1;
+  font-size: 0.8rem;
+  color: var(--muted);
+  max-width: var(--container);
+  margin: 0 auto;
+  padding-bottom: var(--s6);
+}
+
+/* sections */
+[data-design="split-console"] main > section {
+  max-width: var(--container);
+  padding-top: var(--s8);
+  padding-bottom: var(--s8);
+}
+
+[data-design="split-console"] section > h2,
+[data-design="split-console"] .demo-head h2 {
+  font-size: clamp(1.7rem, 1.1rem + 2vw, 2.7rem);
+  font-weight: 500;
+  letter-spacing: -0.03em;
+  max-width: 20ch;
+}
+
+[data-design="split-console"] .overline {
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--brand);
+}
+
+[data-design="split-console"] .section-sub {
+  color: var(--fg-dim);
+  max-width: 60ch;
+}
+
+[data-design="split-console"] .feature-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0;
+  border: 1px solid var(--line);
+  border-radius: 0;
+}
+
+[data-design="split-console"] .feature {
+  border-right: 1px solid var(--line);
+  border-radius: 0;
+  padding: var(--s6);
+  background: transparent;
+}
+
+[data-design="split-console"] .feature:last-child {
+  border-right: none;
+}
+
+[data-design="split-console"] .feature-icon {
+  width: 18px;
+  height: 18px;
+  color: var(--brand);
+  margin-bottom: var(--s4);
+}
+
+[data-design="split-console"] .feature h3 {
+  font-size: 1.08rem;
+  font-weight: 600;
+  color: var(--fg);
+  margin-bottom: var(--s2);
+}
+
+[data-design="split-console"] .feature p {
+  color: var(--fg-dim);
+  font-size: 0.92rem;
+}
+
+[data-design="split-console"] .how-grid {
+  gap: 0;
+}
+
+[data-design="split-console"] ol.steps {
+  display: grid;
+  gap: 0;
+}
+
+[data-design="split-console"] ol.steps > li {
+  border-top: 1px solid var(--line);
+  padding: var(--s5) 0;
+  grid-template-columns: 64px minmax(0, 1fr);
+}
+
+[data-design="split-console"] ol.steps > li::before {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--brand);
+}
+
+[data-design="split-console"] .reuse-loop {
+  border: 1px solid var(--line);
+  border-radius: 0;
+  padding: var(--s5);
+  background: var(--bg-2);
+}
+
+[data-design="split-console"] .loop-block {
+  fill: var(--panel);
+  stroke: var(--line-strong);
+}
+
+[data-design="split-console"] .loop-block.hit {
+  fill: rgba(255, 214, 10, 0.2);
+  stroke: var(--brand);
+}
+
+[data-design="split-console"] .loop-label {
+  fill: var(--muted);
+  font-family: var(--mono);
+  font-size: 9px;
+}
+
+[data-design="split-console"] .bench-tabs {
+  border-bottom: 1px solid var(--line-strong);
+}
+
+[data-design="split-console"] .bench-tab {
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.76rem;
+  padding: var(--s3) var(--s4) var(--s3) 0;
+  margin-right: var(--s4);
+}
+
+[data-design="split-console"] .bench-tab.active {
+  color: var(--brand);
+  box-shadow: inset 0 -2px 0 var(--brand);
+}
+
+[data-design="split-console"] .table-wrap {
+  border: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--bg-2);
+}
+
+[data-design="split-console"] thead th {
+  background: var(--panel);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.12em;
+}
+
+[data-design="split-console"] tbody td {
+  color: var(--fg-dim);
+  font-family: var(--mono);
+  font-size: 0.82rem;
+}
+
+[data-design="split-console"] .grade {
+  background: rgba(255, 214, 10, 0.12);
+  color: var(--brand);
+  border-radius: 3px;
+}
+
+[data-design="split-console"] .code {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--brand);
+  border-radius: 0;
+}
+
+[data-design="split-console"] .code-label {
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+[data-design="split-console"] .demo-terminal {
+  border: 1px solid var(--line-strong);
+  border-radius: 0;
+}
+
+[data-design="split-console"] .honesty {
+  border: 1px solid var(--line-strong);
+  border-left: 3px solid var(--brand);
+  border-radius: 0;
+  padding: var(--s7);
+  background: var(--bg-2);
+}
+
+[data-design="split-console"] .arch {
+  gap: 0;
+}
+
+[data-design="split-console"] .arch-node {
+  border: 1px solid var(--line-strong);
+  border-radius: 0;
+  background: var(--bg-2);
+}
+
+[data-design="split-console"] .arch-node.core {
+  border-color: var(--brand);
+  color: var(--brand);
+  background: rgba(255, 214, 10, 0.06);
+}
+
+[data-design="split-console"] footer {
+  border-top: 1px solid var(--line);
+  background: var(--bg-2);
+}
+
+[data-design="split-console"] .footer-grid {
+  grid-template-columns: 1.6fr 1fr 1fr;
+}
+
+[data-design="split-console"] .footer-col h3 {
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+@media (max-width: 1000px) {
+  [data-design="split-console"] .hero {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  [data-design="split-console"] .hero-copy {
+    border-right: none;
+    border-bottom: 1px solid var(--line-strong);
+    padding: var(--s8) 0;
+    max-width: none;
+  }
+  [data-design="split-console"] .hero-visual {
+    border-left: none;
+    padding-left: 0;
+  }
+  [data-design="split-console"] .feature-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  [data-design="split-console"] .feature {
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+  }
+}

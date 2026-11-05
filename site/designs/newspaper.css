@@ -1,0 +1,481 @@
+/* ==========================================================================
+   17 · newspaper
+   Newsprint, a masthead, rules and columns. The honesty section runs in
+   two columns like an article, and the benchmark table looks like a table
+   printed in 1910: figures right, labels left.
+   ========================================================================== */
+
+[data-design="newspaper"] {
+  --bg: #f3f0e6;
+  --bg-2: #ebe6d8;
+  --panel: #f8f6ee;
+  --panel-2: #fffdf6;
+  --line: rgba(28, 26, 20, 0.24);
+  --line-strong: rgba(28, 26, 20, 0.6);
+  --fg: #1a1814;
+  --fg-dim: #454036;
+  --muted: #6e6759;
+  --brand: #a32018;
+  --brand-ink: #fdf8ef;
+  --brand-soft: rgba(163, 32, 24, 0.1);
+  --brand-line: rgba(163, 32, 24, 0.45);
+  --cream: #f3f0e6;
+
+  --sans: "Newsreader", Georgia, serif;
+  --mono: "IBM Plex Mono", monospace;
+  --step--1: 0.78rem;
+  --step-0: 1rem;
+  --step-1: 1.16rem;
+  --step-2: 1.5rem;
+  --step-3: 2.1rem;
+  --step-4: 3.2rem;
+  --radius: 0px;
+  --radius-lg: 0px;
+  --container: 1160px;
+}
+
+[data-design="newspaper"] body {
+  font-family: var(--sans);
+  background:
+    radial-gradient(140% 100% at 50% -10%, rgba(255, 255, 255, 0.7), transparent 60%),
+    var(--bg);
+  color: var(--fg);
+  line-height: 1.58;
+}
+
+[data-design="newspaper"] .topbar {
+  background: var(--bg);
+  border-bottom: 3px double var(--line-strong);
+  backdrop-filter: none;
+}
+
+[data-design="newspaper"] .topbar nav {
+  max-width: var(--container);
+  height: 74px;
+  padding: 0 var(--gutter);
+}
+
+[data-design="newspaper"] .brand {
+  font-size: 1.7rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  font-variant: small-caps;
+}
+
+[data-design="newspaper"] .wordmark-accent {
+  color: var(--brand);
+}
+
+[data-design="newspaper"] .links a {
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+}
+
+[data-design="newspaper"] .links a:hover {
+  color: var(--brand);
+}
+
+[data-design="newspaper"] .btn-nav {
+  border: 1px solid var(--fg);
+  background: var(--fg);
+  color: var(--bg);
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+/* hero: a front page */
+[data-design="newspaper"] .hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
+  gap: var(--s7);
+  align-items: start;
+  padding-top: var(--s7) !important;
+  padding-bottom: var(--s7) !important;
+  border-bottom: 3px double var(--line-strong);
+}
+
+[data-design="newspaper"] .kicker {
+  font-family: var(--mono);
+  font-size: 0.64rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--brand);
+  padding-bottom: var(--s3);
+  border-bottom: 1px solid var(--line);
+}
+
+[data-design="newspaper"] .kicker .accent {
+  color: var(--fg);
+}
+
+[data-design="newspaper"] h1 {
+  font-size: clamp(2.4rem, 1.4rem + 3.6vw, 4.4rem);
+  line-height: 1;
+  font-weight: 700;
+  letter-spacing: -0.028em;
+  margin-top: var(--s5);
+  font-variant: small-caps;
+}
+
+[data-design="newpaper"] h1 .accent,
+[data-design="newspaper"] h1 .accent {
+  font-style: italic;
+  color: var(--brand);
+  text-transform: none;
+}
+
+[data-design="newspaper"] .lede {
+  font-size: 1.18rem;
+  line-height: 1.5;
+  color: var(--fg-dim);
+  max-width: 46ch;
+  margin-top: var(--s5);
+}
+
+[data-design="newspaper"] .cta {
+  margin-top: var(--s6);
+}
+
+[data-design="newspaper"] .btn {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 12px 20px;
+  border-radius: 0;
+}
+
+[data-design="newspaper"] .btn.primary {
+  background: var(--brand);
+  color: var(--brand-ink);
+  border: 1px solid var(--brand);
+}
+
+[data-design="newspaper"] .btn.ghost {
+  border: 1px solid var(--fg);
+  color: var(--fg);
+  background: transparent;
+}
+
+[data-design="newspaper"] .hero-visual {
+  border: 1px solid var(--line-strong);
+  background: var(--panel-2);
+  padding: 6px;
+}
+
+[data-design="newspaper"] .hero-visual .terminal-bar {
+  display: none;
+}
+
+/* a masthead strip of figures */
+[data-design="newspaper"] .stats {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-top: 1px solid var(--line-strong);
+  border-bottom: 1px solid var(--line-strong);
+  padding: var(--s4) 0;
+  gap: 0;
+}
+
+[data-design="newspaper"] .stat {
+  padding: 0 var(--s5);
+  border-left: 1px solid var(--line);
+}
+
+[data-design="newspaper"] .stat:first-child {
+  border-left: none;
+  padding-left: 0;
+}
+
+[data-design="newspaper"] .stat .num {
+  font-family: var(--mono);
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+[data-design="newspaper"] .stat .label {
+  font-size: 0.74rem;
+  color: var(--muted);
+  margin-top: 2px;
+  line-height: 1.4;
+}
+
+[data-design="newspaper"] .stats-source {
+  grid-column: 1 / -1;
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  color: var(--muted);
+  padding-top: var(--s3);
+}
+
+/* sections */
+[data-design="newspaper"] main > section {
+  max-width: var(--container);
+  padding-top: var(--s7);
+  padding-bottom: var(--s7);
+  border-bottom: 1px solid var(--line-strong);
+}
+
+[data-design="newspaper"] section > h2,
+[data-design="newspaper"] .demo-head h2 {
+  font-size: clamp(1.8rem, 1.2rem + 2.2vw, 2.9rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  font-variant: small-caps;
+  max-width: 22ch;
+  padding-bottom: var(--s3);
+  border-bottom: 3px double var(--line-strong);
+}
+
+[data-design="newspaper"] .overline {
+  font-family: var(--mono);
+  font-size: 0.64rem;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--brand);
+}
+
+[data-design="newspaper"] .section-sub {
+  color: var(--fg-dim);
+  max-width: 62ch;
+  font-size: 1.04rem;
+}
+
+/* features in newspaper columns */
+[data-design="newspaper"] .feature-grid {
+  columns: 2;
+  column-gap: var(--s7);
+  column-rule: 1px solid var(--line);
+  margin-top: var(--s6);
+}
+
+[data-design="newspaper"] .feature {
+  break-inside: avoid;
+  border: none;
+  background: none;
+  padding: 0 0 var(--s5);
+  margin-bottom: var(--s5);
+  border-bottom: 1px solid var(--line);
+  display: block;
+}
+
+[data-design="newspaper"] .feature-icon {
+  display: none;
+}
+
+[data-design="newspaper"] .feature h3 {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--fg);
+  margin-bottom: var(--s1);
+}
+
+[data-design="newspaper"] .feature p {
+  color: var(--fg-dim);
+  font-size: 0.96rem;
+}
+
+[data-design="newspaper"] ol.steps {
+  columns: 3;
+  column-gap: var(--s6);
+  column-rule: 1px solid var(--line);
+}
+
+[data-design="newspaper"] ol.steps > li {
+  break-inside: avoid;
+  border: none;
+  padding: 0 0 var(--s5);
+  margin-bottom: var(--s4);
+  display: block;
+}
+
+[data-design="newspaper"] ol.steps > li::before {
+  content: attr(data-n);
+  display: block;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--brand);
+  margin-bottom: var(--s2);
+}
+
+[data-design="newspaper"] .reuse-loop {
+  border: 1px solid var(--line-strong);
+  background: var(--panel);
+  padding: var(--s5);
+}
+
+[data-design="newspaper"] .loop-block {
+  fill: var(--panel-2);
+  stroke: var(--fg);
+  stroke-width: 1.2;
+}
+
+[data-design="newspaper"] .loop-block.hit {
+  fill: var(--brand);
+  stroke: var(--brand);
+}
+
+[data-design="newspaper"] .loop-label {
+  fill: var(--muted);
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+[data-design="newspaper"] .bench-tabs {
+  border-bottom: 1px solid var(--line-strong);
+}
+
+[data-design="newspaper"] .bench-tab {
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  padding: var(--s3) var(--s4) var(--s3) 0;
+  margin-right: var(--s4);
+}
+
+[data-design="newspaper"] .bench-tab.active {
+  color: var(--brand);
+  box-shadow: inset 0 -2px 0 var(--brand);
+}
+
+[data-design="newspaper"] .table-wrap {
+  border-top: 2px solid var(--fg);
+  border-bottom: 2px solid var(--fg);
+  background: none;
+}
+
+[data-design="newspaper"] thead th {
+  background: none;
+  border-bottom: 1px solid var(--fg);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  text-align: left;
+}
+
+[data-design="newspaper"] tbody td {
+  color: var(--fg-dim);
+  border-bottom: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: 0.78rem;
+}
+
+[data-design="newspaper"] tbody td:first-child {
+  color: var(--fg);
+  font-family: var(--sans);
+}
+
+[data-design="newspaper"] .grade {
+  background: none;
+  border: 1px solid var(--fg);
+  color: var(--fg);
+  border-radius: 0;
+  font-family: var(--mono);
+}
+
+[data-design="newspaper"] .grade.mid {
+  background: var(--brand);
+  color: var(--brand-ink);
+  border-color: var(--brand);
+}
+
+[data-design="newspaper"] .code {
+  background: var(--panel-2);
+  border: 1px solid var(--line-strong);
+  border-radius: 0;
+  font-size: 0.84rem;
+}
+
+[data-design="newspaper"] .code-label {
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--brand);
+}
+
+[data-design="newspaper"] .demo-terminal {
+  border: 1px solid var(--line-strong);
+  background: #0e0d0b;
+}
+
+[data-design="newspaper"] .honesty {
+  background: var(--panel);
+  border: 1px solid var(--line-strong);
+  border-left: 6px double var(--brand);
+  padding: var(--s7);
+}
+
+[data-design="newspaper"] .honesty-body {
+  columns: 2;
+  column-gap: var(--s6);
+  column-rule: 1px solid var(--line);
+  color: var(--fg-dim);
+  text-align: justify;
+  hyphens: auto;
+}
+
+[data-design="newspaper"] .arch-node {
+  border: 1px solid var(--line-strong);
+  background: var(--panel);
+}
+
+[data-design="newspaper"] .arch-node.core {
+  background: var(--fg);
+  color: var(--bg);
+  border-color: var(--fg);
+}
+
+[data-design="newspaper"] .arch-node.core small {
+  color: rgba(26, 24, 20, 0.75);
+}
+
+[data-design="newspaper"] footer {
+  border-top: 3px double var(--line-strong);
+  background: var(--bg-2);
+}
+
+[data-design="newspaper"] .footer-grid {
+  grid-template-columns: 1.6fr 1fr 1fr;
+}
+
+[data-design="newspaper"] .footer-col h3 {
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--brand);
+}
+
+@media (max-width: 900px) {
+  [data-design="newspaper"] .hero {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  [data-design="newspaper"] .feature-grid,
+  [data-design="newspaper"] ol.steps,
+  [data-design="newspaper"] .honesty-body {
+    columns: 1;
+  }
+  [data-design="newspaper"] .stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--s4) 0;
+  }
+  [data-design="newspaper"] .stat:nth-child(3) {
+    border-left: none;
+    padding-left: 0;
+  }
+}

@@ -1,0 +1,509 @@
+/* ==========================================================================
+   07 · bauhaus-primary
+   Primary colours used as structure, not decoration: a red disc, a blue
+   bar, a yellow square — and the type sits inside a grid like everything
+   else. Cream paper, ink, and three inks that were mixed by hand.
+   ========================================================================== */
+
+[data-design="bauhaus-primary"] {
+  --bg: #f0ebe0;
+  --bg-2: #e7e1d3;
+  --panel: #f7f3ea;
+  --panel-2: #ffffff;
+  --line: rgba(24, 22, 18, 0.22);
+  --line-strong: rgba(24, 22, 18, 0.65);
+  --fg: #181612;
+  --fg-dim: #443f36;
+  --muted: #6d665a;
+  --brand: #d33f28;
+  --brand-ink: #fff8ec;
+  --brand-soft: rgba(211, 63, 40, 0.1);
+  --brand-line: rgba(211, 63, 40, 0.55);
+  --cream: #f0ebe0;
+
+  --sans: "Archivo", "Helvetica Neue", sans-serif;
+  --mono: "IBM Plex Mono", monospace;
+  --step--1: 0.78rem;
+  --step-0: 1rem;
+  --step-1: 1.16rem;
+  --step-2: 1.55rem;
+  --step-3: 2.2rem;
+  --step-4: 3.4rem;
+  --radius: 0px;
+  --radius-lg: 0px;
+  --container: 1160px;
+  --blue: #1f4fd8;
+  --yellow: #f5b700;
+}
+
+[data-design="bauhaus-primary"] body {
+  font-family: var(--sans);
+  background: var(--bg);
+  color: var(--fg);
+  line-height: 1.55;
+}
+
+[data-design="bauhaus-primary"] .topbar {
+  background: var(--bg);
+  border-bottom: 2px solid var(--fg);
+  backdrop-filter: none;
+}
+
+[data-design="bauhaus-primary"] .topbar nav {
+  max-width: var(--container);
+  height: 62px;
+  padding: 0 var(--gutter);
+}
+
+[data-design="bauhaus-primary"] .brand {
+  font-weight: 900;
+  letter-spacing: -0.04em;
+  font-size: 1.2rem;
+  text-transform: lowercase;
+}
+
+[data-design="bauhaus-primary"] .wordmark-accent {
+  color: var(--brand);
+}
+
+[data-design="bauhaus-primary"] .links a {
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+[data-design="bauhaus-primary"] .links a:hover {
+  color: var(--brand);
+}
+
+[data-design="bauhaus-primary"] .btn-nav {
+  background: var(--blue);
+  color: #fff;
+  border-radius: 0;
+  font-weight: 700;
+}
+
+/* hero: shapes as furniture */
+[data-design="bauhaus-primary"] .hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
+  gap: var(--s7);
+  align-items: center;
+  padding-top: var(--s8) !important;
+  position: relative;
+}
+
+[data-design="bauhaus-primary"] .hero::before {
+  content: "";
+  position: absolute;
+  top: var(--s7);
+  right: 6%;
+  width: 150px;
+  height: 150px;
+  border-radius: 50%;
+  background: var(--brand);
+  opacity: 0.92;
+  z-index: 0;
+}
+
+[data-design="bauhaus-primary"] .hero-copy {
+  position: relative;
+  z-index: 1;
+}
+
+[data-design="bauhaus-primary"] .kicker {
+  display: inline-block;
+  background: var(--yellow);
+  padding: 6px 12px;
+  font-weight: 700;
+  font-size: 0.8rem;
+  letter-spacing: 0.02em;
+  margin-bottom: var(--s6);
+}
+
+[data-design="bauhaus-primary"] .kicker .accent {
+  color: var(--fg);
+}
+
+[data-design="bauhaus-primary"] h1 {
+  font-size: clamp(2.6rem, 1.3rem + 4.6vw, 5.2rem);
+  line-height: 0.94;
+  font-weight: 900;
+  letter-spacing: -0.05em;
+  text-transform: lowercase;
+}
+
+[data-design="bauhaus-primary"] h1 .accent {
+  color: var(--brand);
+}
+
+[data-design="bauhaus-primary"] .lede {
+  font-size: 1.12rem;
+  color: var(--fg-dim);
+  max-width: 44ch;
+  margin-top: var(--s6);
+  border-left: 6px solid var(--blue);
+  padding-left: var(--s5);
+}
+
+[data-design="bauhaus-primary"] .cta {
+  margin-top: var(--s7);
+}
+
+[data-design="bauhaus-primary"] .btn {
+  border-radius: 0;
+  font-weight: 800;
+  padding: 14px 26px;
+  border: 2px solid var(--fg);
+}
+
+[data-design="bauhaus-primary"] .btn.primary {
+  background: var(--fg);
+  color: var(--cream);
+}
+
+[data-design="bauhaus-primary"] .btn.primary:hover {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: #fff;
+}
+
+[data-design="bauhaus-primary"] .btn.ghost {
+  background: transparent;
+  color: var(--fg);
+}
+
+[data-design="bauhaus-primary"] .btn.ghost:hover {
+  background: var(--yellow);
+}
+
+[data-design="bauhaus-primary"] .hero-visual {
+  border: 2px solid var(--fg);
+  background: var(--panel-2);
+  box-shadow: 14px 14px 0 var(--blue);
+  position: relative;
+  z-index: 1;
+}
+
+[data-design="bauhaus-primary"] .hero-visual .terminal-bar {
+  background: var(--fg);
+  color: var(--cream);
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+[data-design="bauhaus-primary"] .stats {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--s4);
+  border: none;
+  padding-top: var(--s7);
+}
+
+[data-design="bauhaus-primary"] .stat {
+  border: 2px solid var(--fg);
+  background: var(--panel);
+  padding: var(--s5);
+}
+
+[data-design="bauhaus-primary"] .stat:nth-child(1) { background: var(--yellow); }
+[data-design="bauhaus-primary"] .stat:nth-child(2) { background: var(--blue); color: #fff; }
+[data-design="bauhaus-primary"] .stat:nth-child(2) .label { color: rgba(255, 255, 255, 0.82); }
+[data-design="bauhaus-primary"] .stat:nth-child(3) { background: var(--brand); color: #fff; }
+[data-design="bauhaus-primary"] .stat:nth-child(3) .label { color: rgba(255, 255, 255, 0.85); }
+[data-design="bauhaus-primary"] .stat:nth-child(4) { background: var(--panel-2); }
+
+[data-design="bauhaus-primary"] .stat .num {
+  font-size: 2.2rem;
+  font-weight: 900;
+  letter-spacing: -0.05em;
+}
+
+[data-design="bauhaus-primary"] .stat .label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  margin-top: var(--s2);
+  color: var(--fg-dim);
+}
+
+[data-design="bauhaus-primary"] .stats-source {
+  grid-column: 1 / -1;
+  font-size: 0.82rem;
+  color: var(--fg-dim);
+  border-top: 2px solid var(--fg);
+  padding-top: var(--s4);
+  margin-top: 0;
+}
+
+/* sections */
+[data-design="bauhaus-primary"] main > section {
+  max-width: var(--container);
+  padding-top: var(--s8);
+  padding-bottom: var(--s8);
+  border-top: 2px solid var(--fg);
+}
+
+[data-design="bauhaus-primary"] section > h2,
+[data-design="bauhaus-primary"] .demo-head h2 {
+  font-size: clamp(1.9rem, 1.2rem + 2.4vw, 3rem);
+  font-weight: 900;
+  letter-spacing: -0.045em;
+  text-transform: lowercase;
+  max-width: 17ch;
+}
+
+[data-design="bauhaus-primary"] .overline {
+  display: inline-block;
+  background: var(--blue);
+  color: #fff;
+  padding: 4px 10px;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+[data-design="bauhaus-primary"] .section-sub {
+  color: var(--fg-dim);
+  max-width: 56ch;
+}
+
+[data-design="bauhaus-primary"] .feature-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--s5);
+}
+
+[data-design="bauhaus-primary"] .feature {
+  background: var(--panel);
+  border: 2px solid var(--fg);
+  padding: var(--s6);
+  position: relative;
+}
+
+[data-design="bauhaus-primary"] .feature:nth-child(3n + 1) { border-top: 10px solid var(--brand); }
+[data-design="bauhaus-primary"] .feature:nth-child(3n + 2) { border-top: 10px solid var(--blue); }
+[data-design="bauhaus-primary"] .feature:nth-child(3n + 3) { border-top: 10px solid var(--yellow); }
+
+[data-design="bauhaus-primary"] .feature-icon {
+  width: 22px;
+  height: 22px;
+  color: var(--fg);
+}
+
+[data-design="bauhaus-primary"] .feature h3 {
+  font-size: 1.15rem;
+  font-weight: 800;
+  color: var(--fg);
+  margin-bottom: var(--s2);
+}
+
+[data-design="bauhaus-primary"] .feature p {
+  color: var(--fg-dim);
+  font-size: 0.93rem;
+}
+
+[data-design="bauhaus-primary"] ol.steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--s5);
+}
+
+[data-design="bauhaus-primary"] ol.steps > li {
+  display: block;
+  border: 2px solid var(--fg);
+  background: var(--panel);
+  padding: var(--s6);
+}
+
+[data-design="bauhaus-primary"] ol.steps > li::before {
+  content: attr(data-n);
+  display: block;
+  font-size: 2.4rem;
+  font-weight: 900;
+  color: var(--brand);
+  line-height: 1;
+  margin-bottom: var(--s3);
+}
+
+[data-design="bauhaus-primary"] .reuse-loop {
+  border: 2px solid var(--fg);
+  background: var(--panel-2);
+  padding: var(--s4);
+}
+
+[data-design="bauhaus-primary"] .loop-block {
+  fill: var(--bg);
+  stroke: var(--fg);
+  stroke-width: 2;
+}
+
+[data-design="bauhaus-primary"] .loop-block.hit {
+  fill: var(--yellow);
+  stroke: var(--fg);
+}
+
+[data-design="bauhaus-primary"] .loop-label {
+  fill: var(--fg);
+  font-family: var(--mono);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+[data-design="blueprint-cyan"] .loop-arc,
+[data-design="bauhaus-primary"] .loop-arc {
+  stroke: var(--fg);
+}
+
+[data-design="bauhaus-primary"] .bench-tabs {
+  gap: 0;
+  border: 2px solid var(--fg);
+  display: inline-flex;
+}
+
+[data-design="bauhaus-primary"] .bench-tab {
+  border: none;
+  border-right: 2px solid var(--fg);
+  background: var(--bg);
+  color: var(--fg);
+  font-weight: 700;
+  font-size: 0.84rem;
+  padding: 10px 16px;
+}
+
+[data-design="bauhaus-primary"] .bench-tab:last-child {
+  border-right: none;
+}
+
+[data-design="bauhaus-primary"] .bench-tab.active {
+  background: var(--fg);
+  color: var(--cream);
+}
+
+[data-design="bauhaus-primary"] .table-wrap {
+  border: 2px solid var(--fg);
+  background: var(--panel);
+}
+
+[data-design="bauhaus-primary"] thead th {
+  background: var(--fg);
+  color: var(--cream);
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-size: 0.68rem;
+}
+
+[data-design="bauhaus-primary"] tbody td {
+  color: var(--fg-dim);
+}
+
+[data-design="bauhaus-primary"] tbody tr:nth-child(even) td {
+  background: rgba(24, 22, 18, 0.035);
+}
+
+[data-design="bauhaus-primary"] .grade {
+  border: 2px solid var(--fg);
+  background: transparent;
+  color: var(--fg);
+  border-radius: 0;
+  font-weight: 800;
+}
+
+[data-design="bauhaus-primary"] .grade.mid { background: var(--yellow); }
+[data-design="bauhaus-primary"] .grade.bad { background: var(--brand); color: #fff; border-color: var(--fg); }
+
+[data-design="bauhaus-primary"] .code {
+  background: var(--fg);
+  color: #f6f1e4;
+  border: none;
+  border-radius: 0;
+  font-size: 0.88rem;
+}
+
+[data-design="bauhaus-primary"] .code-label {
+  background: var(--yellow);
+  display: inline-block;
+  padding: 4px 10px;
+  font-weight: 800;
+  font-size: 0.76rem;
+  text-transform: uppercase;
+}
+
+[data-design="bauhaus-primary"] .demo-terminal {
+  border: 2px solid var(--fg);
+  box-shadow: 12px 12px 0 var(--brand);
+  background: #0b0b0d;
+}
+
+[data-design="bauhaus-primary"] .honesty {
+  border: 2px solid var(--fg);
+  background: var(--yellow);
+  padding: var(--s7);
+}
+
+[data-design="bauhaus-primary"] .honesty-body {
+  color: var(--fg);
+}
+
+[data-design="bauhaus-primary"] .arch-node {
+  border: 2px solid var(--fg);
+  background: var(--panel);
+  border-radius: 0;
+}
+
+[data-design="bauhaus-primary"] .arch-node.core {
+  background: var(--blue);
+  color: #fff;
+  border-color: var(--fg);
+}
+
+[data-design="bauhaus-primary"] .arch-node.core small { color: rgba(255, 255, 255, 0.85); }
+
+[data-design="bauhaus-primary"] .cta-final h2 {
+  text-transform: lowercase;
+  font-weight: 900;
+  letter-spacing: -0.045em;
+}
+
+[data-design="bauhaus-primary"] footer {
+  background: var(--bg);
+  border-top: 2px solid var(--fg);
+}
+
+[data-design="bauhaus-primary"] .footer-grid {
+  grid-template-columns: 1.6fr 1fr 1fr;
+}
+
+[data-design="bauhaus-primary"] .footer-col h3 {
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+[data-design="bauhaus-primary"] .footer-bottom {
+  border-top: 2px solid var(--fg);
+}
+
+@media (max-width: 900px) {
+  [data-design="bauhaus-primary"] .hero {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  [data-design="bauhaus-primary"] .hero::before {
+    width: 90px;
+    height: 90px;
+    top: var(--s5);
+  }
+  [data-design="bauhaus-primary"] .feature-grid,
+  [data-design="bauhaus-primary"] ol.steps {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  [data-design="bauhaus-primary"] .stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
