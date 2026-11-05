@@ -6,6 +6,13 @@ on:
   pull_request:
     branches: [main]
 
+# One run per branch. A new push cancels the run that is still going, which
+# is also the kindest thing for the macOS runners: queueing a second copy of
+# the same matrix behind the first one only makes both slower.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   site-build:
     name: Site build
