@@ -31,6 +31,7 @@ PUBLIC_FILES = (
     "privacy.html",
     "style.css",
     "landing.css",
+    "pricing.css",
     "fonts.css",
     "head.js",
     "app.js",

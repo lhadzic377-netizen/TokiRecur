@@ -22,6 +22,7 @@
 <link rel="icon" href="/favicon.png" type="image/png" sizes="any">
 <link rel="stylesheet" href="/fonts.css">
 <link rel="stylesheet" href="/style.css?v=26">
+<link rel="stylesheet" href="/pricing.css?v=1">
 <noscript><style>.reveal { opacity: 1 !important; transform: none !important; }</style></noscript>
 <script src="/head.js"></script>
 </head>
@@ -51,46 +52,49 @@
 
 <main id="main" tabindex="-1">
   <section class="pricing-page">
-    <p class="overline">Pricing</p>
-    <h1 class="pricing-h1">One tier. One price. One joke.</h1>
-    <p class="section-sub">No SaaS comparison table to scroll past. No "Contact us for enterprise." Just the answer.</p>
-
-    <div class="card pricing-card">
-      <div class="price-row">
-        <div class="price">$0</div>
-        <div class="price-suffix">/forever</div>
+    <div class="pricing-layout">
+      <div class="pricing-head">
+        <p class="overline">Pricing</p>
+        <h1 class="pricing-h1">One tier. One price. One joke.</h1>
+        <p class="section-sub">No SaaS comparison table to scroll past. No "Contact us for enterprise." Just the answer.</p>
+        <p class="pricing-tagline">Other tools charge per token. I let you keep your tokens. You're welcome.</p>
       </div>
-      <h2>Free.</h2>
-      <p class="pricing-blurb">toki runs on your machine, against your GPU, on top of llama.cpp. There is no service to meter, no cloud to bill you for, and no investor who needs a per-seat licence to retire on a beach. So:</p>
-      <ul class="pricing-includes">
-        <li>Every feature in the repo, today and forever</li>
-        <li>Every GGUF you can pull from Hugging Face</li>
-        <li>CUDA, ROCm, SYCL, OpenVINO, Vulkan, Metal, CPU</li>
-        <li>Cache reuse across every client on your machine</li>
-        <li>TUI, web UI, benchmark harness, doctor (all included)</li>
-        <li>Source you can read, fork, patch, and ship</li>
-      </ul>
-      <p class="pricing-fine">Other tiers: $0. Pro: $0. Enterprise: $0. "Contact us for a quote": $0. I ran out of zeros before I ran out of ideas.</p>
-      <p class="pricing-fine pricing-fine-joke"><em>Payment accepted in GitHub stars, good PRs, and the quiet satisfaction of never seeing a per-token invoice again.</em></p>
-      <div class="cta">
-        <a class="btn primary" href="https://github.com/lhadzic377-netizen/TokiRecur" target="_blank" rel="noopener">Get it on GitHub
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg>
-        </a>
-        <a class="btn ghost" href="/docs/">Read the docs</a>
-        <a class="btn ghost" href="/">Back to the product</a>
+
+      <div class="card pricing-card">
+        <div class="price-row">
+          <div class="price">$0</div>
+          <div class="price-suffix">/forever</div>
+        </div>
+        <h2>Free.</h2>
+        <p class="pricing-blurb">toki runs on your machine, against your GPU, on top of llama.cpp. There is no service to meter, no cloud to bill you for, and no investor who needs a per-seat licence to retire on a beach. So:</p>
+        <ul class="pricing-includes">
+          <li>Every feature in the repo, today and forever</li>
+          <li>Every GGUF you can pull from Hugging Face</li>
+          <li>CUDA, ROCm, SYCL, OpenVINO, Vulkan, Metal, CPU</li>
+          <li>Cache reuse across every client on your machine</li>
+          <li>TUI, web UI, benchmark harness, doctor (all included)</li>
+          <li>Source you can read, fork, patch, and ship</li>
+        </ul>
+        <p class="pricing-fine">Other tiers: $0. Pro: $0. Enterprise: $0. "Contact us for a quote": $0. I ran out of zeros before I ran out of ideas.</p>
+        <p class="pricing-fine pricing-fine-joke"><em>Payment accepted in GitHub stars, good PRs, and the quiet satisfaction of never seeing a per-token invoice again.</em></p>
+        <div class="cta">
+          <a class="btn primary" href="https://github.com/lhadzic377-netizen/TokiRecur" target="_blank" rel="noopener">Get it on GitHub
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg>
+          </a>
+          <a class="btn ghost" href="/docs/">Read the docs</a>
+          <a class="btn ghost" href="/">Back to the product</a>
+        </div>
       </div>
     </div>
-
-    <p class="pricing-tagline">Other tools charge per token. I let you keep your tokens. You're welcome.</p>
   </section>
 </main>
 
 <footer>
   <div class="footer-grid">
     <div class="footer-brand">
-      <a class="brand" href="/" aria-label="Toki Recur home">
-        <img class="logo" src="/img/logo.webp" alt="" width="30" height="30">
-        toki<span class="wordmark-accent">recur</span>
+      <a class="brand footer-brand-link" href="/" aria-label="Toki Recur home">
+        <img class="footer-mark" src="/img/mark-3d.webp" alt="" aria-hidden="true" width="180" height="180" loading="lazy">
+        <span class="footer-wordmark">toki <span class="wordmark-accent">recur</span></span>
       </a>
       <p>KV cache reuse for LLM inference. Drop-in prefix caching on llama.cpp, no patches, no vendor lock-in.</p>
     </div>
