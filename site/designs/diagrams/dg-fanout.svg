@@ -1,0 +1,17 @@
+<svg class="dg" viewBox="0 0 248 150" fill="none" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
+    <text x="6" y="14" fill="#9199a3" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="8.5" text-anchor="start">three clients, one cache</text>
+    <rect x="6" y="26" width="70" height="24" rx="6" fill="rgba(255,255,255,0.04)" stroke="#3a4450"/>
+    <text x="41" y="42" fill="#9199a3" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="8.5" text-anchor="middle">opencode</text>
+    <rect x="6" y="58" width="70" height="24" rx="6" fill="rgba(255,255,255,0.04)" stroke="#3a4450"/>
+    <text x="41" y="74" fill="#9199a3" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="8.5" text-anchor="middle">claude code</text>
+    <rect x="6" y="90" width="70" height="24" rx="6" fill="rgba(255,255,255,0.04)" stroke="#3a4450"/>
+    <text x="41" y="106" fill="#9199a3" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="8.5" text-anchor="middle">hermes</text>
+    <path d="M78 38 L122 62" stroke="#3a4450" stroke-width="1.2" stroke-linecap="round"/><path d="M122 62 l-4 -2.4 v4.8 z" fill="#3a4450"/>
+    <path d="M78 70 L122 70" stroke="#ffd60a" stroke-width="1.2" stroke-linecap="round"/><path d="M122 70 l-4 -2.4 v4.8 z" fill="#ffd60a"/>
+    <path d="M78 102 L122 78" stroke="#3a4450" stroke-width="1.2" stroke-linecap="round"/><path d="M122 78 l-4 -2.4 v4.8 z" fill="#3a4450"/>
+    <rect x="124" y="44" width="112" height="46" rx="10" fill="rgba(255,214,10,0.05)" stroke="#ffd60a" stroke-width="1"/>
+    <text x="134" y="62" fill="#ffd60a" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="8.5" text-anchor="start">KV pool</text>
+    <text x="134" y="78" fill="#9199a3" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="8" text-anchor="start">prefix written once</text>
+    <path d="M180 92 L180 112" stroke="#5b6672" stroke-width="1.2" stroke-linecap="round" stroke-dasharray="3 3"/><path d="M180 112 l-4 -2.4 v4.8 z" fill="#5b6672"/>
+    <text x="180" y="124" fill="#5b6672" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="8" text-anchor="middle">replayed next</text>
+    </svg>

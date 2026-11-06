@@ -12,7 +12,7 @@
      The position is written as two custom properties and the gradient is
      painted by the browser, so the cost is one style recalculation per
      frame at most. */
-  const cards = Array.from(document.querySelectorAll(".feature"));
+  const cards = Array.from(document.querySelectorAll(".l-panel, .feature"));
   if (cards.length && !reduceMotion.matches) {
     let queued = false;
     let pending = null;
@@ -44,11 +44,11 @@
   }
 
   /* ── the hero drifts as you leave it ─────────────────────────────────
-     A parallax on the terminal frame and a slight fade on the copy. The
+     A parallax on the live window and a slight fade on the copy. The
      transform is written once per frame, never per scroll event. */
-  const hero = document.querySelector(".hero");
-  const heroVisual = hero && hero.querySelector(".hero-visual");
-  const heroCopy = hero && hero.querySelector(".hero-copy");
+  const hero = document.querySelector(".l-hero");
+  const heroVisual = hero && hero.querySelector(".l-hero-media");
+  const heroCopy = hero && hero.querySelector(".l-hero-copy");
   if (hero && heroVisual && heroCopy && !reduceMotion.matches) {
     let ticking = false;
 

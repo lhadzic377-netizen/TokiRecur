@@ -30,6 +30,7 @@ PUBLIC_FILES = (
     "404.html",
     "privacy.html",
     "style.css",
+    "landing.css",
     "fonts.css",
     "head.js",
     "app.js",
@@ -43,6 +44,9 @@ PUBLIC_FILES = (
 )
 
 PUBLIC_DIRS = ("img", "docs", "assets", "fonts")
+
+DIAGRAMS = SITE / "designs" / "diagrams"
+DIAGRAM_RE = re.compile(r"<!--\s*DIAGRAM:(?P<name>[a-z0-9-]+)\s*-->")
 
 ASSET_SUFFIXES = {
     ".css",
@@ -112,6 +116,36 @@ def copy_tree() -> None:
             dest = DIST / rel
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(item, dest)
+
+
+def inline_diagrams() -> None:
+    """Replace ``<!--DIAGRAM:name-->`` placeholders with the authored SVG.
+
+    The diagrams live in the design source, not in the served tree: they are
+    inlined so they inherit the page's colour, scale with the text, and cost
+    no extra requests.
+    """
+    index = DIST / "index.html"
+    if not index.is_file():
+        return
+    text = index.read_text(encoding="utf-8")
+
+    def repl(match: re.Match[str]) -> str:
+        name = match.group("name")
+        path = DIAGRAMS / f"{name}.svg"
+        if not path.is_file():
+            raise SystemExit(f"error: missing diagram {path.relative_to(REPO)}")
+        svg = path.read_text(encoding="utf-8").strip()
+        svg = re.sub(r"^<\?xml[^>]*>\s*", "", svg)
+        return svg
+
+    text, count = DIAGRAM_RE.subn(repl, text)
+    leftover = DIAGRAM_RE.findall(text)
+    if leftover:
+        raise SystemExit(f"error: unknown diagram placeholder(s): {leftover}")
+    index.write_text(text, encoding="utf-8")
+    if count:
+        print(f"  inlined: {count} diagrams")
 
 
 def asset_map() -> dict[str, str]:
@@ -278,6 +312,7 @@ def main() -> int:
         return 2
 
     copy_tree()
+    inline_diagrams()
 
     # CSS can reference images.  Resolve those first, then hash the rewritten
     # CSS so every HTML reference points at the exact bytes that were built.

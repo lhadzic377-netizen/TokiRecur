@@ -1,0 +1,20 @@
+<svg class="dg" viewBox="0 0 248 150" fill="none" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
+    <text x="6" y="14" fill="#9199a3" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="8.5" text-anchor="start">two interfaces, one daemon</text>
+    <rect x="6" y="26" width="104" height="76" rx="7" fill="rgba(255,255,255,0.03)" stroke="#3a4450"/>
+    <rect x="6" y="26" width="104" height="15" rx="7" fill="rgba(255,255,255,0.05)"/>
+    <circle cx="16" cy="33.5" r="2.4" fill="#ffd60a"/>
+    <text x="26" y="37" fill="#9199a3" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="7.5" text-anchor="start">toki</text>
+    <rect x="14.0" y="48.0" width="8" height="9" rx="2.5" fill="rgba(255,214,10,0.22)" stroke="#ffd60a" stroke-width="1"/><rect x="24.0" y="48.0" width="8" height="9" rx="2.5" fill="rgba(255,214,10,0.22)" stroke="#ffd60a" stroke-width="1"/><rect x="34.0" y="48.0" width="8" height="9" rx="2.5" fill="rgba(255,214,10,0.22)" stroke="#ffd60a" stroke-width="1"/><rect x="44.0" y="48.0" width="8" height="9" rx="2.5" fill="rgba(255,214,10,0.22)" stroke="#ffd60a" stroke-width="1"/><rect x="54.0" y="48.0" width="8" height="9" rx="2.5" fill="rgba(255,214,10,0.22)" stroke="#ffd60a" stroke-width="1"/><rect x="64.0" y="48.0" width="8" height="9" rx="2.5" fill="rgba(255,255,255,0.05)" stroke="#3a4450" stroke-width="1"/><rect x="74.0" y="48.0" width="8" height="9" rx="2.5" fill="rgba(255,255,255,0.05)" stroke="#3a4450" stroke-width="1"/><rect x="84.0" y="48.0" width="8" height="9" rx="2.5" fill="rgba(255,255,255,0.05)" stroke="#3a4450" stroke-width="1"/><rect x="94.0" y="48.0" width="8" height="9" rx="2.5" fill="rgba(255,255,255,0.05)" stroke="#3a4450" stroke-width="1"/>
+    <text x="14" y="74" fill="#9199a3" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="7.5" text-anchor="start">full-screen TUI</text>
+    <text x="14" y="86" fill="#5b6672" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="7" text-anchor="start">toki tui</text>
+    <rect x="132" y="26" width="104" height="82" rx="7" fill="rgba(255,255,255,0.03)" stroke="#3a4450"/>
+    <rect x="132" y="26" width="104" height="15" rx="7" fill="rgba(255,255,255,0.05)"/>
+    <circle cx="142" cy="33.5" r="2.4" fill="#47e0e2"/>
+    <text x="152" y="37" fill="#9199a3" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="7.5" text-anchor="start">chat</text>
+    <rect x="142" y="48" width="52" height="7" rx="3.5" fill="rgba(255,255,255,0.07)"/>
+    <rect x="142" y="60" width="76" height="7" rx="3.5" fill="rgba(71,224,226,0.2)"/>
+    <rect x="142" y="72" width="60" height="7" rx="3.5" fill="rgba(255,255,255,0.07)"/>
+    <text x="142" y="92" fill="#9199a3" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="7.5" text-anchor="start">single-page web UI</text>
+    <text x="142" y="103" fill="#5b6672" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="7" text-anchor="start">toki web</text>
+    <path d="M112 64 L130 64" stroke="#ffd60a" stroke-width="1.2" stroke-linecap="round"/><path d="M130 64 l-4 -2.4 v4.8 z" fill="#ffd60a"/>
+    </svg>

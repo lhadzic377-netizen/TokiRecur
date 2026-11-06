@@ -14,3 +14,13 @@
   font-display: swap;
   src: url("/fonts/geist-mono-latin.woff2") format("woff2");
 }
+
+/* One display voice, used for two phrases on the landing page and nowhere
+   else. It is the human note in an otherwise technical page. */
+@font-face {
+  font-family: "Instrument Serif";
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/instrument-serif-italic.woff2") format("woff2");
+}

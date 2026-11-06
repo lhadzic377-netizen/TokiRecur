@@ -1,0 +1,13 @@
+<svg class="dg" viewBox="0 0 248 150" fill="none" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
+    <text x="6" y="14" fill="#9199a3" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="8.5" text-anchor="start">same prompt, twice</text>
+    <rect x="6.0" y="24.0" width="15" height="20" rx="2.5" fill="rgba(255,214,10,0.22)" stroke="#ffd60a" stroke-width="1"/><rect x="24.0" y="24.0" width="15" height="20" rx="2.5" fill="rgba(255,214,10,0.22)" stroke="#ffd60a" stroke-width="1"/><rect x="42.0" y="24.0" width="15" height="20" rx="2.5" fill="rgba(255,214,10,0.22)" stroke="#ffd60a" stroke-width="1"/><rect x="60.0" y="24.0" width="15" height="20" rx="2.5" fill="rgba(255,214,10,0.22)" stroke="#ffd60a" stroke-width="1"/><rect x="78.0" y="24.0" width="15" height="20" rx="2.5" fill="rgba(255,214,10,0.22)" stroke="#ffd60a" stroke-width="1"/><rect x="96.0" y="24.0" width="15" height="20" rx="2.5" fill="rgba(255,214,10,0.22)" stroke="#ffd60a" stroke-width="1"/><rect x="114.0" y="24.0" width="15" height="20" rx="2.5" fill="rgba(255,214,10,0.22)" stroke="#ffd60a" stroke-width="1"/><rect x="132.0" y="24.0" width="15" height="20" rx="2.5" fill="rgba(71,224,226,0.16)" stroke="#47e0e2" stroke-width="1"/><rect x="150.0" y="24.0" width="15" height="20" rx="2.5" fill="rgba(71,224,226,0.16)" stroke="#47e0e2" stroke-width="1"/><rect x="168.0" y="24.0" width="15" height="20" rx="2.5" fill="rgba(255,255,255,0.05)" stroke="#3a4450" stroke-width="1"/>
+    <path d="M86 52 L86 62" stroke="#ffd60a" stroke-width="1.2" stroke-linecap="round"/><path d="M86 62 l-4 -2.4 v4.8 z" fill="#ffd60a"/>
+    <text x="86" y="74" fill="#ffd60a" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="8" text-anchor="middle">1st computed</text>
+    <path d="M158 52 L158 62" stroke="#5b6672" stroke-width="1.2" stroke-linecap="round" stroke-dasharray="3 3"/><path d="M158 62 l-4 -2.4 v4.8 z" fill="#5b6672"/>
+    <text x="158" y="74" fill="#5b6672" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="8" text-anchor="middle">2nd replayed</text>
+    <rect x="34" y="78" width="180" height="52" rx="10" fill="rgba(255,214,10,0.05)" stroke="#ffd60a" stroke-width="1"/>
+    <text x="44" y="96" fill="#ffd60a" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="8.5" text-anchor="start">one living KV pool</text>
+    <text x="44" y="112" fill="#9199a3" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="8.5" text-anchor="start">shared by every client</text>
+    <circle cx="196" cy="100" r="4" fill="#47e0e2"/>
+    <circle cx="196" cy="116" r="4" fill="#ffd60a"/>
+    </svg>

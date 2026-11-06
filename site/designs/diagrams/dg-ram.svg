@@ -1,0 +1,17 @@
+<svg class="dg" viewBox="0 0 248 150" fill="none" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
+    <text x="6" y="14" fill="#9199a3" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="8.5" text-anchor="start">the context that actually fits</text>
+    <rect x="6" y="28" width="34" height="46" rx="5" fill="rgba(255,255,255,0.05)" stroke="#3a4450"/>
+    <text x="23" y="48" fill="#9199a3" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="8" text-anchor="middle">GGUF</text>
+    <text x="23" y="60" fill="#9199a3" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="7.5" text-anchor="middle">header</text>
+    <path d="M42 51 L70 51" stroke="#3a4450" stroke-width="1.2" stroke-linecap="round"/><path d="M70 51 l-4 -2.4 v4.8 z" fill="#3a4450"/>
+    <rect x="72" y="28" width="164" height="26" rx="6" fill="rgba(255,255,255,0.04)" stroke="#3a4450"/>
+    <rect x="72" y="28" width="118" height="26" rx="6" fill="rgba(255,214,10,0.16)" stroke="#ffd60a"/>
+    <text x="80" y="45" fill="#ffd60a" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="8.5" text-anchor="start">65k ctx</text>
+    <text x="206" y="45" fill="#5b6672" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="8" text-anchor="middle">free</text>
+    <rect x="72" y="64" width="164" height="10" rx="5" fill="rgba(255,255,255,0.05)"/>
+    <rect x="72" y="64" width="118" height="10" rx="5" fill="rgba(255,214,10,0.5)"/>
+    <text x="72" y="96" fill="#9199a3" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="8.5" text-anchor="start">KV pool sized to this machine,</text>
+    <text x="72" y="108" fill="#9199a3" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="8.5" text-anchor="start">not to the model's wish</text>
+    <path d="M72 122 h118" stroke="#ffd60a" stroke-width="1.2"/>
+    <path d="M72 118 v8 M190 118 v8" stroke="#ffd60a" stroke-width="1.2"/>
+    </svg>
