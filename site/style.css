@@ -11,25 +11,57 @@
 :root {
   color-scheme: dark;
 
-  /* surfaces: near-black with a cool cast, so the yellow reads as light */
-  --bg: #08090b;
-  --bg-2: #0c0e11;
-  --panel: #111418;
-  --panel-2: #16191e;
-  --line: rgba(255, 255, 255, 0.09);
-  --line-strong: rgba(255, 255, 255, 0.16);
+  /* Surfaces. Five real steps, each cooler in the shadows, and each with
+     enough chroma to catch a light source. Flat greys are what make a dark
+     interface read as a sketch: without chroma the eye has nothing to
+     model, and the page looks like pencil on paper rather than like a lit
+     room. The hex values are the fallbacks; the oklch values are the truth,
+     because oklch steps by lightness instead of by whatever the RGB maths
+     happened to do. */
+  --bg: #070a11;
+  --bg: oklch(0.142 0.016 268);
+  --bg-2: #0e131c;
+  --bg-2: oklch(0.185 0.02 264);
+  --panel: #131a24;
+  --panel: oklch(0.215 0.022 258);
+  --panel-2: #1a242e;
+  --panel-2: oklch(0.255 0.024 252);
+  --panel-3: #242f3a;
+  --panel-3: oklch(0.3 0.026 248);
 
-  /* ink */
-  --fg: #f4f2ec;
-  --fg-dim: #c3c0b7;
-  --muted: #8d8a80;
+  /* Ink. The headline is warm and the body is cool, so the page has a
+     temperature of its own instead of one flat white. */
+  --fg: #f9f7ef;
+  --fg: oklch(0.975 0.01 96);
+  --fg-dim: #ccd3dc;
+  --fg-dim: oklch(0.865 0.014 252);
+  --muted: #9199a3;
+  --muted: oklch(0.68 0.018 254);
 
-  /* brand */
-  --brand: #ffd60a;
-  --brand-ink: #14140c;
-  --brand-soft: rgba(255, 214, 10, 0.12);
-  --brand-line: rgba(255, 214, 10, 0.32);
+  /* A hairline carries the hue of the surface it sits on. Pure white at 9%
+     is a pencil line; a cool line at 36% is light falling on an edge. */
+  --line: oklch(0.38 0.022 262 / 0.36);
+  --line-strong: oklch(0.5 0.026 258 / 0.58);
+
+  /* The brand is a family, not one colour: a deep gold for fills, the pure
+     yellow for marks, a lift for the top edge of a lit button. */
+  --brand: #ffd60f;
+  --brand: oklch(0.885 0.18 95);
+  --brand-deep: #e2b42c;
+  --brand-deep: oklch(0.79 0.15 88);
+  --brand-lift: #ffef6e;
+  --brand-lift: oklch(0.945 0.15 100);
+  --brand-ink: #211d0c;
+  --brand-ink: oklch(0.16 0.03 95);
+  --brand-soft: oklch(0.885 0.18 95 / 0.13);
+  --brand-line: oklch(0.885 0.18 95 / 0.34);
   --cream: #f4ecdc;
+
+  /* The two things the product actually distinguishes. */
+  --hit: #47e0e2;
+  --hit: oklch(0.83 0.125 196);
+  --compute: #fe9d4a;
+  --compute: oklch(0.78 0.15 58);
 
   /* type */
   --sans: "Geist", system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -2330,5 +2362,278 @@ html:not(.js-ready) .mech-stage {
   }
   .feature::after {
     display: none;
+  }
+}
+
+/* ==========================================================================
+   the light
+   --------------------------------------------------------------------------
+   A dark page is not a dark rectangle. What makes Stripe and Linear look
+   expensive is not their greys — it is that the page is *lit*: several
+   coloured sources, each with its own hue, falling on a surface that has
+   chroma of its own. One blob of colour is a gradient; several sources with
+   different hues, moving at different speeds, is a room.
+
+   The grain on top is not decoration. Eight-bit panels band badly on wide,
+   slow gradients; a 3% noise layer is what makes them look continuous.
+   ========================================================================== */
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: -12%;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(42% 38% at 82% 0%, oklch(0.52 0.185 290 / 0.3), transparent 64%),
+    radial-gradient(36% 34% at 2% 4%, oklch(0.6 0.135 240 / 0.18), transparent 60%),
+    radial-gradient(34% 32% at 102% 54%, oklch(0.48 0.17 350 / 0.15), transparent 62%),
+    radial-gradient(38% 34% at 34% 106%, oklch(0.75 0.14 75 / 0.09), transparent 64%);
+  filter: blur(30px);
+  animation: light-drift 74s ease-in-out infinite alternate;
+}
+
+@keyframes light-drift {
+  0% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(-1.6%, 1.4%, 0) scale(1.06); }
+  100% { transform: translate3d(1.4%, -1.2%, 0) scale(1.02); }
+}
+
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+  opacity: 0.038;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.82' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* Everything the visitor reads sits above the light. */
+main,
+.topbar nav,
+footer > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* The topbar is glass over the light, not a slab on top of it. */
+.topbar {
+  background: oklch(0.155 0.018 268 / 0.72);
+  border-bottom: 1px solid oklch(0.42 0.024 262 / 0.28);
+  backdrop-filter: blur(20px) saturate(150%);
+}
+
+/* ==========================================================================
+   material
+   --------------------------------------------------------------------------
+   A surface in a room has an edge. Two declarations draw it: a border
+   gradient that is bright where the light lands and fades where the
+   surface turns away, and a single hairline of light along the top inside
+   the panel. Shadow alone never reads as depth; the edge does.
+   ========================================================================== */
+
+.hero-visual,
+.mech-stage,
+.honesty,
+.code,
+.table-wrap,
+.arch-node {
+  border: 1px solid transparent;
+  background-image:
+    linear-gradient(var(--panel), var(--panel)),
+    linear-gradient(
+      168deg,
+      oklch(0.6 0.028 258 / 0.5),
+      oklch(0.32 0.022 260 / 0.14) 44%,
+      oklch(0.24 0.02 262 / 0.05)
+    );
+  background-origin: border-box;
+  background-clip: padding-box, border-box;
+}
+
+.hero-visual,
+.mech-stage,
+.honesty,
+.code,
+.table-wrap,
+.arch-node {
+  box-shadow:
+    inset 0 1px 0 oklch(1 0 0 / 0.055),
+    0 26px 60px -38px oklch(0.08 0.05 280 / 0.95);
+}
+
+/* The terminal is a screen: near-black glass with the brand's own light
+   coming off it. */
+.terminal {
+  border: 1px solid transparent;
+  background-image:
+    linear-gradient(#080b11, #080b11),
+    linear-gradient(
+      180deg,
+      oklch(0.75 0.07 95 / 0.42),
+      oklch(0.34 0.03 262 / 0.16) 26%,
+      oklch(0.24 0.02 262 / 0.06)
+    );
+  background-origin: border-box;
+  background-clip: padding-box, border-box;
+  box-shadow:
+    inset 0 1px 0 oklch(1 0 0 / 0.07),
+    0 34px 80px -46px oklch(0.06 0.05 280 / 0.95),
+    0 0 110px -56px oklch(0.885 0.18 95 / 0.4);
+}
+
+.terminal-bar {
+  background: linear-gradient(180deg, oklch(0.22 0.022 258 / 0.9), oklch(0.18 0.02 262 / 0.75));
+  border-bottom: 1px solid oklch(0.34 0.024 260 / 0.5);
+}
+
+/* A lit button: a highlight along the top edge, the pure yellow in the
+   middle, the deep gold where it turns away. */
+.btn.primary {
+  background-image: linear-gradient(
+    180deg,
+    var(--brand-lift) 0%,
+    var(--brand) 46%,
+    var(--brand-deep) 100%
+  );
+  color: var(--brand-ink);
+  box-shadow:
+    inset 0 1px 0 oklch(1 0 0 / 0.5),
+    0 14px 30px -14px oklch(0.885 0.18 95 / 0.55);
+}
+
+.btn.primary:hover {
+  background-image: linear-gradient(
+    180deg,
+    oklch(0.97 0.16 103) 0%,
+    var(--brand-lift) 40%,
+    var(--brand) 100%
+  );
+}
+
+.btn.ghost {
+  border-color: transparent;
+  background-image:
+    linear-gradient(oklch(0.215 0.022 258 / 0.55), oklch(0.215 0.022 258 / 0.55)),
+    linear-gradient(170deg, oklch(0.56 0.026 258 / 0.55), oklch(0.28 0.02 260 / 0.12));
+  background-origin: border-box;
+  background-clip: padding-box, border-box;
+  box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.05);
+}
+
+.btn.ghost:hover {
+  background-image:
+    linear-gradient(oklch(0.24 0.024 256 / 0.7), oklch(0.24 0.024 256 / 0.7)),
+    linear-gradient(170deg, oklch(0.7 0.03 258 / 0.7), oklch(0.3 0.02 260 / 0.16));
+}
+
+/* The hero sits in a pool of its own light: violet from the corner the
+   terminal is in, gold from the headline. */
+.hero::before {
+  content: "";
+  position: absolute;
+  inset: -30% -12% auto -12%;
+  height: 130%;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(40% 46% at 88% 16%, oklch(0.52 0.185 290 / 0.18), transparent 66%),
+    radial-gradient(26% 30% at 14% 40%, oklch(0.885 0.18 95 / 0.05), transparent 62%);
+}
+
+/* The active tab is a small lit surface, not a yellow rectangle. */
+.bench-tab.active {
+  color: var(--brand);
+  border-color: oklch(0.885 0.18 95 / 0.34);
+  background: linear-gradient(
+    180deg,
+    oklch(0.885 0.18 95 / 0.16),
+    oklch(0.885 0.18 95 / 0.06)
+  );
+  box-shadow:
+    inset 0 1px 0 oklch(1 0 0 / 0.12),
+    0 0 24px -10px oklch(0.885 0.18 95 / 0.5);
+}
+
+/* The matcher cells are real colour: a solid body with a lit top edge,
+   not a wash of the accent at 26%. */
+.mech-cell {
+  background: oklch(0.28 0.03 262 / 0.55);
+  box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.05);
+}
+
+.mech-cell.is-replay {
+  background: linear-gradient(
+    180deg,
+    oklch(0.62 0.13 196),
+    oklch(0.42 0.1 200) 60%,
+    oklch(0.33 0.075 204)
+  );
+  border-color: oklch(0.83 0.125 196 / 0.65);
+  box-shadow:
+    inset 0 1px 0 oklch(1 0 0 / 0.3),
+    0 0 18px -6px oklch(0.83 0.125 196 / 0.6);
+}
+
+.mech-cell.is-compute {
+  background: linear-gradient(
+    180deg,
+    oklch(0.68 0.15 58),
+    oklch(0.47 0.12 55) 60%,
+    oklch(0.36 0.09 52)
+  );
+  border-color: oklch(0.78 0.15 58 / 0.65);
+  box-shadow:
+    inset 0 1px 0 oklch(1 0 0 / 0.28),
+    0 0 18px -6px oklch(0.78 0.15 58 / 0.5);
+}
+
+/* The legend swatches follow the cells. */
+.dot-replay { background: linear-gradient(180deg, oklch(0.62 0.13 196), oklch(0.42 0.1 200)); }
+.dot-compute { background: linear-gradient(180deg, oklch(0.68 0.15 58), oklch(0.47 0.12 55)); }
+.dot-new { background: oklch(0.28 0.03 262 / 0.8); }
+
+/* The status dot in the terminal bar is lit. */
+.terminal-dot {
+  background: radial-gradient(circle at 35% 30%, var(--brand-lift), var(--brand) 55%, var(--brand-deep));
+  box-shadow: 0 0 10px oklch(0.885 0.18 95 / 0.7);
+}
+
+/* Grade pills carry their own colour. */
+.grade {
+  background: oklch(0.885 0.18 95 / 0.14);
+  color: var(--brand);
+  box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.1);
+}
+
+.grade.mid {
+  background: oklch(0.78 0.15 58 / 0.16);
+  color: var(--compute);
+}
+
+.grade.bad {
+  background: oklch(0.62 0.16 25 / 0.16);
+  color: oklch(0.75 0.14 30);
+}
+
+/* The backend strip picks up the light behind it. */
+.backend-strip {
+  background: linear-gradient(180deg, oklch(0.185 0.02 264 / 0.9), oklch(0.155 0.018 268 / 0.9));
+  border-top: 1px solid oklch(0.4 0.024 262 / 0.34);
+  border-bottom: 1px solid oklch(0.4 0.024 262 / 0.34);
+}
+
+/* The demo band is a raised surface, not a tint. */
+#demo::before {
+  background: linear-gradient(180deg, oklch(0.185 0.02 264 / 0.92), oklch(0.165 0.019 266 / 0.92));
+  border-top: 1px solid oklch(0.4 0.024 262 / 0.3);
+  border-bottom: 1px solid oklch(0.4 0.024 262 / 0.3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body::before {
+    animation: none;
   }
 }

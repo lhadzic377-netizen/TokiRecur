@@ -1,15 +1,24 @@
 :root {
   color-scheme: dark;
-  --bg: #08090b;
-  --surface: #111418;
-  --surface-2: #16191e;
-  --border: rgba(255, 255, 255, 0.09);
-  --border-hi: rgba(255, 255, 255, 0.16);
-  --fg: #f4f2ec;
-  --dim: #c3c0b7;
-  --dimmer: #8d8a80;
-  --accent: #ffd60a;
-  --accent-soft: rgba(255, 214, 10, 0.12);
+  /* The same material as the landing page, quieter: a documentation surface
+     is a surface you read, not one you look at. */
+  --bg: #070a11;
+  --bg: oklch(0.142 0.016 268);
+  --surface: #131a24;
+  --surface: oklch(0.215 0.022 258);
+  --surface-2: #1a242e;
+  --surface-2: oklch(0.255 0.024 252);
+  --border: oklch(0.38 0.022 262 / 0.36);
+  --border-hi: oklch(0.5 0.026 258 / 0.58);
+  --fg: #f9f7ef;
+  --fg: oklch(0.975 0.01 96);
+  --dim: #ccd3dc;
+  --dim: oklch(0.865 0.014 252);
+  --dimmer: #9199a3;
+  --dimmer: oklch(0.68 0.018 254);
+  --accent: #ffd60f;
+  --accent: oklch(0.885 0.18 95);
+  --accent-soft: oklch(0.885 0.18 95 / 0.13);
   --radius: 12px;
   --font: "Geist", system-ui, -apple-system, "Segoe UI", sans-serif;
   --mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
