@@ -7,42 +7,6 @@
 (() => {
   const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 
-  /* ── the cards follow the pointer ────────────────────────────────────
-     A card that lights up where the cursor is reads as a physical object.
-     The position is written as two custom properties and the gradient is
-     painted by the browser, so the cost is one style recalculation per
-     frame at most. */
-  const cards = Array.from(document.querySelectorAll(".l-panel, .feature"));
-  if (cards.length && !reduceMotion.matches) {
-    let queued = false;
-    let pending = null;
-
-    const paint = () => {
-      queued = false;
-      if (!pending) return;
-      const { card, x, y } = pending;
-      const box = card.getBoundingClientRect();
-      card.style.setProperty("--mx", `${((x - box.left) / box.width) * 100}%`);
-      card.style.setProperty("--my", `${((y - box.top) / box.height) * 100}%`);
-      pending = null;
-    };
-
-    cards.forEach((card) => {
-      card.addEventListener(
-        "pointermove",
-        (event) => {
-          if (event.pointerType === "touch") return;
-          pending = { card, x: event.clientX, y: event.clientY };
-          if (!queued) {
-            queued = true;
-            requestAnimationFrame(paint);
-          }
-        },
-        { passive: true },
-      );
-    });
-  }
-
   /* ── the hero drifts as you leave it ─────────────────────────────────
      A parallax on the live window and a slight fade on the copy. The
      transform is written once per frame, never per scroll event. */

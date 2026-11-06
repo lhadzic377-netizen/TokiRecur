@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy · Toki Recur</title>
+<meta name="description" content="No cookies, no analytics, no accounts, no third-party scripts. What the server logs, what the chat does, and what runs on your machine.">
+<link rel="canonical" href="https://tokirecur.com/privacy">
+<link rel="icon" href="/favicon.png" type="image/png" sizes="any">
+<link rel="stylesheet" href="/fonts.css">
+<link rel="stylesheet" href="/style.css">
+<script src="/head.js"></script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="topbar">
+  <nav aria-label="Main navigation">
+    <a class="brand" href="/" aria-label="Toki Recur home">
+      <img class="logo" src="/img/logo.webp" alt="" width="30" height="30">
+      toki<span class="wordmark-accent">recur</span>
+    </a>
+    <div class="links" id="nav-links">
+      <a href="/#how">How it works</a>
+      <a href="/#benchmarks">Benchmarks</a>
+      <a href="/#quickstart">Quick start</a>
+      <a href="/docs/">Docs</a>
+      <a href="/pricing">Pricing</a>
+      <a href="https://github.com/lhadzic377-netizen/TokiRecur" target="_blank" rel="noopener" class="btn-nav">GitHub</a>
+    </div>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="nav-links" aria-label="Open navigation">
+      <span></span><span></span><span></span>
+    </button>
+  </nav>
+</header>
+<main id="main" tabindex="-1">
+  <section class="legal-page">
+    <p class="overline">Privacy</p>
+    <h1>Nothing here follows you.</h1>
+    <p class="lede">This site sets no cookies, runs no analytics, has no accounts, and loads nothing from a
+      third party. What follows is the whole of it, including the parts that are not flattering.</p>
+
+    <h2>What this site is</h2>
+    <p>A static website for an open-source tool. Every page is a file on a web server. There is no database
+      behind it, no login, and no way for the site to recognise you between two visits.</p>
+
+    <h2>Cookies and storage</h2>
+    <p>None. No cookies, no tracking identifiers, no advertising or analytics scripts, no fingerprinting.
+      The site loads no third-party code at all: the typeface and the images are served from the same machine
+      as the page, so a request for this page never reaches another company.</p>
+
+    <h2>What the server writes down</h2>
+    <p>The web server (Caddy) writes its ordinary access log: the client's IP address, the request path, the
+      response status, and the time. That log is used to run the site and to answer abuse. The installer does
+      not configure a retention period, so how long those lines are kept is a decision made on the server
+      rather than by this software. If that matters to you, ask on the issue tracker and the answer will be
+      the truth about that machine.</p>
+
+    <h2>The chat</h2>
+    <p>The chat app on <span class="accent">chat.tokirecur.com</span> is a separate program running on the
+      same machine as this site. When it is running, the prompt you type is sent to the model that is running
+      there. This project does not forward conversations to a model provider, and there is no account system
+      behind it. The chat app may keep its own logs in the usual way a server does.</p>
+
+    <h2>The software on your machine</h2>
+    <p>The daemon, the terminal UI, and the web UI all run locally. The package talks to the model server you
+      point it at and to the daemon itself. It does not phone home, and it sends nothing to the author of this
+      project. Model weights are downloaded from Hugging Face, or from wherever you point the downloader;
+      those downloads are covered by the provider's own terms.</p>
+
+    <h2>Links to other places</h2>
+    <p>This site links to GitHub and to Hugging Face. Those services have their own accounts, their own logs
+      and their own privacy policies. What you do there is not covered by this page.</p>
+
+    <h2>Questions</h2>
+    <p>Open an issue on the
+      <a href="https://github.com/lhadzic377-netizen/TokiRecur/issues" target="_blank" rel="noopener">issue tracker</a>.
+      It is public, so anything you write there is public. If that is not what you want, say so in the issue and
+      the details can be taken down.</p>
+
+    <p class="legal-updated">Last changed 6 November 2026.</p>
+  </section>
+</main>
+<footer>
+  <div class="footer-grid">
+    <div class="footer-brand">
+      <a class="brand footer-brand-link" href="/" aria-label="Toki Recur home">
+        <img class="footer-mark" src="/img/mark-3d.webp" alt="" aria-hidden="true" width="180" height="180" loading="lazy">
+        <span class="footer-wordmark">toki <span class="wordmark-accent">recur</span></span>
+      </a>
+      <p>KV cache reuse for LLM inference. Drop-in prefix caching on llama.cpp, no patches, no vendor lock-in.</p>
+    </div>
+    <div class="footer-col">
+      <h3>Product</h3>
+      <a href="/#quickstart">Quick start</a>
+      <a href="/#benchmarks">Benchmarks</a>
+      <a href="/docs/">Docs</a>
+      <a href="/pricing">Pricing</a>
+    </div>
+    <div class="footer-col">
+      <h3>Project</h3>
+      <a href="https://github.com/lhadzic377-netizen/TokiRecur" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/lhadzic377-netizen/TokiRecur/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
+      <a href="/privacy">Privacy</a>
+      <a href="/terms">Terms</a>
+    </div>
+  </div>
+  <div class="footer-bottom">
+    <span>Toki Recur · MIT licensed</span>
+    <span>Built on llama.cpp</span>
+    <span>Mascot: <span class="accent">toki the bear</span></span>
+  </div>
+</footer>
+<script src="/app.js?v=15" defer></script>
+</body>
+</html>

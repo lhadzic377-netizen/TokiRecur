@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Terms · Toki Recur</title>
+<meta name="description" content="The licence is the terms. What the software is, what the numbers are, and what this site does and does not promise.">
+<link rel="canonical" href="https://tokirecur.com/terms">
+<link rel="icon" href="/favicon.png" type="image/png" sizes="any">
+<link rel="stylesheet" href="/fonts.css">
+<link rel="stylesheet" href="/style.css">
+<script src="/head.js"></script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="topbar">
+  <nav aria-label="Main navigation">
+    <a class="brand" href="/" aria-label="Toki Recur home">
+      <img class="logo" src="/img/logo.webp" alt="" width="30" height="30">
+      toki<span class="wordmark-accent">recur</span>
+    </a>
+    <div class="links" id="nav-links">
+      <a href="/#how">How it works</a>
+      <a href="/#benchmarks">Benchmarks</a>
+      <a href="/#quickstart">Quick start</a>
+      <a href="/docs/">Docs</a>
+      <a href="/pricing">Pricing</a>
+      <a href="https://github.com/lhadzic377-netizen/TokiRecur" target="_blank" rel="noopener" class="btn-nav">GitHub</a>
+    </div>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="nav-links" aria-label="Open navigation">
+      <span></span><span></span><span></span>
+    </button>
+  </nav>
+</header>
+<main id="main" tabindex="-1">
+  <section class="legal-page">
+    <p class="overline">Terms</p>
+    <h1>The licence is the terms.</h1>
+    <p class="lede">Toki Recur is MIT licensed, and that licence is the actual grant: use it, change it, ship
+      it. Everything below explains what that means in practice, and what nobody is promising you.</p>
+
+    <h2>The licence</h2>
+    <p>The <a href="https://github.com/lhadzic377-netizen/TokiRecur/blob/main/LICENSE" target="_blank" rel="noopener">licence
+      file in the repository</a> is the terms of use. It grants you the rights to use, copy, modify, merge,
+      publish, distribute, sublicense and sell the software, including for money, and it asks for one thing:
+      keep the copyright notice and the licence with your copies. It does not change when this page changes.</p>
+
+    <h2>The software comes as it is</h2>
+    <p>The software is provided "as is", without warranty of any kind, exactly as the licence says. There is no
+      support contract, no uptime promise and no service level anywhere in this project. If something breaks,
+      the <a href="https://github.com/lhadzic377-netizen/TokiRecur/issues" target="_blank" rel="noopener">issue
+      tracker</a> is where to say so, and it is where fixes come from.</p>
+
+    <h2>This site</h2>
+    <p>This site is information about the project. Nothing on it is a contract. The pricing page says the price
+      is $0, and that is not a quote for a service: there is no service to sell, no account to create and no
+      subscription to cancel.</p>
+
+    <h2>The numbers</h2>
+    <p>The benchmark figures were measured on the hardware named next to them, with the method described in
+      the docs. They are measurements, not promises. Your hardware, your quantisation and your workload will
+      give different numbers. The benchmark harness ships in the package so you can measure it yourself instead
+      of taking this site's word for it.</p>
+
+    <h2>Your models and your prompts</h2>
+    <p>You run the models. The daemon keeps the key and value blocks of the prompts it sees in a cache on your
+      machine, and you can delete that cache whenever you like. If you point the daemon at a server you do not
+      own, that operator receives the prompts, and this project is not responsible for what they do with them.</p>
+
+    <h2>Names</h2>
+    <p>"llama.cpp" is the work of its authors and is used here to say what this runs on. "Toki Recur" and the
+      bear are this project's. The recycling symbol is a generic mark, not anyone's trademark.</p>
+
+    <h2>Questions</h2>
+    <p>Open an issue on the
+      <a href="https://github.com/lhadzic377-netizen/TokiRecur/issues" target="_blank" rel="noopener">issue tracker</a>.
+      It is public, so anything you write there is public.</p>
+
+    <p class="legal-updated">Last changed 6 November 2026.</p>
+  </section>
+</main>
+<footer>
+  <div class="footer-grid">
+    <div class="footer-brand">
+      <a class="brand footer-brand-link" href="/" aria-label="Toki Recur home">
+        <img class="footer-mark" src="/img/mark-3d.webp" alt="" aria-hidden="true" width="180" height="180" loading="lazy">
+        <span class="footer-wordmark">toki <span class="wordmark-accent">recur</span></span>
+      </a>
+      <p>KV cache reuse for LLM inference. Drop-in prefix caching on llama.cpp, no patches, no vendor lock-in.</p>
+    </div>
+    <div class="footer-col">
+      <h3>Product</h3>
+      <a href="/#quickstart">Quick start</a>
+      <a href="/#benchmarks">Benchmarks</a>
+      <a href="/docs/">Docs</a>
+      <a href="/pricing">Pricing</a>
+    </div>
+    <div class="footer-col">
+      <h3>Project</h3>
+      <a href="https://github.com/lhadzic377-netizen/TokiRecur" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/lhadzic377-netizen/TokiRecur/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
+      <a href="/privacy">Privacy</a>
+      <a href="/terms">Terms</a>
+    </div>
+  </div>
+  <div class="footer-bottom">
+    <span>Toki Recur · MIT licensed</span>
+    <span>Built on llama.cpp</span>
+    <span>Mascot: <span class="accent">toki the bear</span></span>
+  </div>
+</footer>
+<script src="/app.js?v=15" defer></script>
+</body>
+</html>

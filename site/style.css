@@ -869,6 +869,78 @@ footer {
   font-size: 0.84rem;
 }
 
+/* --- legal pages ---------------------------------------------------------- */
+
+/* Privacy and terms are read, not skimmed: one measure, generous leading,
+   and no furniture. */
+.legal-page {
+  max-width: none;
+  margin: 0;
+  padding: clamp(44px, 5.5vw, 84px) max(var(--gutter), calc((100% - 1080px) / 2))
+    clamp(64px, 8vw, 120px);
+}
+
+.legal-page h1 {
+  font-size: clamp(2.1rem, 1.4rem + 2.1vw, 3.1rem);
+  font-weight: 550;
+  line-height: 1.06;
+  letter-spacing: -0.04em;
+  margin: 0 0 var(--s5);
+  max-width: 20ch;
+}
+
+.legal-page .lede {
+  color: var(--fg-dim);
+  font-size: 1.04rem;
+  line-height: 1.66;
+  max-width: 62ch;
+  margin: 0 0 var(--s7);
+}
+
+.legal-page h2 {
+  font-size: 1.08rem;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  margin: var(--s7) 0 var(--s3);
+  padding-top: var(--s5);
+  border-top: 1px solid var(--line);
+  max-width: 40ch;
+}
+
+.legal-page h2:first-of-type { border-top: 0; padding-top: 0; }
+
+.legal-page p,
+.legal-page ul {
+  color: var(--fg-dim);
+  font-size: 0.97rem;
+  line-height: 1.74;
+  max-width: 68ch;
+  margin: 0 0 var(--s4);
+}
+
+.legal-page ul { padding-left: 1.15em; }
+
+.legal-page li { margin-bottom: var(--s2); }
+
+.legal-page a {
+  color: var(--fg-dim);
+  border-bottom: 1px solid var(--line-strong);
+  transition: color 0.18s var(--ease), border-color 0.18s var(--ease);
+}
+
+.legal-page a:hover {
+  color: var(--brand);
+  border-color: var(--brand-line);
+}
+
+.legal-updated {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  margin-top: var(--s7) !important;
+}
+
 /* --- motion --------------------------------------------------------------- */
 
 .js-ready .reveal {
@@ -1154,22 +1226,6 @@ footer {
 }
 
 /* A drawn band: the same grid paper an engineer would sketch on. */
-.mechanism::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  left: 50%;
-  width: 100vw;
-  transform: translateX(-50%);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.022), transparent 70%),
-    linear-gradient(rgba(255, 255, 255, 0.022) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.022) 1px, transparent 1px);
-  background-size: 100% 100%, 44px 44px, 44px 44px;
-  z-index: -1;
-  pointer-events: none;
-}
-
 .mech-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr);
@@ -1272,7 +1328,8 @@ html:not(.js-ready) .mech-stage {
 
 .mech-dot {
   margin: 0 0.55em;
-  color: var(--hairline-strong);
+  color: var(--muted);
+  opacity: 0.7;
 }
 
 .mech-cells {

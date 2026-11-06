@@ -67,16 +67,27 @@
   isolation: isolate;
 }
 
+/* The light in this page comes from the objects, not from the page. The
+   launcher is gold, the replayed blocks are teal, the computed ones are
+   amber, and each section is washed by the colour of the thing it is
+   talking about. There is no violet, and nothing floats in the middle of
+   the screen like a lantern. */
+
 .l-hero::before {
   content: "";
   position: absolute;
-  inset: -20% -10% 0 -10%;
+  inset: 0;
   z-index: -1;
   pointer-events: none;
   background:
-    radial-gradient(38% 44% at 76% 24%, oklch(0.50 0.17 292 / 0.26), transparent 68%),
-    radial-gradient(30% 34% at 12% 62%, oklch(0.885 0.18 95 / 0.07), transparent 64%),
-    radial-gradient(42% 50% at 96% 78%, oklch(0.46 0.14 218 / 0.14), transparent 70%);
+    linear-gradient(
+      100deg,
+      transparent 36%,
+      oklch(0.885 0.18 95 / 0.05) 68%,
+      oklch(0.66 0.15 95 / 0.12) 100%
+    ),
+    linear-gradient(180deg, oklch(0.46 0.03 258 / 0.15) 0%, transparent 44%),
+    linear-gradient(0deg, oklch(0.885 0.18 95 / 0.035) 0%, transparent 36%);
 }
 
 .l-hero-copy {
@@ -320,8 +331,8 @@
 
 .l-statement {
   position: relative;
-  padding-top: clamp(80px, 9vw, 132px);
-  padding-bottom: clamp(80px, 9vw, 132px);
+  padding-top: clamp(76px, 8.5vw, 120px);
+  padding-bottom: clamp(76px, 8.5vw, 120px);
   padding-left: max(var(--gutter), calc((100% - var(--wide)) / 2));
   padding-right: max(var(--gutter), calc((100% - var(--wide)) / 2));
 }
@@ -360,12 +371,38 @@
 /* style.css draws the matcher; the composition only needs a wider stage and
    a tighter relationship between the copy and the drawing. */
 .mechanism {
+  position: relative;
+  isolation: isolate;
   max-width: none;
   margin: 0;
   padding-top: clamp(72px, 7.5vw, 108px);
   padding-bottom: clamp(72px, 7.5vw, 108px);
   padding-left: max(var(--gutter), calc((100% - var(--wide)) / 2));
   padding-right: max(var(--gutter), calc((100% - var(--wide)) / 2));
+}
+
+/* Graph paper for the drawing, and the colour of a replayed block coming
+   in from the right, where the stage sits. */
+.mechanism::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  left: 50%;
+  width: 100vw;
+  transform: translateX(-50%);
+  z-index: -1;
+  pointer-events: none;
+  background:
+    linear-gradient(
+      100deg,
+      transparent 44%,
+      oklch(0.83 0.125 196 / 0.04) 78%,
+      oklch(0.62 0.13 196 / 0.07) 100%
+    ),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.022), transparent 70%),
+    linear-gradient(rgba(255, 255, 255, 0.022) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.022) 1px, transparent 1px);
+  background-size: 100% 100%, 100% 100%, 44px 44px, 44px 44px;
 }
 
 .mech-grid {
@@ -616,8 +653,8 @@
 /* ── 7 · the spec sheet ───────────────────────────────────────────────── */
 
 .l-package {
-  padding-top: clamp(72px, 8vw, 104px);
-  padding-bottom: clamp(72px, 8vw, 104px);
+  padding-top: clamp(64px, 7vw, 92px);
+  padding-bottom: clamp(64px, 7vw, 92px);
 }
 
 .l-package-head {
@@ -625,7 +662,7 @@
   grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
   gap: clamp(24px, 5vw, 80px);
   align-items: end;
-  margin-bottom: clamp(32px, 4.5vw, 56px);
+  margin-bottom: clamp(28px, 3.6vw, 46px);
 }
 
 .l-package-head h2 {
@@ -643,8 +680,8 @@
   font-size: 1rem;
 }
 
-/* A ruled sheet, not six floating cards: 1px gaps between panels, so the
-   grid itself is the structure. */
+/* A ruled sheet, not six floating cards: one surface, hairline rules
+   between the cells, and a rhythm that is not three in a row. */
 .l-package-grid {
   list-style: none;
   margin: 0;
@@ -660,33 +697,36 @@
 
 .l-panel {
   position: relative;
-  grid-column: span 4;
-  padding: clamp(22px, 2.4vw, 32px);
-  background: linear-gradient(180deg, oklch(0.195 0.02 262 / 0.96), oklch(0.165 0.018 266 / 0.98));
+  grid-column: span 6;
+  padding: clamp(18px, 1.9vw, 26px);
+  background: var(--bg-2);
   overflow: hidden;
 }
 
-.l-panel::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity 0.35s var(--ease);
-  background: radial-gradient(
-    260px circle at var(--mx, 50%) var(--my, 0%),
-    oklch(0.885 0.18 95 / 0.1),
-    transparent 70%
-  );
+.l-panel:nth-child(1),
+.l-panel:nth-child(2) { grid-column: span 6; }
+
+.l-panel:nth-child(3),
+.l-panel:nth-child(4),
+.l-panel:nth-child(5) { grid-column: span 4; }
+
+/* The last cell closes the sheet: the drawing beside the words, the way
+   the rest of the page lays things out. */
+.l-panel--wide {
+  grid-column: span 12;
+  display: grid;
+  grid-template-columns: minmax(0, 300px) minmax(0, 1fr);
+  gap: clamp(24px, 3.4vw, 52px);
+  align-items: center;
 }
 
-.l-panel:hover::before { opacity: 1; }
+.l-panel--wide .dg { margin-bottom: 0; }
 
 .l-panel .dg {
   width: 100%;
-  max-width: 330px;
+  max-width: 300px;
   height: auto;
-  margin: 0 0 clamp(24px, 2.6vw, 34px);
+  margin: 0 0 clamp(18px, 2vw, 26px);
   overflow: visible;
 }
 
@@ -818,9 +858,27 @@
 /* ── 9 · benchmarks ───────────────────────────────────────────────────── */
 
 .l-bench {
+  position: relative;
+  isolation: isolate;
   padding-top: clamp(72px, 8vw, 112px);
   padding-bottom: clamp(72px, 8vw, 112px);
   border-top: 1px solid var(--line);
+}
+
+/* The bench is lit by the colour of a computed block: amber, from the
+   left, where the first column of the table starts. */
+.l-bench::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: linear-gradient(
+    262deg,
+    transparent 56%,
+    oklch(0.78 0.15 58 / 0.05) 84%,
+    oklch(0.78 0.15 58 / 0.085) 100%
+  );
 }
 
 .l-bench-head {
@@ -865,8 +923,8 @@
 /* ── 10 · platforms ───────────────────────────────────────────────────── */
 
 .l-matrix {
-  padding-top: clamp(56px, 7vw, 104px);
-  padding-bottom: clamp(56px, 7vw, 104px);
+  padding-top: clamp(52px, 6.4vw, 94px);
+  padding-bottom: clamp(52px, 6.4vw, 94px);
   border-top: 1px solid var(--line);
   background: linear-gradient(180deg, oklch(0.168 0.018 268 / 0.8), transparent 60%);
 }
@@ -965,14 +1023,16 @@
   isolation: isolate;
 }
 
+/* A stage light: the pool on the floor under the bear, not a halo
+   floating around it. */
 .l-mascot-media::before {
   content: "";
   position: absolute;
   inset: 0;
   z-index: -1;
   background:
-    radial-gradient(46% 46% at 50% 52%, oklch(0.58 0.09 74 / 0.24), transparent 70%),
-    radial-gradient(30% 30% at 50% 84%, oklch(0.885 0.18 95 / 0.1), transparent 72%);
+    radial-gradient(62% 38% at 50% 106%, oklch(0.62 0.11 78 / 0.3), transparent 72%),
+    linear-gradient(180deg, transparent 54%, oklch(0.58 0.09 74 / 0.1) 100%);
   filter: blur(2px);
 }
 
@@ -1123,7 +1183,7 @@
   display: grid;
   place-items: center;
   text-align: center;
-  padding: clamp(80px, 9vw, 140px) var(--gutter);
+  padding: clamp(68px, 7.6vw, 116px) var(--gutter);
   border-top: 1px solid var(--line);
   overflow: hidden;
   isolation: isolate;
@@ -1136,7 +1196,7 @@
   z-index: -1;
   background:
     radial-gradient(52% 64% at 50% 122%, oklch(0.885 0.18 95 / 0.13), transparent 72%),
-    radial-gradient(44% 54% at 50% -4%, oklch(0.52 0.18 290 / 0.17), transparent 72%);
+    linear-gradient(180deg, oklch(0.42 0.03 258 / 0.12) 0%, transparent 34%);
 }
 
 .l-cta h2 {
@@ -1150,14 +1210,6 @@
 }
 
 .l-cta .cta { justify-content: center; margin: 0; }
-
-/* ── reveal stagger ───────────────────────────────────────────────────── */
-
-.js-ready .l-panel.reveal:nth-child(2) { transition-delay: 60ms; }
-.js-ready .l-panel.reveal:nth-child(3) { transition-delay: 120ms; }
-.js-ready .l-panel.reveal:nth-child(4) { transition-delay: 60ms; }
-.js-ready .l-panel.reveal:nth-child(5) { transition-delay: 120ms; }
-.js-ready .l-panel.reveal:nth-child(6) { transition-delay: 180ms; }
 
 /* ── responsive ───────────────────────────────────────────────────────── */
 
@@ -1336,7 +1388,13 @@
 
   .l-package-grid { grid-template-columns: minmax(0, 1fr); }
   .l-panel,
-  .l-panel:nth-child(n) { grid-column: span 1; }
+  .l-panel:nth-child(n),
+  .l-panel--wide { grid-column: span 1; }
+
+  .l-panel--wide {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--s5);
+  }
 
   .l-panel .dg { max-width: 300px; }
 
@@ -1365,7 +1423,6 @@
 @media (prefers-reduced-motion: reduce) {
   .mech-stage { transform: none; transition: none; }
   .l-loop { position: static; }
-  .l-panel::before { display: none; }
   .js-ready .l-panel.reveal { transition-delay: 0ms; }
 }
 

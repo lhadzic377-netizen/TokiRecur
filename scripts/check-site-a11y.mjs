@@ -28,6 +28,8 @@ const DIST = join(ROOT, "dist", "site");
 const PAGES = [
   "/",
   "/pricing",
+  "/privacy.html",
+  "/terms.html",
   "/404.html",
   "/docs/",
   "/docs/install.html",

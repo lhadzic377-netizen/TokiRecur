@@ -22,17 +22,22 @@
     clamp(72px, 9vw, 132px);
 }
 
-/* The page is lit the same way the landing page is: one warm source
-   behind the price, one cool one at the far edge. */
+/* The page is lit the same way the landing page is: the warm light of the
+   price on the right, a cold edge along the ceiling. */
 .pricing-page::before {
   content: "";
   position: absolute;
-  inset: -10% -10% 0 -10%;
+  inset: 0;
   z-index: -1;
   pointer-events: none;
   background:
-    radial-gradient(38% 46% at 72% 18%, oklch(0.50 0.17 292 / 0.2), transparent 68%),
-    radial-gradient(30% 34% at 14% 64%, oklch(0.885 0.18 95 / 0.06), transparent 66%);
+    linear-gradient(
+      96deg,
+      transparent 40%,
+      oklch(0.885 0.18 95 / 0.045) 72%,
+      oklch(0.66 0.15 95 / 0.1) 100%
+    ),
+    linear-gradient(180deg, oklch(0.46 0.03 258 / 0.13) 0%, transparent 42%);
 }
 
 .pricing-layout {

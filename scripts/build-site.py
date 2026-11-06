@@ -29,6 +29,7 @@ PUBLIC_FILES = (
     "pricing.html",
     "404.html",
     "privacy.html",
+    "terms.html",
     "style.css",
     "landing.css",
     "pricing.css",
@@ -277,8 +278,9 @@ def write_discovery(site_url: str) -> None:
             if page.name == "index.html":
                 continue
             pages.append(f"/docs/{page.name}")
-    if (DIST / "privacy.html").is_file():
-        pages.append("/privacy.html")
+    for legal in ("privacy.html", "terms.html"):
+        if (DIST / legal).is_file():
+            pages.append(f"/{legal}")
 
     sitemap = [
         '<?xml version="1.0" encoding="UTF-8"?>',

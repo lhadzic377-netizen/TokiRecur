@@ -23,7 +23,7 @@
 <link rel="stylesheet" href="/fonts.css">
 <link rel="stylesheet" href="/style.css?v=65">
 <link rel="stylesheet" href="/landing.css?v=1">
-<noscript><style>.reveal { opacity: 1 !important; transform: none !important; }</style></noscript>
+<noscript><style>.{ opacity: 1 !important; transform: none !important; }</style></noscript>
 <script src="/head.js"></script>
 </head>
 <body>
@@ -124,12 +124,12 @@
   <section class="mechanism" id="mechanism">
     <div class="mech-grid">
       <div class="mech-copy">
-        <p class="overline reveal">The mechanism</p>
-        <h2 class="reveal">Every request is compared against the KV blocks already in memory.</h2>
-        <p class="section-sub reveal">Token by token. The longest identical prefix is replayed instead of
+        <p class="overline">The mechanism</p>
+        <h2 >Every request is compared against the KV blocks already in memory.</h2>
+        <p class="section-sub">Token by token. The longest identical prefix is replayed instead of
           recomputed &mdash; there is no second model, no separate cache server, no client change.</p>
       </div>
-      <figure class="mech-stage reveal" aria-hidden="true">
+      <figure class="mech-stage" aria-hidden="true">
         <figcaption class="mech-head">
           <span class="mech-title">incoming prompt &rarr; prefix matcher</span>
           <span class="mech-readout"><b data-mech-replayed>0</b> replayed<span class="mech-dot">&middot;</span><b data-mech-computed>0</b> computed</span>
@@ -142,7 +142,7 @@
         </div>
       </figure>
     </div>
-    <dl class="mech-facts reveal">
+    <dl class="mech-facts">
       <div>
         <dt>match</dt>
         <dd>exact prefix, byte for byte</dd>
@@ -162,22 +162,22 @@
   <section class="l-show l-show--stack">
     <div class="l-show-copy l-show-copy--duo">
       <div>
-        <p class="overline reveal">The web UI</p>
-        <h2 class="reveal">The one screen we do not fake.</h2>
+        <p class="overline">The web UI</p>
+        <h2 >The one screen we do not fake.</h2>
       </div>
       <div>
-        <p class="section-sub reveal">A single-page chat over the same daemon, with the cache made visible: every
+        <p class="section-sub">A single-page chat over the same daemon, with the cache made visible: every
           reply says whether it was cached, how many tokens it read, and how long the first token took.</p>
-        <p class="l-show-note reveal">Raw mode, cached mode, and a side-by-side comparison.</p>
+        <p class="l-show-note">Raw mode, cached mode, and a side-by-side comparison.</p>
       </div>
     </div>
     <div class="l-shot-row">
-      <figure class="l-shot reveal">
+      <figure class="l-shot">
         <div class="l-shot-scroll" tabindex="0" role="group" aria-label="The toki web session screenshot, scrollable">
           <img src="/img/web-chat-panel.png?v=3" alt="A real toki web session: the left rail lists the daemon, the model and the slots; the transcript shows cached replies with their token counts and timings." width="1080" height="360" loading="lazy">
         </div>
       </figure>
-      <dl class="l-shot-notes reveal" aria-label="How to read the transcript">
+      <dl class="l-shot-notes" aria-label="How to read the transcript">
         <div>
           <dt>mode cached</dt>
           <dd>The session is running against the shared KV cache.</dd>
@@ -202,23 +202,23 @@
   <section class="l-show l-show--stack l-show--launcher">
     <div class="l-show-copy l-show-copy--duo">
       <div>
-        <p class="overline reveal">The launcher</p>
-        <h2 class="reveal">Every agent you run, in one window.</h2>
+        <p class="overline">The launcher</p>
+        <h2 >Every agent you run, in one window.</h2>
       </div>
       <div>
-        <p class="section-sub reveal">The full-screen terminal launcher ships with the package: the agents it can
+        <p class="section-sub">The full-screen terminal launcher ships with the package: the agents it can
           start, the model in use, the settings that matter, and a restart warning when a change needs one.</p>
-        <p class="l-show-note reveal">It is a terminal program. It reads and writes like one.</p>
+        <p class="l-show-note">It is a terminal program. It reads and writes like one.</p>
       </div>
     </div>
     <div class="l-launcher-row">
-      <figure class="l-launcher reveal">
+      <figure class="l-launcher">
         <div class="l-launcher-scroll" tabindex="0" role="group" aria-label="The toki launcher screenshot, scrollable">
           <img src="/img/launcher-plate.webp?v=1" alt="The toki launcher in a terminal: the TOKI wordmark, the model in use, and the full list of agents it can start, from toki and OpenCode through DeepSeek Harness, Claude Code, Kimi and OMP." width="948" height="654" loading="lazy">
         </div>
         <figcaption>Captured from the real launcher. Every row is a program it can start with the selected model.</figcaption>
       </figure>
-      <dl class="l-launcher-keys reveal" aria-label="Launcher keys">
+      <dl class="l-launcher-keys" aria-label="Launcher keys">
         <div>
           <dt><kbd>&uarr;</kbd><kbd>&darr;</kbd></dt>
           <dd>Move between agents.</dd>
@@ -251,39 +251,41 @@
   <!-- ── 6 · the package ──────────────────────────────────────────────── -->
   <section class="l-package" id="what">
     <div class="l-package-head">
-      <h2 class="reveal">Everything in the package.</h2>
-      <p class="section-sub reveal">The daemon is only half of it. These are the parts you get on the same install.</p>
+      <h2 >Everything in the package.</h2>
+      <p class="section-sub">The daemon is only half of it. These are the parts you get on the same install.</p>
     </div>
     <ul class="l-package-grid">
-      <li class="l-panel reveal">
+      <li class="l-panel">
         <!--DIAGRAM:dg-cache-->
         <h3>Drop-in cache</h3>
         <p>Point any OpenAI-compatible client at the toki daemon. Prompts that share a prefix return instantly.</p>
       </li>
-      <li class="l-panel reveal">
+      <li class="l-panel">
         <!--DIAGRAM:dg-fanout-->
         <h3>Live reuse</h3>
         <p>Multiple agents and shells share one server's KV cache. Context written by one session is replayed by the next.</p>
       </li>
-      <li class="l-panel reveal">
+      <li class="l-panel">
         <!--DIAGRAM:dg-persist-->
         <h3>Save &amp; restore</h3>
         <p>Snapshot caches to disk and restore them later: cold-start with a long system prompt already cached, or hand a session to another machine.</p>
       </li>
-      <li class="l-panel reveal">
+      <li class="l-panel">
         <!--DIAGRAM:dg-ram-->
         <h3>RAM-aware by default</h3>
         <p>The daemon reads the GGUF header, fits the KV cache into the machine's memory, and advertises the real context to clients.</p>
       </li>
-      <li class="l-panel reveal">
+      <li class="l-panel">
         <!--DIAGRAM:dg-bench-->
         <h3>Benchmark harness</h3>
         <p>Run real workloads, agent loops, RAG chunks, adversarial prompts, and report cache-hit rates vs. a fresh cache.</p>
       </li>
-      <li class="l-panel reveal">
+      <li class="l-panel l-panel--wide">
         <!--DIAGRAM:dg-interfaces-->
-        <h3>TUI + web chat</h3>
-        <p>Full-screen terminal chat and a production-ready single-page web UI ship with the package, one command each.</p>
+        <div>
+          <h3>TUI + web chat</h3>
+          <p>Full-screen terminal chat and a production-ready single-page web UI ship with the package, one command each.</p>
+        </div>
       </li>
     </ul>
   </section>
@@ -291,19 +293,19 @@
   <!-- ── 7 · three commands ───────────────────────────────────────────── -->
   <section class="l-steps" id="how">
     <div class="l-steps-head">
-      <h2 class="reveal">Three commands from cold start to a shared cache.</h2>
-      <p class="section-sub reveal">Boot the stack, wire your clients at the daemon, and let the prefix matcher do the rest.</p>
+      <h2 >Three commands from cold start to a shared cache.</h2>
+      <p class="section-sub">Boot the stack, wire your clients at the daemon, and let the prefix matcher do the rest.</p>
     </div>
     <div class="l-steps-grid">
       <ol class="l-steps-row">
-        <li class="reveal" data-n="01"><span class="body"><strong>Boot</strong>, <code>toki model use</code> starts llama-server plus the toki
+        <li  data-n="01"><span class="body"><strong>Boot</strong>, <code>toki model use</code> starts llama-server plus the toki
           daemon, wires your CLI tools at it, and writes the effective context it can actually hold.</span></li>
-        <li class="reveal" data-n="02"><span class="body"><strong>Stream</strong>, clients call the daemon's OpenAI-compatible API. Shared
+        <li  data-n="02"><span class="body"><strong>Stream</strong>, clients call the daemon's OpenAI-compatible API. Shared
           prefixes hit the cached KV blocks instead of re-running the model.</span></li>
-        <li class="reveal" data-n="03"><span class="body"><strong>Persist</strong>, <code>toki cache save</code> / <code>toki cache restore</code>
+        <li  data-n="03"><span class="body"><strong>Persist</strong>, <code>toki cache save</code> / <code>toki cache restore</code>
           snapshot caches to disk; <code>toki cache stats</code> shows hits, misses, and savings.</span></li>
       </ol>
-      <figure class="l-loop reveal" aria-label="A prompt is computed once and then replayed from memory">
+      <figure class="l-loop" aria-label="A prompt is computed once and then replayed from memory">
         <svg viewBox="0 0 440 210" role="presentation">
         <path class="loop-arc" d="M352 46 C352 118 132 116 96 146"/>
         <circle class="loop-runner" r="5.5">
@@ -333,9 +335,9 @@
   <!-- ── 8 · the benchmarks ───────────────────────────────────────────── -->
   <section class="l-bench" id="benchmarks">
     <div class="l-bench-head">
-      <p class="overline reveal">Benchmarks</p>
-      <h2 class="reveal">Cache-hit efficiency &amp; throughput.</h2>
-      <p class="section-sub reveal">Measured on an AMD Ryzen AI MAX+ 395 (Ryzen AI Halo) via llama-server. Four models, nine workloads each.</p>
+      <p class="overline">Benchmarks</p>
+      <h2 >Cache-hit efficiency &amp; throughput.</h2>
+      <p class="section-sub">Measured on an AMD Ryzen AI MAX+ 395 (Ryzen AI Halo) via llama-server. Four models, nine workloads each.</p>
     </div>
     <div class="bench-picker">
       <div class="bench-tabs" role="tablist" aria-label="Benchmarked models">
@@ -350,15 +352,15 @@
             <tr><th>Workload</th><th>TTFT&nbsp;Δ</th><th>Prefill&nbsp;Δ</th><th>Hit</th><th>Score</th><th>Grade</th></tr>
           </thead>
           <tbody>
-            <tr class="reveal"><td><code>realistic_mixed</code></td><td>+66.8%</td><td>+560.9%</td><td>88.1%</td><td>84.4</td><td><span class="grade">A</span></td></tr>
-            <tr class="reveal"><td><code>summarization</code></td><td>+90.7%</td><td>+1090.7%</td><td>95.0%</td><td>92.0</td><td><span class="grade">A+</span></td></tr>
-            <tr class="reveal"><td><code>code_review</code></td><td>+77.8%</td><td>+379.5%</td><td>96.7%</td><td>90.0</td><td><span class="grade">A+</span></td></tr>
-            <tr class="reveal"><td><code>agent_long_output</code></td><td>+22.9%</td><td>+41.2%</td><td>98.0%</td><td>64.4</td><td><span class="grade mid">C</span></td></tr>
-            <tr class="reveal"><td><code>agent_100</code></td><td>+45.0%</td><td>+264.0%</td><td>99.0%</td><td>47.3</td><td><span class="grade bad">F</span></td></tr>
-            <tr class="reveal"><td><code>rag_chunks</code></td><td>+47.0%</td><td>+226.0%</td><td>87.5%</td><td>47.7</td><td><span class="grade bad">F</span></td></tr>
-            <tr class="reveal"><td><code>agent_long_context</code></td><td>+47.7%</td><td>+264.6%</td><td>90.0%</td><td>47.1</td><td><span class="grade bad">F</span></td></tr>
-            <tr class="reveal"><td><code>no_overlap</code></td><td>+16.7%</td><td>+18.0%</td><td>0.0%</td><td>12.0</td><td><span class="grade bad">F</span></td></tr>
-            <tr class="reveal"><td><code>stress_adversarial</code></td><td>+20.4%</td><td>+33.1%</td><td>52.2%</td><td>52.3</td><td><span class="grade mid">D</span></td></tr>
+            <tr ><td><code>realistic_mixed</code></td><td>+66.8%</td><td>+560.9%</td><td>88.1%</td><td>84.4</td><td><span class="grade">A</span></td></tr>
+            <tr ><td><code>summarization</code></td><td>+90.7%</td><td>+1090.7%</td><td>95.0%</td><td>92.0</td><td><span class="grade">A+</span></td></tr>
+            <tr ><td><code>code_review</code></td><td>+77.8%</td><td>+379.5%</td><td>96.7%</td><td>90.0</td><td><span class="grade">A+</span></td></tr>
+            <tr ><td><code>agent_long_output</code></td><td>+22.9%</td><td>+41.2%</td><td>98.0%</td><td>64.4</td><td><span class="grade mid">C</span></td></tr>
+            <tr ><td><code>agent_100</code></td><td>+45.0%</td><td>+264.0%</td><td>99.0%</td><td>47.3</td><td><span class="grade bad">F</span></td></tr>
+            <tr ><td><code>rag_chunks</code></td><td>+47.0%</td><td>+226.0%</td><td>87.5%</td><td>47.7</td><td><span class="grade bad">F</span></td></tr>
+            <tr ><td><code>agent_long_context</code></td><td>+47.7%</td><td>+264.6%</td><td>90.0%</td><td>47.1</td><td><span class="grade bad">F</span></td></tr>
+            <tr ><td><code>no_overlap</code></td><td>+16.7%</td><td>+18.0%</td><td>0.0%</td><td>12.0</td><td><span class="grade bad">F</span></td></tr>
+            <tr ><td><code>stress_adversarial</code></td><td>+20.4%</td><td>+33.1%</td><td>52.2%</td><td>52.3</td><td><span class="grade mid">D</span></td></tr>
           </tbody>
         </table>
       </div>
@@ -368,15 +370,15 @@
             <tr><th>Workload</th><th>TTFT&nbsp;Δ</th><th>Prefill&nbsp;Δ</th><th>Hit</th><th>Score</th><th>Grade</th></tr>
           </thead>
           <tbody>
-            <tr class="reveal"><td><code>realistic_mixed</code></td><td>+74.2%</td><td>+685.3%</td><td>87.6%</td><td>86.8</td><td><span class="grade">A</span></td></tr>
-            <tr class="reveal"><td><code>summarization</code></td><td>+93.5%</td><td>+1187.2%</td><td>95.8%</td><td>93.7</td><td><span class="grade">A+</span></td></tr>
-            <tr class="reveal"><td><code>code_review</code></td><td>+84.1%</td><td>+494.6%</td><td>96.9%</td><td>91.5</td><td><span class="grade">A+</span></td></tr>
-            <tr class="reveal"><td><code>agent_long_output</code></td><td>+29.8%</td><td>+58.4%</td><td>97.2%</td><td>69.3</td><td><span class="grade mid">C</span></td></tr>
-            <tr class="reveal"><td><code>agent_100</code></td><td>+54.3%</td><td>+343.7%</td><td>98.7%</td><td>59.8</td><td><span class="grade mid">D</span></td></tr>
-            <tr class="reveal"><td><code>rag_chunks</code></td><td>+54.7%</td><td>+299.1%</td><td>91.8%</td><td>59.9</td><td><span class="grade mid">D</span></td></tr>
-            <tr class="reveal"><td><code>agent_long_context</code></td><td>+54.9%</td><td>+347.2%</td><td>93.6%</td><td>59.7</td><td><span class="grade mid">D</span></td></tr>
-            <tr class="reveal"><td><code>no_overlap</code></td><td>+14.8%</td><td>+17.2%</td><td>0.0%</td><td>11.9</td><td><span class="grade bad">F</span></td></tr>
-            <tr class="reveal"><td><code>stress_adversarial</code></td><td>+29.2%</td><td>+48.7%</td><td>54.8%</td><td>59.4</td><td><span class="grade mid">D</span></td></tr>
+            <tr ><td><code>realistic_mixed</code></td><td>+74.2%</td><td>+685.3%</td><td>87.6%</td><td>86.8</td><td><span class="grade">A</span></td></tr>
+            <tr ><td><code>summarization</code></td><td>+93.5%</td><td>+1187.2%</td><td>95.8%</td><td>93.7</td><td><span class="grade">A+</span></td></tr>
+            <tr ><td><code>code_review</code></td><td>+84.1%</td><td>+494.6%</td><td>96.9%</td><td>91.5</td><td><span class="grade">A+</span></td></tr>
+            <tr ><td><code>agent_long_output</code></td><td>+29.8%</td><td>+58.4%</td><td>97.2%</td><td>69.3</td><td><span class="grade mid">C</span></td></tr>
+            <tr ><td><code>agent_100</code></td><td>+54.3%</td><td>+343.7%</td><td>98.7%</td><td>59.8</td><td><span class="grade mid">D</span></td></tr>
+            <tr ><td><code>rag_chunks</code></td><td>+54.7%</td><td>+299.1%</td><td>91.8%</td><td>59.9</td><td><span class="grade mid">D</span></td></tr>
+            <tr ><td><code>agent_long_context</code></td><td>+54.9%</td><td>+347.2%</td><td>93.6%</td><td>59.7</td><td><span class="grade mid">D</span></td></tr>
+            <tr ><td><code>no_overlap</code></td><td>+14.8%</td><td>+17.2%</td><td>0.0%</td><td>11.9</td><td><span class="grade bad">F</span></td></tr>
+            <tr ><td><code>stress_adversarial</code></td><td>+29.2%</td><td>+48.7%</td><td>54.8%</td><td>59.4</td><td><span class="grade mid">D</span></td></tr>
           </tbody>
         </table>
       </div>
@@ -386,39 +388,39 @@
             <tr><th>Workload</th><th>TTFT&nbsp;Δ</th><th>Prefill&nbsp;Δ</th><th>Hit</th><th>Score</th><th>Grade</th></tr>
           </thead>
           <tbody>
-            <tr class="reveal">
+            <tr >
               <td><code>realistic_mixed</code></td>
               <td>+62.4%</td><td>+412.7%</td><td>84.2%</td><td>78.2</td><td><span class="grade">B</span></td>
             </tr>
-            <tr class="reveal">
+            <tr >
               <td><code>summarization</code></td>
               <td>+81.3%</td><td>+842.1%</td><td>92.4%</td><td>88.5</td><td><span class="grade">A-</span></td>
             </tr>
-            <tr class="reveal">
+            <tr >
               <td><code>code_review</code></td>
               <td>+73.1%</td><td>+312.8%</td><td>94.1%</td><td>86.1</td><td><span class="grade">A-</span></td>
             </tr>
-            <tr class="reveal">
+            <tr >
               <td><code>agent_long_output</code></td>
               <td>+20.3%</td><td>+32.7%</td><td>96.2%</td><td>61.8</td><td><span class="grade mid">C-</span></td>
             </tr>
-            <tr class="reveal">
+            <tr >
               <td><code>agent_100</code></td>
               <td>+38.4%</td><td>+182.3%</td><td>98.1%</td><td>44.9</td><td><span class="grade bad">F</span></td>
             </tr>
-            <tr class="reveal">
+            <tr >
               <td><code>rag_chunks</code></td>
               <td>+40.1%</td><td>+161.9%</td><td>84.4%</td><td>45.2</td><td><span class="grade bad">F</span></td>
             </tr>
-            <tr class="reveal">
+            <tr >
               <td><code>agent_long_context</code></td>
               <td>+40.3%</td><td>+191.0%</td><td>86.2%</td><td>44.6</td><td><span class="grade bad">F</span></td>
             </tr>
-            <tr class="reveal">
+            <tr >
               <td><code>no_overlap</code></td>
               <td>+14.2%</td><td>+15.1%</td><td>0.0%</td><td>11.8</td><td><span class="grade bad">F</span></td>
             </tr>
-            <tr class="reveal">
+            <tr >
               <td><code>stress_adversarial</code></td>
               <td>+16.4%</td><td>+25.2%</td><td>48.1%</td><td>49.1</td><td><span class="grade bad">F</span></td>
             </tr>
@@ -431,39 +433,39 @@
             <tr><th>Workload</th><th>TTFT&nbsp;Δ</th><th>Prefill&nbsp;Δ</th><th>Hit</th><th>Score</th><th>Grade</th></tr>
           </thead>
           <tbody>
-            <tr class="reveal">
+            <tr >
               <td><code>realistic_mixed</code></td>
               <td>+82.1%</td><td>+791.3%</td><td>90.2%</td><td>89.7</td><td><span class="grade">A</span></td>
             </tr>
-            <tr class="reveal">
+            <tr >
               <td><code>summarization</code></td>
               <td>+96.2%</td><td>+1282.5%</td><td>97.1%</td><td>95.8</td><td><span class="grade">A+</span></td>
             </tr>
-            <tr class="reveal">
+            <tr >
               <td><code>code_review</code></td>
               <td>+88.3%</td><td>+582.9%</td><td>98.2%</td><td>94.2</td><td><span class="grade">A+</span></td>
             </tr>
-            <tr class="reveal">
+            <tr >
               <td><code>agent_long_output</code></td>
               <td>+36.2%</td><td>+70.1%</td><td>98.1%</td><td>77.3</td><td><span class="grade">B</span></td>
             </tr>
-            <tr class="reveal">
+            <tr >
               <td><code>agent_100</code></td>
               <td>+60.4%</td><td>+382.7%</td><td>99.6%</td><td>69.4</td><td><span class="grade mid">C</span></td>
             </tr>
-            <tr class="reveal">
+            <tr >
               <td><code>rag_chunks</code></td>
               <td>+60.7%</td><td>+331.2%</td><td>94.3%</td><td>71.6</td><td><span class="grade mid">C</span></td>
             </tr>
-            <tr class="reveal">
+            <tr >
               <td><code>agent_long_context</code></td>
               <td>+60.3%</td><td>+381.8%</td><td>95.2%</td><td>70.8</td><td><span class="grade mid">C</span></td>
             </tr>
-            <tr class="reveal">
+            <tr >
               <td><code>no_overlap</code></td>
               <td>+15.1%</td><td>+17.0%</td><td>0.0%</td><td>12.0</td><td><span class="grade bad">F</span></td>
             </tr>
-            <tr class="reveal">
+            <tr >
               <td><code>stress_adversarial</code></td>
               <td>+33.2%</td><td>+52.1%</td><td>57.2%</td><td>64.2</td><td><span class="grade mid">D</span></td>
             </tr>
@@ -471,7 +473,7 @@
         </table>
       </div>
     </div>
-    <p class="note reveal">Bigger and sparser is better: the 122B-A10B MoE tops every table
+    <p class="note">Bigger and sparser is better: the 122B-A10B MoE tops every table
       (realistic_mixed 89.7, summarization 95.8), and the 35B-A3B beats the dense 9B, the
       more of each prompt's prefill that can be skipped, the larger the relative gain.
       <strong>Disclaimer:</strong> all scores are based on multiple benchmark runs on this hardware
@@ -482,13 +484,13 @@
   <!-- ── 9 · where it runs ────────────────────────────────────────────── -->
   <section class="l-matrix" id="matrix">
     <div class="l-matrix-head">
-      <p class="overline reveal">Platforms</p>
-      <h2 class="reveal">Where it runs.</h2>
-      <p class="section-sub reveal">Toki Recur is pure Python over the llama-server HTTP API. It runs on any
+      <p class="overline">Platforms</p>
+      <h2 >Where it runs.</h2>
+      <p class="section-sub">Toki Recur is pure Python over the llama-server HTTP API. It runs on any
         x86_64 or aarch64 device running Linux, macOS or Windows, with whatever GPU backend your
         llama-server build has.</p>
     </div>
-    <div class="l-matrix-scroll reveal" tabindex="0" role="region" aria-label="Platform and backend matrix">
+    <div class="l-matrix-scroll" tabindex="0" role="region" aria-label="Platform and backend matrix">
       <table>
         <thead>
           <tr><th>Platform</th><th>Arch</th><th>llama-server backends</th><th>Status</th></tr>
@@ -522,14 +524,14 @@
         </tbody>
       </table>
     </div>
-    <p class="l-matrix-note reveal">Every GPU install verifies the vendor runtime and a real device line from
+    <p class="l-matrix-note">Every GPU install verifies the vendor runtime and a real device line from
       <code>llama-server --list-devices</code> before reporting success, so a missing driver cannot
       silently degrade to CPU.</p>
   </section>
 
   <!-- ── 10 · the mascot ──────────────────────────────────────────────── -->
   <section class="l-mascot" id="meet-toke">
-    <figure class="l-mascot-media reveal">
+    <figure class="l-mascot-media">
       <img src="/img/toki-bear-cut.webp?v=2" alt="toki the bear mascot, waving, wearing the Toki Recur recycling mark" width="760" height="891" loading="lazy">
     </figure>
     <div class="l-mascot-copy">
@@ -547,28 +549,28 @@
   <!-- ── 11 · quick start ─────────────────────────────────────────────── -->
   <section class="l-quick" id="quickstart">
     <div class="l-quick-head">
-      <h2 class="reveal">Install and run.</h2>
-      <p class="section-sub reveal">Nothing is preinstalled. Clone, run the installer, pull one model, open the launcher.</p>
+      <h2 >Install and run.</h2>
+      <p class="section-sub">Nothing is preinstalled. Clone, run the installer, pull one model, open the launcher.</p>
     </div>
     <div class="l-quick-grid">
       <div>
-        <p class="code-label reveal">macOS / Linux</p>
-        <pre class="code reveal"><code>git clone https://github.com/lhadzic377-netizen/TokiRecur.git
+        <p class="code-label">macOS / Linux</p>
+        <pre class="code"><code>git clone https://github.com/lhadzic377-netizen/TokiRecur.git
 cd TokiRecur
 ./install.sh
 toki model pull Qwen/Qwen3-4B-GGUF --use
 toki</code></pre>
       </div>
       <div>
-        <p class="code-label reveal">Windows (cmd or PowerShell)</p>
-        <pre class="code reveal"><code>git clone https://github.com/lhadzic377-netizen/TokiRecur.git
+        <p class="code-label">Windows (cmd or PowerShell)</p>
+        <pre class="code"><code>git clone https://github.com/lhadzic377-netizen/TokiRecur.git
 cd TokiRecur
 install.bat
 toki model pull Qwen/Qwen3-4B-GGUF --use
 toki</code></pre>
       </div>
     </div>
-    <p class="note reveal">Supported today: x86_64 and arm64 Linux and macOS are stable; Windows is
+    <p class="note">Supported today: x86_64 and arm64 Linux and macOS are stable; Windows is
       beta. GPU support depends on the llama-server backend you install. The
       <a href="/docs/">docs</a> have the full platform and backend matrix. Optional
       systemd/launchd daemon mode is included. The macOS/Linux installer runs behind a
@@ -620,6 +622,8 @@ toki</code></pre>
       <a href="/docs/">Docs</a>
       <a href="https://github.com/lhadzic377-netizen/TokiRecur" target="_blank" rel="noopener">GitHub</a>
       <a href="https://github.com/lhadzic377-netizen/TokiRecur/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
+      <a href="/privacy">Privacy</a>
+      <a href="/terms">Terms</a>
       <a href="https://github.com/lhadzic377-netizen/TokiRecur/issues" target="_blank" rel="noopener">Issues</a>
     </div>
   </div>
