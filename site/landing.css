@@ -1139,8 +1139,8 @@
 /* ── 13 · the honest note ─────────────────────────────────────────────── */
 
 .l-honest {
-  padding-top: clamp(56px, 7vw, 104px);
-  padding-bottom: clamp(56px, 7vw, 104px);
+  padding-top: clamp(52px, 6.4vw, 94px);
+  padding-bottom: clamp(48px, 6vw, 88px);
   border-top: 1px solid var(--line);
 }
 
