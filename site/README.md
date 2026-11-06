@@ -24,8 +24,13 @@ site/                  source
   designs/             twenty visual directions (never deployed)
 scripts/
   build-site.py        builds dist/site/ (the deployable artifact)
+  serve-site.py        serves dist/site with the server's URL rules
   check-site-build.py  checks the built artifact; fails the deploy if wrong
   check-site-a11y.mjs  axe-core audit of the built site (and of candidates)
+  check-site-perf.mjs  wire weight, LCP and CLS against the budget
+  check-contrast.mjs   reports the lowest-contrast text on the page
+  check-links.mjs      crawls the built site for links that 404
+  prune-css.py         removes the CSS for sections the redesign replaced
   design-explorer.py   assembles the twenty design candidates
   shoot-designs.mjs    renders the candidates so they can be compared
   install-site.sh      installs Caddy, deploys the artifact, wires the chat
@@ -38,7 +43,14 @@ scripts/
 ```bash
 python3 scripts/build-site.py            # -> dist/site/
 python3 scripts/check-site-build.py      # -> refuses a broken artifact
+python3 scripts/serve-site.py            # -> http://127.0.0.1:8903/
 ```
+
+Look at the site with `serve-site.py`, not with a generic static server.
+The deployment resolves a URL the way Caddy does: the path, then the path
+with `.html`, then the path as a directory index. That is what makes
+`/pricing`, `/privacy` and `/docs/install` work. A server that does not do
+that returns 404 for pages that are in the build.
 
 The build:
 
@@ -73,7 +85,9 @@ unit into a temporary directory, then prints what a real run would do.
 
 `scripts/Caddyfile.template` gives the site:
 
-- clean URLs (`/pricing` → `pricing.html`, `/docs/` → `docs/index.html`);
+- clean URLs (`/pricing` → `pricing.html`, `/docs/install` → `docs/install.html`),
+  which are the only addresses the site links to, the sitemap names and the
+  canonical tags declare;
 - a real 404 (`/404.html`, served with a 404 status);
 - `no-cache` for HTML, `immutable` for fingerprinted assets;
 - `Content-Security-Policy`, `Strict-Transport-Security`, `X-Content-Type-Options`,
@@ -98,6 +112,5 @@ candidate stylesheets and their typefaces never reach the server.
 
 - No wishlist counter, no API, no visitor state: the site collects nothing.
 - No analytics of any kind.
-- No third-party requests on page load: fonts are self-hosted and the video is
-  a poster until somebody clicks it, and then it loads from YouTube's
-  no-cookie host.
+- No third-party requests on page load: the fonts and the images are served
+  from the same machine as the page, and there is no video to embed.

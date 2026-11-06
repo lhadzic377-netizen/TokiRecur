@@ -40,15 +40,15 @@
   <aside class="sidebar" aria-label="Documentation">
     <div class="doc-title">Documentation</div>
     <a href="/docs/">Overview</a>
-    <a href="/docs/install.html">Install</a>
-    <a href="/docs/quickstart.html">Quick start</a>
-    <a href="/docs/commands.html">Command reference</a>
-    <a href="/docs/interfaces.html">Launcher &amp; shells</a>
-    <a href="/docs/architecture.html" class="active" aria-current="page">Architecture</a>
-    <a href="/docs/api.html">API reference</a>
-    <a href="/docs/benchmark.html">Benchmark</a>
-    <a href="/docs/deploy.html">Production deploy</a>
-    <a href="/docs/development.html">Development</a>
+    <a href="/docs/install">Install</a>
+    <a href="/docs/quickstart">Quick start</a>
+    <a href="/docs/commands">Command reference</a>
+    <a href="/docs/interfaces">Launcher &amp; shells</a>
+    <a href="/docs/architecture" class="active" aria-current="page">Architecture</a>
+    <a href="/docs/api">API reference</a>
+    <a href="/docs/benchmark">Benchmark</a>
+    <a href="/docs/deploy">Production deploy</a>
+    <a href="/docs/development">Development</a>
   </aside>
 
   <main class="doc" id="main" tabindex="-1">
@@ -100,7 +100,7 @@ POST /slots/{id_slot}?action=erase    body: {"filename": "..."}</code></pre>
     <h2>In-memory cache (current behavior)</h2>
     <p>Prefix reuse is <strong>in-memory only</strong>: the engine routes similar prompts to the same llama-server slot and lets the slot's KV cache serve the shared prefix (<code>cache_prompt=true</code>). This is lossless, outputs are byte-identical to a no-cache run. Disk persistence via <code>?action=save</code>/<code>?action=restore</code> was removed after benchmarks showed 88% substantive divergence from baseline outputs; the <code>.trkv</code> sidecar layer remains in the codebase but is dormant.</p>
 
-    <p class="callout">Next: <a href="/docs/api.html">API reference</a>, endpoints and auth.</p>
+    <p class="callout">Next: <a href="/docs/api">API reference</a>, endpoints and auth.</p>
   </main>
 </div>
 

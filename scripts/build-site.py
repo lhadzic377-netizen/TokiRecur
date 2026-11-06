@@ -180,14 +180,20 @@ def rewrite_css(mapping: dict[str, str]) -> None:
 
 
 def page_url(path: Path) -> str:
-    """The public URL of a built page (clean URLs where the server has them)."""
+    """The public URL of a built page (clean URLs where the server has them).
+
+    One page, one URL.  The server resolves a clean URL by trying the path,
+    then the path with ``.html``, then the path as a directory index, so
+    ``/privacy`` and ``/terms`` are the addresses the site links to and the
+    only ones the sitemap and the canonical tags name.
+    """
     rel = path.relative_to(DIST).as_posix()
     if rel == "index.html":
         return "/"
-    if rel == "pricing.html":
-        return "/pricing"
     if rel == "docs/index.html":
         return "/docs/"
+    if rel.endswith(".html"):
+        return "/" + rel[: -len(".html")]
     return "/" + rel
 
 
@@ -271,16 +277,17 @@ def validate_links() -> list[str]:
 
 def write_discovery(site_url: str) -> None:
     base = site_url.rstrip("/")
-    pages = ["/", "/pricing", "/docs/"]
+    pages = ["/", "/pricing"]
+    for legal in ("privacy.html", "terms.html"):
+        if (DIST / legal).is_file():
+            pages.append(f"/{legal[: -len('.html')]}")
     docs_dir = DIST / "docs"
     if docs_dir.is_dir():
+        pages.append("/docs/")
         for page in sorted(docs_dir.glob("*.html")):
             if page.name == "index.html":
                 continue
-            pages.append(f"/docs/{page.name}")
-    for legal in ("privacy.html", "terms.html"):
-        if (DIST / legal).is_file():
-            pages.append(f"/{legal}")
+            pages.append(f"/docs/{page.name[: -len('.html')]}")
 
     sitemap = [
         '<?xml version="1.0" encoding="UTF-8"?>',
