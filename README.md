@@ -1,10 +1,20 @@
 <p align="center">
-  <a href="https://tokirecur.com"><img src="site/img/toki.png" alt="toki the bear mascot" width="120" height="120"></a>
+  <a href="https://tokirecur.com"><img src="site/img/mark-3d.png" alt="The Toki Recur mark" width="120" height="120"></a>
 </p>
 
 # Toki Recur
 
 A standalone KV cache reuse system for LLM inference. Drop-in prefix caching that works across CUDA, ROCm, SYCL, OpenVINO, Vulkan, Metal, and CPU.
+
+[![Website](https://img.shields.io/badge/site-tokirecur.com-ffd60f)](https://tokirecur.com)
+[![Docs](https://img.shields.io/badge/docs-tokirecur.com%2Fdocs-3a3f4b)](https://tokirecur.com/docs/)
+[![License](https://img.shields.io/badge/license-MIT-4ade80)](LICENSE)
+
+<p align="center">
+  <img src="docs/site-hero.png" alt="The Toki Recur website: the headline beside a live terminal launcher" width="900">
+</p>
+
+<p align="center"><sub>The live site is <a href="https://tokirecur.com">tokirecur.com</a> — the full benchmark table, the platform matrix and the install instructions.</sub></p>
 
 ## What it does
 
