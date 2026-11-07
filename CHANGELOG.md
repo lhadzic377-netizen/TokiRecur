@@ -4,6 +4,52 @@ All notable changes to TokiRecur are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.12] - 2026-11-07
+
+### Added
+- **Windows runs the real launcher and TUI.** Bare `toki` opens the Textual
+  launcher and `toki tui` the full-screen chat, instead of falling back to the
+  numbered menu and REPL. All process differences live in `winproc.py`
+  (`OpenProcess` instead of `os.kill`, detached process groups, `.cmd`/`.bat`
+  through `cmd.exe`), and status polling runs off the event loop.
+  `TOKI_CLI=1` still selects the plain fallbacks on any platform.
+- **The OS/arch/backend matrix is complete.** Linux x86_64 and aarch64:
+  CUDA 12.8/13.4, ROCm 10.0, SYCL, OpenVINO 2026.4.1, Vulkan, CPU. Windows
+  x86_64: CUDA, SYCL, Vulkan, ROCm/HIP, OpenVINO, CPU; Windows ARM64: CUDA,
+  Vulkan, CPU. macOS: one universal Metal build that runs CPU-only with
+  `-ngl 0`.
+- **Installs prove the runtime they claim.** CUDA fetches the matching
+  `cudart`/`cublas`, checks the library major and requires a real `CUDA0`
+  device line; Linux SYCL verifies DPC++, oneMKL and Level Zero; ROCm verifies
+  `libamdhip64.so`. A partial install is refused rather than left to fall back
+  to CPU while reporting success.
+- **A public site and docs at [tokirecur.com](https://tokirecur.com)**, built
+  and deployed by the repo, with an installer that owns only marked regions of
+  `/etc/caddy/Caddyfile` so other sites on the same machine are untouched.
+- **CI gates for the site**: axe against WCAG 2.2 A/AA at three widths, link
+  crawling, contrast, wire weight, LCP and CLS.
+
+### Fixed
+- CPU mode is honest: a registry-pinned `-ngl 0` is a true CPU launch,
+  `toki up` CPU mode no longer asks for a GPU, and an explicit CPU launch
+  does not warn about an unused GPU.
+- Assistant messages are normalized and tool schemas flattened before they
+  reach llama-server, so clients that send either shape work.
+- Slow prefills keep the stream alive, and a busy backend is no longer
+  reported as wedged.
+- The harness advertises the model id clients actually use.
+- Loading a second model beside a running one warns instead of silently
+  competing for the GPU.
+- Windows: Store Python aliases are no longer mistaken for a real
+  installation, the batch installer has CRLF endings and an ASCII-safe path,
+  and the suite no longer asserts POSIX or macOS behaviour on Windows.
+- Unit tests no longer read the developer's own model registry.
+
+### Changed
+- The repository is public, so the install path no longer asks for a token.
+- The README was rewritten around install, platforms, interfaces and
+  commands; the docs code blocks lost their separate black header strip.
+
 ## [0.3.6] - 2026-10-01
 
 ### Added

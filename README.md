@@ -6,6 +6,7 @@
 
 KV cache reuse for local LLM inference. Exact prefix matching in front of `llama-server`, across CUDA, ROCm, SYCL, OpenVINO, Vulkan, Metal and CPU.
 
+[![Release](https://img.shields.io/github/v/release/lhadzic377-netizen/TokiRecur?color=ffd60f&label=release)](https://github.com/lhadzic377-netizen/TokiRecur/releases)
 [![Website](https://img.shields.io/badge/site-tokirecur.com-ffd60f)](https://tokirecur.com)
 [![Docs](https://img.shields.io/badge/docs-tokirecur.com%2Fdocs-3a3f4b)](https://tokirecur.com/docs/)
 [![License](https://img.shields.io/badge/license-MIT-4ade80)](LICENSE)
