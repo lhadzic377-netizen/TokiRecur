@@ -111,21 +111,20 @@ def dg_fanout() -> str:
 
 
 # ── 3. save & restore ──────────────────────────────────────────────────────
-def dg_persist() -> str:
+def dg_pools() -> str:
     body = f'''
-    {label(6, 14, "snapshot to disk, restore later")}
-    <rect x="6" y="30" width="96" height="44" rx="8" fill="rgba(71,224,226,0.07)" stroke="{HIT}" stroke-width="1"/>
-    {label(16, 50, "KV cache", HIT)}
-    {label(16, 64, "in memory", INK, 8)}
-    {arrow(104, 52, 138, 52, STRUCT)}
-    <ellipse cx="160" cy="40" rx="22" ry="7" fill="rgba(255,255,255,0.05)" stroke="{STRUCT}"/>
-    <path d="M138 40 v26 a22 7 0 0 0 44 0 v-26" fill="rgba(255,255,255,0.03)" stroke="{STRUCT}"/>
-    <path d="M138 53 a22 7 0 0 0 44 0" stroke="{STRUCT}"/>
-    {label(160, 86, "snapshot", INK, 8, "middle")}
-    {arrow(182, 58, 206, 92, BRAND, dash="3 3")}
-    <rect x="190" y="94" width="54" height="38" rx="6" fill="rgba(255,214,10,0.07)" stroke="{BRAND}" stroke-width="1"/>
-    {label(217, 110, "later", BRAND, 8.5, "middle")}
-    {label(217, 123, "warm start", INK, 7.5, "middle")}
+    {label(6, 14, "hot prefixes keep a slot")}
+    {blocks(6, 24, 9, w=8, h=10, gap=2, hot=6)}
+    {label(6, 46, "incoming", DIM, 7.5)}
+    {arrow(98, 34, 108, 34, BRAND)}
+    <rect x="110" y="20" width="124" height="24" rx="5" fill="rgba(255,214,10,0.10)" stroke="{BRAND}" stroke-width="1"/>
+    {label(118, 35, "slot 0 · reserved", BRAND, 8)}
+    <rect x="110" y="52" width="124" height="24" rx="5" fill="rgba(255,255,255,0.03)" stroke="{STRUCT}"/>
+    {label(118, 67, "slot 1", INK, 8)}
+    <rect x="110" y="84" width="124" height="24" rx="5" fill="rgba(255,255,255,0.03)" stroke="{STRUCT}"/>
+    {label(118, 99, "slot 2", INK, 8)}
+    {label(6, 76, "never spilled", HIT, 8)}
+    {label(6, 88, "while it stays hot", DIM, 7.5)}
     '''
     return wrap(body)
 
@@ -197,7 +196,7 @@ def dg_interfaces() -> str:
 DIAGRAMS = {
     "dg-cache": dg_cache,
     "dg-fanout": dg_fanout,
-    "dg-persist": dg_persist,
+    "dg-pools": dg_pools,
     "dg-ram": dg_ram,
     "dg-bench": dg_bench,
     "dg-interfaces": dg_interfaces,

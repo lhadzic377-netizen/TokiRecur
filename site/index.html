@@ -223,12 +223,12 @@
       <li class="l-panel">
         <!--DIAGRAM:dg-fanout-->
         <h3>Live reuse</h3>
-        <p>Multiple agents and shells share one server's KV cache. Context written by one session is replayed by the next.</p>
+        <p>Prompts that begin with the same tokens reuse the slot that already holds them. The match is exact, token for token.</p>
       </li>
       <li class="l-panel">
-        <!--DIAGRAM:dg-persist-->
-        <h3>Save &amp; restore</h3>
-        <p>Snapshot caches to disk and restore them later: cold-start with a long system prompt already cached, or hand a session to another machine.</p>
+        <!--DIAGRAM:dg-pools-->
+        <h3>Hot prefixes stay resident</h3>
+        <p>The most-reused prefixes get reserved slots that are never spilled, so a long system prompt stays warm for whatever session arrives next.</p>
       </li>
       <li class="l-panel">
         <!--DIAGRAM:dg-ram-->

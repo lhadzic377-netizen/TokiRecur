@@ -27,6 +27,30 @@ Reuse is in memory and lossless: outputs are byte-identical to a no-cache run. D
 
 Nine workloads across four models (Qwen3.5-9B, Qwen3.6-35B-A3B, Qwen3.6-27B, Qwen3.5-122B-A10B): **TTFT improves 62–96%** and **prefill throughput 410–1280%**, with the biggest gains on the largest MoE models. Full table on [tokirecur.com](https://tokirecur.com).
 
+## What reuse covers: cold vs warm
+
+A prefix cache is only as good as the prefix it can match. Measured with one supported model, one slot, and a long system prompt:
+
+**Setup:** Qwen3.5-2B Q4_K_M · llama-server b1099 (ROCm) · AMD Ryzen AI MAX+ 395 / Radeon 8060S · 8,192-token context · 1 slot · 1,372-token prompt (long system prompt plus a one-line user turn).
+
+| Request | Prompt tokens | Tokens evaluated | Prefill | TTFT |
+|---|---|---|---|---|
+| Cold (`cache_prompt: false`) | 1,372 | 1,372 | 355 ms | 355 ms |
+| Same prompt again | 1,372 | 4 | 27 ms | 27 ms |
+| First line of the system prompt changed | 1,377 | 1,377 | 356 ms | 356 ms |
+
+"Evaluated" is `timings.prompt_n` from llama-server: the prompt tokens it actually computed. A warm hit leaves 4 tokens, not zero — the template boundary around the generated answer.
+
+What that means:
+
+- **The match is exact and token-level, not semantic.** Change one token and everything after it is recomputed. Because the system prompt comes first, changing its opening line invalidates the entire prompt.
+- **It lives in memory.** A restart, a slot spill or eviction loses it; disk restore was removed. `cache_prompt: false` forces a fresh prefill.
+- **It is per model and per slot.** A different model, or a slot holding different contents, cannot serve the prefix.
+- **Across harnesses only if the tokens match.** OpenCode and Claude Code carry different system prompts and tool schemas, so switching between them starts cold unless you give both the same prefix.
+- **A hit needs at least 10 reused tokens.** Below that it is reported as a `soft_hit`, because save/load overhead exceeds the prefill saved.
+
+These numbers are for interpreting the ratio, not a benchmark: a 2B model at 1.4k tokens. The gain scales with how much stable prefix your harness keeps in front of the changing turn. The daemon's `cache` block in `/v1/chat/completions` is routing metadata (which slot, whether the routing key matched); the token counts above come from llama-server's own `timings`.
+
 ## Quick start
 
 Clone and run the installer — cross-platform, no token needed. MIT licensed, public repo.
