@@ -1085,6 +1085,58 @@
   font-size: 0.84rem;
 }
 
+.l-quick-update {
+  display: grid;
+  grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
+  gap: clamp(20px, 4vw, 64px);
+  align-items: center;
+  margin-top: clamp(28px, 3.2vw, 44px);
+  padding: clamp(20px, 2.6vw, 28px) clamp(20px, 2.8vw, 34px);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-2);
+}
+
+.l-quick-update .code-label { margin: 0 0 6px; }
+
+.l-quick-update-copy p { margin: 0; max-width: 44ch; color: var(--fg-dim); font-size: 0.9rem; }
+.l-quick-update-copy .code-label { color: var(--fg); }
+
+.l-quick-update-cmds { margin: 0; }
+
+.l-quick-update-cmds > div {
+  display: grid;
+  grid-template-columns: 132px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 16px;
+  padding: 9px 0;
+  border-top: 1px solid var(--line);
+}
+
+.l-quick-update-cmds > div:first-child { border-top: 0; padding-top: 0; }
+.l-quick-update-cmds > div:last-child { padding-bottom: 0; }
+
+.l-quick-update-cmds dt {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+  white-space: nowrap;
+}
+
+.l-quick-update-cmds dd { margin: 0; min-width: 0; }
+
+.l-quick-update-cmds code {
+  font-family: var(--mono);
+  font-size: 0.84rem;
+  white-space: nowrap;
+  padding: 4px 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+}
+
 /* ── 13 · the honest note ─────────────────────────────────────────────── */
 
 .l-honest {
@@ -1328,6 +1380,8 @@
 
   .l-cta .cta { flex-direction: column; align-items: stretch; }
   .l-cta .btn { justify-content: center; }
+
+  .l-quick-update { grid-template-columns: minmax(0, 1fr); gap: var(--s4); }
 }
 
 @media (max-width: 520px) {
@@ -1340,6 +1394,8 @@
   .win .tui { height: 430px; }
   .l-quick-grid .code { font-size: 0.78rem; }
   .l-quick-grid .code { padding-left: var(--s4); padding-right: var(--s4); }
+  .l-quick-update-cmds > div { grid-template-columns: minmax(0, 1fr); align-items: start; gap: 5px; }
+  .l-quick-update-cmds code { font-size: 0.78rem; }
 }
 
 /* ── motion, and its absence ──────────────────────────────────────────── */

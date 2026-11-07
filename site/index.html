@@ -530,6 +530,22 @@ toki model pull Qwen/Qwen3-4B-GGUF --use
 toki</code></pre>
       </div>
     </div>
+    <div class="l-quick-update">
+      <div class="l-quick-update-copy">
+        <p class="code-label">Updating an existing checkout</p>
+        <p>Pull the latest source and re-run the installer. It replaces the CLI in place; your models, weights and config stay on disk.</p>
+      </div>
+      <dl class="l-quick-update-cmds">
+        <div>
+          <dt>macOS / Linux</dt>
+          <dd><code>git pull &amp;&amp; ./install.sh</code></dd>
+        </div>
+        <div>
+          <dt>Windows</dt>
+          <dd><code>git pull &amp;&amp; install.bat</code></dd>
+        </div>
+      </dl>
+    </div>
     <p class="note">Supported today: x86_64 and arm64 Linux and macOS are stable; Windows is
       beta. GPU support depends on the llama-server backend you install. The
       <a href="/docs/">docs</a> have the full platform and backend matrix. Optional
