@@ -224,10 +224,13 @@ def launch_cmd(interface: str, client: str, spec: Any | None) -> dict:
         settings_path = write_claude_config(spec)
         token = _auth_token() or auth_token()
         env = dict(os.environ)
-        env.pop("ANTHROPIC_AUTH_TOKEN", None)
+        # The token travels as ANTHROPIC_AUTH_TOKEN. An inherited
+        # ANTHROPIC_API_KEY would be preferred by Claude Code, and it
+        # belongs to somebody else: the daemon would answer 401 for it.
+        env.pop("ANTHROPIC_API_KEY", None)
         env.update({
             "ANTHROPIC_BASE_URL": f"{spec.daemon_url}/anthropic",
-            "ANTHROPIC_API_KEY": token,
+            "ANTHROPIC_AUTH_TOKEN": token,
             "ANTHROPIC_MODEL": spec.model_id,
             "ANTHROPIC_DEFAULT_SONNET_MODEL": spec.model_id,
             "ANTHROPIC_DEFAULT_OPUS_MODEL": spec.model_id,

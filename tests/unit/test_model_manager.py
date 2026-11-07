@@ -575,8 +575,10 @@ def test_new_client_config_writers_bind_active_model(env, with_pulled_model, mon
     claude = json.loads(paths["claude"].read_text())
     assert claude["env"]["ANTHROPIC_BASE_URL"] == f"{spec.daemon_url}/anthropic"
     assert claude["env"]["ANTHROPIC_MODEL"] == spec.model_id
-    assert claude["env"]["ANTHROPIC_API_KEY"] == "test-tok-0123456789abcdef"
-    assert "ANTHROPIC_AUTH_TOKEN" not in claude["env"]
+    # The token travels as the auth token: Claude Code sends an API key
+    # only when it has approved it, and the auth token is always sent.
+    assert claude["env"]["ANTHROPIC_AUTH_TOKEN"] == "test-tok-0123456789abcdef"
+    assert "ANTHROPIC_API_KEY" not in claude["env"]
     if os.name == "posix":
         assert paths["claude"].stat().st_mode & 0o777 == 0o600
 

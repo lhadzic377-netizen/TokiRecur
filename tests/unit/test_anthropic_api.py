@@ -329,7 +329,10 @@ def test_anthropic_accepts_either_credential_header(monkeypatch, tmp_path):
     assert both.status_code == 200
     assert bearer_only.status_code == 200
     assert wrong_both.status_code == 401
-    assert wrong_both.json()["detail"] == "invalid token"
+    # The 401 has to say what to do: "invalid token" alone sends people
+    # to /login, when the real fix is re-pointing the client.
+    assert "invalid token" in wrong_both.json()["detail"]
+    assert "toki model use" in wrong_both.json()["detail"]
     assert no_credential.status_code == 401
 
 

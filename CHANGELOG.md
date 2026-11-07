@@ -4,6 +4,22 @@ All notable changes to TokiRecur are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **Claude Code talks to the daemon again.** Claude Code sends the
+  `ANTHROPIC_API_KEY` from the environment only when that key is on its
+  approved list in `~/.claude.json`; a key it has never seen gets a
+  prompt, and a key that was declined is never sent again. Claude Code
+  then fell back to `ANTHROPIC_AUTH_TOKEN` — on a machine with another
+  provider configured, that token was not ours — and the daemon answered
+  `401 invalid token` for every request, while Claude Code showed
+  "Please run /login" and retried ten times against a server that was
+  working. The local route now travels as `ANTHROPIC_AUTH_TOKEN`, which
+  Claude Code sends without asking, a stale rejection is cleared, the
+  401 names the fix (`toki model use <name>`), and `toki doctor` reports
+  a key Claude Code will not send.
+
 ## [0.3.12] - 2026-11-07
 
 ### Added

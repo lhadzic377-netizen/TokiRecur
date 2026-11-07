@@ -22,6 +22,7 @@ import time
 from pathlib import Path
 
 from . import ctl, winproc
+from .claude_compat import api_key_status as claude_api_key_status
 
 # NVIDIA driver floors for llama.cpp CUDA builds. Windows ships CUDA
 # 12.4 and 13.x; Linux ships CUDA 12.8 and 13.x. CUDA 13.x needs
@@ -794,6 +795,17 @@ def run() -> str:
         )
     else:
         lines.append("model: none active — run `toki model use <name>`")
+
+    # Claude Code sends ANTHROPIC_API_KEY only when it has approved that
+    # key, and falls back to another credential when it has not. A key it
+    # declined is a stale state worth naming: the fallback credential is
+    # then whatever else the machine has.
+    claude_status = claude_api_key_status(ctl.configured_auth_token() or "")
+    if claude_status == "rejected":
+        lines.append(
+            "claude code: the local API key was rejected by Claude Code, "
+            "so it is never sent — fix: toki model use <name>"
+        )
 
     lines.append("")
     lines.extend(hint(hw))

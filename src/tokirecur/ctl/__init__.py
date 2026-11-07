@@ -43,6 +43,7 @@ except ImportError:  # pragma: no cover - Python 3.10
 import tomli_w
 
 from .. import winproc
+from ..claude_compat import approve_api_key
 from ..ggufmeta import GgufRope, read_gguf_meta
 
 logger = logging.getLogger(__name__)
@@ -4618,7 +4619,14 @@ def write_claude_config(
     cfg = {
         "env": {
             "ANTHROPIC_BASE_URL": f"{spec.daemon_url}/anthropic",
-            "ANTHROPIC_API_KEY": token,
+            # The token travels as ANTHROPIC_AUTH_TOKEN, not as
+            # ANTHROPIC_API_KEY. Claude Code only sends an API key it has
+            # approved, and it asks about one it has never seen; when it
+            # does not send it, it falls back to ANTHROPIC_AUTH_TOKEN —
+            # which, on a machine with another provider configured, is
+            # somebody else's token, and the daemon answers 401 for it.
+            # The auth token needs no consent and is always sent.
+            "ANTHROPIC_AUTH_TOKEN": token,
             "ANTHROPIC_MODEL": model_id,
             "ANTHROPIC_DEFAULT_SONNET_MODEL": model_id,
             "ANTHROPIC_DEFAULT_OPUS_MODEL": model_id,
@@ -4626,7 +4634,26 @@ def write_claude_config(
         },
     }
     _write_private_config(cfg_path, json.dumps(cfg, indent=2) + "\n")
+    _approve_claude_api_key(token)
     return cfg_path
+
+
+def _approve_claude_api_key(token: str) -> bool:
+    """Let Claude Code send our token without asking about it first.
+
+    A key Claude Code has not approved is never sent; it then falls back
+    to another credential, and the local daemon answers 401 for that. The
+    approval is written into Claude Code's own config, so a key that was
+    rejected earlier is un-rejected here.
+    """
+    try:
+        changed = approve_api_key(token)
+    except Exception as e:  # never let Claude Code's config break the sync
+        logger.debug("could not approve the Claude Code API key: %s", e)
+        return False
+    if changed:
+        logger.info("registered the local API key with Claude Code")
+    return changed
 
 
 def write_dsh_config(

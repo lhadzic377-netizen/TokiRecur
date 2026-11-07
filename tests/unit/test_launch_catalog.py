@@ -92,8 +92,12 @@ def test_claude_route_uses_local_anthropic_settings(monkeypatch, tmp_path):
     assert settings["env"]["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:8811/anthropic"
     assert settings["env"]["ANTHROPIC_MODEL"] == "ornith-1.5-35b-q4_k_m"
     assert "OPENAI_BASE_URL" not in plan["env"]
-    assert "ANTHROPIC_AUTH_TOKEN" not in plan["env"]
-    assert plan["env"]["ANTHROPIC_API_KEY"] == "test-claude-token"
+    # The stale user token must not reach the daemon: Claude Code sends
+    # ANTHROPIC_AUTH_TOKEN as-is, so it has to be ours. An inherited
+    # ANTHROPIC_API_KEY would be preferred over it, so it goes.
+    assert plan["env"]["ANTHROPIC_AUTH_TOKEN"] == "test-claude-token"
+    assert "stale-user-token" not in plan["env"].values()
+    assert "ANTHROPIC_API_KEY" not in plan["env"]
 
 
 def test_claude_lean_flags_are_opt_in(monkeypatch, tmp_path):

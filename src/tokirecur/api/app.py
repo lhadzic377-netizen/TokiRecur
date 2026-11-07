@@ -741,9 +741,25 @@ def _check_auth(request: Request) -> None:
         for value in candidates
     ):
         METRICS.auth_failures.inc()
+        # A wrong token is almost never a wrong server: it is a client
+        # that was never given ours. Claude Code is the usual one — it
+        # sends ANTHROPIC_AUTH_TOKEN when it has not approved the API
+        # key we handed it, and that token belongs to another provider.
+        # Say so, because "invalid token" alone sends people to /login.
+        logger.warning(
+            "auth failed on %s: the request carried a token the daemon "
+            "does not accept. If this is Claude Code, the local API key "
+            "was not approved by it: run `toki model use <model>` to "
+            "re-point the client and approve the key.",
+            request.url.path,
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="invalid token",
+            detail=(
+                "invalid token — the daemon only accepts the token in its "
+                "auth file. If this is Claude Code, run `toki model use "
+                "<model>` to re-point it and approve the local key."
+            ),
         )
 
 
