@@ -1,12 +1,12 @@
-"""Ollama-style interactive CLI chat for Windows.
+"""Ollama-style interactive CLI chat.
 
-Windows' classic console renders Textual TUIs slowly and glitches
-(no WT_SESSION), so on Windows ``toki tui`` routes here: a plain,
-streaming REPL modelled on ``ollama run`` — ``>>> `` prompt, live
-token output, ``/bye`` ``/clear`` ``/help``, and ``\"\"\"`` multiline
-prompts. Linux and macOS keep the full TUI. (Bare ``toki`` on Windows
-opens the CLI launcher menu — ``clilauncher`` — whose Chat entry runs
-this REPL.)
+The fallback for ``toki tui``: a plain, streaming REPL modelled on
+``ollama run`` — ``>>> `` prompt, live token output, ``/bye``
+``/clear`` ``/help``, and ``\"\"\"`` multiline prompts. The full-screen
+Textual TUI runs on every platform, Windows included; this REPL is
+selected by ``TOKI_CLI=1`` (remote shell, screen reader, a console
+that cannot host a full-screen app) or automatically when Textual
+cannot be imported.
 
 The chat runs in ``cached`` mode through the selected model's daemon
 so the KV-cache reuse layer is exercised exactly like the TUI does.
