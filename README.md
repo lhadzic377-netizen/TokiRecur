@@ -127,6 +127,8 @@ toki diff --system "<long system>" "<prompt>"   # one-shot raw/cached A/B
 
 Claude Code sends tens of thousands of tokens per prompt with its full setup. `TOKI_CLAUDE_BARE=1` launches `--bare`, `TOKI_CLAUDE_MCP=none` an empty MCP config, and `TOKI_CLAUDE_EFFORT=low` a smaller effort budget.
 
+On a slow box — a laptop with no usable GPU, where the profile says `cpu` — the launcher also gives Claude Code a 30-minute budget (`API_TIMEOUT_MS`, `CLAUDE_STREAM_IDLE_TIMEOUT_MS`) instead of its 10-minute default, because a CPU prefill of a long prompt can spend that on its own. `TOKI_CLAUDE_TIMEOUT_MS` overrides it in milliseconds. The daemon waits longer than the client by default (`TOKI_BACKEND_TIMEOUT`, 1800 s) so it is never the side that gives up first, and it says what the wait will cost: the measured prefill rate per model becomes the estimate it puts in the first stream event and the log, so a slow turn is a number instead of a mystery.
+
 ## Command reference
 
 ```bash

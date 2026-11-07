@@ -336,20 +336,31 @@ async def _with_keepalive(
 async def stream_message(
     items: AsyncIterator[dict[str, Any]], model: str,
     ping_interval: float = STREAM_PING_INTERVAL,
+    estimate: dict[str, Any] | None = None,
 ) -> AsyncIterator[str]:
+    """The Anthropic event stream for one turn.
+
+    ``estimate`` is the daemon's projection of how long the prefill
+    will take, carried in the first event so a client (or a human
+    reading the stream) can see the number instead of guessing from
+    the silence.
+    """
     message_id = f"msg_{uuid.uuid4().hex[:24]}"
+    message: dict[str, Any] = {
+        "id": message_id,
+        "type": "message",
+        "role": "assistant",
+        "content": [],
+        "model": model,
+        "stop_reason": None,
+        "stop_sequence": None,
+        "usage": {"input_tokens": 0, "output_tokens": 0},
+    }
+    if estimate:
+        message["toki_prefill_estimate"] = estimate
     yield sse_event("message_start", {
         "type": "message_start",
-        "message": {
-            "id": message_id,
-            "type": "message",
-            "role": "assistant",
-            "content": [],
-            "model": model,
-            "stop_reason": None,
-            "stop_sequence": None,
-            "usage": {"input_tokens": 0, "output_tokens": 0},
-        },
+        "message": message,
     })
 
     next_index = 0

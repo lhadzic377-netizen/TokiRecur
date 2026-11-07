@@ -197,6 +197,29 @@ def _swallow_task_result(task: asyncio.Task[Any]) -> None:
         pass
 
 
+#: How long the daemon waits for llama-server before giving up.
+#:
+#: It has to outlast the slowest client, not the average one. Claude
+#: Code gives a local endpoint ten minutes (API_TIMEOUT_MS) and a 300
+#: second stream-idle window; on a CPU-only laptop a prefill can spend
+#: that on its own. At 600 s the daemon was the side that gave up
+#: first, which turned a slow turn into a 500 instead of a slow turn.
+DEFAULT_BACKEND_TIMEOUT = 1800.0
+
+
+def backend_timeout() -> float:
+    """The upstream timeout in seconds. ``TOKI_BACKEND_TIMEOUT`` wins."""
+    raw = os.environ.get("TOKI_BACKEND_TIMEOUT", "").strip()
+    if raw:
+        try:
+            value = float(raw)
+        except ValueError:
+            value = 0.0
+        if value > 0:
+            return value
+    return DEFAULT_BACKEND_TIMEOUT
+
+
 class LlamaServerBackend(LlamaBackend):
     """HTTP backend against llama-server (upstream).
 
@@ -210,11 +233,12 @@ class LlamaServerBackend(LlamaBackend):
         base_url: str = "http://127.0.0.1:8080",
         *,
         cache_dir: str | os.PathLike[str] | None = None,
-        timeout: float = 600.0,
+        timeout: float | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.cache_dir = Path(cache_dir) if cache_dir else None
-        self._client = httpx.Client(timeout=timeout)
+        self.timeout = float(timeout) if timeout else backend_timeout()
+        self._client = httpx.Client(timeout=self.timeout)
 
     async def slot_snapshot(self) -> list[dict[str, Any]] | None:
         """Current llama-server slot states, or None if unreachable.
@@ -576,7 +600,7 @@ class LlamaServerBackend(LlamaBackend):
         r = self._client.post(
             f"{self.base_url}/completion",
             json=payload,
-            timeout=600.0,
+            timeout=self.timeout,
         )
         r.raise_for_status()
         elapsed = (time.perf_counter() - started) * 1000.0
@@ -636,7 +660,7 @@ class LlamaServerBackend(LlamaBackend):
         r = self._client.post(
             f"{self.base_url}/completion",
             json=payload,
-            timeout=600.0,
+            timeout=self.timeout,
         )
         r.raise_for_status()
         elapsed = (time.perf_counter() - started) * 1000.0
@@ -726,7 +750,7 @@ class LlamaServerBackend(LlamaBackend):
         r = self._client.post(
             f"{self.base_url}/v1/chat/completions",
             json=payload,
-            timeout=600.0,
+            timeout=self.timeout,
         )
         r.raise_for_status()
         elapsed = (time.perf_counter() - started) * 1000.0
@@ -853,7 +877,8 @@ class LlamaServerBackend(LlamaBackend):
             # across delta chunks.
             tool_calls_by_index: dict[int, dict] = {}
             try:
-                async with httpx.AsyncClient(timeout=httpx.Timeout(600.0, connect=10.0)) as client:
+                upstream_timeout = httpx.Timeout(self.timeout, connect=10.0)
+                async with httpx.AsyncClient(timeout=upstream_timeout) as client:
                     async with client.stream(
                         "POST",
                         f"{self.base_url}/v1/chat/completions",

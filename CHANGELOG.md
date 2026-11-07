@@ -6,7 +6,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **A slow turn is a number, not a mystery.** The daemon now measures
+  how fast the machine prefills per model, projects the cost of the
+  next prompt from that rate, and says so before the wait: the estimate
+  rides in the first event of the Anthropic stream, the measured
+  prefill is in the non-streaming response, and a prefill that will
+  take more than 20 seconds is logged with its numbers.
+
 ### Fixed
+- **A slow client is no longer abandoned.** Claude Code gives a local
+  endpoint ten minutes and treats 300 seconds of silence as a dead
+  stream; a CPU-only laptop can spend that on a prefill. The daemon
+  waited 600 s for llama-server, the same number as the client's
+  budget, so whichever gave up first turned a slow turn into a 500 or
+  a timeout. The upstream timeout is now 1800 s
+  (`TOKI_BACKEND_TIMEOUT`), and on a box the profile calls CPU-only the
+  launcher gives Claude Code a 30-minute budget
+  (`TOKI_CLAUDE_TIMEOUT_MS` overrides it).
 - **An install no longer dies over a GPU build it did not ask for.** The
   hardware profile recommended CPU on a laptop whose llama-server was a
   working Vulkan build, and the install refused to overwrite it — which

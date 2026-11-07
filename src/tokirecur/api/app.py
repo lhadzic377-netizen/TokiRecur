@@ -860,6 +860,10 @@ def create_app(
     app.state.cache_dir = cache_dir
     app.state.memory_budget_mb = memory_budget_mb
     app.state.started_at = started_at
+    # Measured prefill rate per model (tokens per second). It is what
+    # turns "the client timed out" into "this prompt needs eight
+    # minutes on this machine".
+    app.state.prefill_rates = {}
 
     # ---- Middleware ----
     @app.middleware("http")
@@ -1049,6 +1053,114 @@ def create_app(
         )
 
     # ---- OpenAI model metadata (context discovery) ----
+
+    def _record_stream_prefill(
+        items: Any, model_name: str,
+    ) -> Any:
+        """Remember the prefill rate of a streamed turn.
+
+        The rate has to come from the traffic that matters: Claude Code
+        only ever streams, so a daemon that learned its rate from the
+        non-streaming path would never know how slow the client is
+        waiting for.
+        """
+
+        async def wrapper() -> Any:
+            async for item in items:
+                if isinstance(item, dict) and item.get("kind") == "result":
+                    result = item.get("result")
+                    if result is not None:
+                        _record_prefill_rate(model_name, result)
+                yield item
+
+        return wrapper()
+
+    def _measured_prefill(result: Any) -> dict[str, Any] | None:
+        """What the prefill of this request actually cost."""
+        prefilled = int(getattr(result, "prefilled_tokens", 0) or 0)
+        ttft_ms = float(getattr(result, "ttft_ms", 0) or 0)
+        if prefilled <= 0 or ttft_ms <= 0:
+            return None
+        return {
+            "prefill_tokens": prefilled,
+            "prefill_ms": round(ttft_ms, 1),
+            "prefill_tokens_per_second": round(prefilled / (ttft_ms / 1000.0), 1),
+        }
+
+    def _record_prefill_rate(model_name: str, result: Any) -> None:
+        """Remember how fast this machine prefills for this model."""
+        prefilled = int(getattr(result, "prefilled_tokens", 0) or 0)
+        ttft_ms = float(getattr(result, "ttft_ms", 0) or 0)
+        if prefilled <= 0 or ttft_ms <= 0:
+            return
+        rate = prefilled / (ttft_ms / 1000.0)
+        if rate <= 0:
+            return
+        rates = getattr(app.state, "prefill_rates", None)
+        if rates is None:
+            rates = {}
+            app.state.prefill_rates = rates
+        rates[model_name] = rate
+
+    def _prompt_token_estimate(messages: list[dict[str, Any]]) -> int:
+        """Rough prompt size in tokens, from the characters.
+
+        Four characters per token is the usual rule of thumb. The real
+        count is only known after the prefill; this number exists to
+        warn *before* the wait, so a rough one is enough.
+        """
+        chars = 0
+        for message in messages:
+            content = message.get("content")
+            if isinstance(content, str):
+                chars += len(content)
+            elif isinstance(content, list):
+                for part in content:
+                    if isinstance(part, dict):
+                        text = part.get("text")
+                        if isinstance(text, str):
+                            chars += len(text)
+        return chars // 4
+
+    def _prefill_estimate(
+        messages: list[dict[str, Any]], model_name: str,
+    ) -> dict[str, Any] | None:
+        """How long this prompt will take to prefill, if we know.
+
+        The rate comes from the last completed request on this daemon.
+        Without a measurement there is nothing honest to say, so the
+        estimate is None.
+        """
+        rates = getattr(app.state, "prefill_rates", None) or {}
+        rate = rates.get(model_name)
+        if not rate or rate <= 0:
+            return None
+        tokens = _prompt_token_estimate(messages)
+        if tokens <= 0:
+            return None
+        return {
+            "prompt_tokens_estimated": tokens,
+            "prefill_tokens_per_second": round(rate, 1),
+            "prefill_seconds_estimated": round(tokens / rate, 1),
+        }
+
+    def _warn_slow_prefill(estimate: dict[str, Any] | None) -> None:
+        """Say the number, before the client decides to give up."""
+        if not estimate:
+            return
+        threshold = float(os.environ.get("TOKI_SLOW_PREFILL_SECONDS", "20"))
+        seconds = float(estimate.get("prefill_seconds_estimated") or 0)
+        if seconds < threshold:
+            return
+        logger.warning(
+            "slow prefill expected: ~%s tokens at %.0f tok/s is about "
+            "%.0f s. A client with a ten-minute budget gives up in the "
+            "middle of it — use a smaller model, a smaller context, or "
+            "Claude Code with --bare.",
+            estimate.get("prompt_tokens_estimated"),
+            float(estimate.get("prefill_tokens_per_second") or 0),
+            seconds,
+        )
 
     def _served_model_id() -> str | None:
         """The id THIS daemon's llama-server actually serves, cached.
@@ -2133,6 +2245,9 @@ def create_app(
                 context_tokens=slot_ctx,
                 spilled=result.spilled,
             )
+            # Remember how fast this machine prefills, so the next
+            # request can say how long it will take before it waits.
+            _record_prefill_rate(req.model, result)
             tap.record(
                 endpoint="chat.completions",
                 model=req.model,
@@ -2264,6 +2379,10 @@ def create_app(
             top_p=req.top_p,
         )
         session = anthropic_session_id(req)
+        # How long this prompt will take to prefill, said out loud
+        # before the wait rather than after the client gives up.
+        estimate = _prefill_estimate(messages, model_name)
+        _warn_slow_prefill(estimate)
 
         if req.stream:
             async def event_stream() -> Any:
@@ -2291,7 +2410,10 @@ def create_app(
                             "chat_template_kwargs": template_kwargs,
                         },
                     )
-                    async for event in stream_message(items, model_name):
+                    items = _record_stream_prefill(items, model_name)
+                    async for event in stream_message(
+                        items, model_name, estimate=estimate,
+                    ):
                         yield event
                 except Exception as e:
                     logger.exception("Anthropic messages streaming failed")
@@ -2342,7 +2464,14 @@ def create_app(
                     "chat_template_kwargs": template_kwargs,
                 },
             )
-            return JSONResponse(response_message(result, model_name))
+            _record_prefill_rate(model_name, result)
+            body = response_message(result, model_name)
+            prefill = _measured_prefill(result)
+            if prefill:
+                # The numbers, not a guess: how long this prompt took
+                # to prefill and how fast this machine does it.
+                body["toki_prefill"] = prefill
+            return JSONResponse(body)
         except Exception as e:
             if _context_overflow_status(e):
                 raise HTTPException(status_code=413, detail=_overflow_detail()) from e

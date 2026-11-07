@@ -208,6 +208,51 @@ def _bound_env(spec: Any, client: str) -> dict[str, str]:
     return env
 
 
+#: Claude Code's own budgets for a local endpoint, in milliseconds.
+#:
+#: Claude Code aborts a request after ten minutes (API_TIMEOUT_MS) and
+#: treats 300 seconds of silence as a dead stream. On a CPU-only box a
+#: prefill can spend that on its own — the client then gives up on a
+#: turn the daemon is still working on. Thirty minutes is the ceiling
+#: Claude Code allows.
+CLAUDE_CLIENT_TIMEOUT_MS = 1_800_000
+
+
+def _claude_timeout_env() -> dict[str, str]:
+    """How long Claude Code should wait for a local turn.
+
+    Only a machine the profile calls CPU-only gets the long budget: on
+    a GPU box the defaults are plenty, and a generous timeout on a fast
+    box only hides a real hang.
+    """
+    override = os.environ.get("TOKI_CLAUDE_TIMEOUT_MS", "").strip()
+    if override:
+        try:
+            ms = int(override)
+        except ValueError:
+            ms = 0
+        if ms > 0:
+            return {
+                "API_TIMEOUT_MS": str(ms),
+                "CLAUDE_STREAM_IDLE_TIMEOUT_MS": str(ms),
+            }
+    try:
+        from .hardware import load_profile
+
+        profile = load_profile()
+    except Exception:
+        profile = None
+    backend = ""
+    if profile is not None:
+        backend = str((profile.recommended or {}).get("backend", ""))
+    if backend == "cpu":
+        return {
+            "API_TIMEOUT_MS": str(CLAUDE_CLIENT_TIMEOUT_MS),
+            "CLAUDE_STREAM_IDLE_TIMEOUT_MS": str(CLAUDE_CLIENT_TIMEOUT_MS),
+        }
+    return {}
+
+
 def launch_cmd(interface: str, client: str, spec: Any | None) -> dict:
     """Build the launch plan for an (interface, client, model) combo."""
     launch = get_launch_app(client)
@@ -236,6 +281,7 @@ def launch_cmd(interface: str, client: str, spec: Any | None) -> dict:
             "ANTHROPIC_DEFAULT_OPUS_MODEL": spec.model_id,
             "ANTHROPIC_DEFAULT_HAIKU_MODEL": spec.model_id,
         })
+        env.update(_claude_timeout_env())
         argv = ["claude", "--settings", str(settings_path), "--model", spec.model_id]
         # Opt-in levers. A full setup (48 plugins, MCP servers, hooks, LSP)
         # makes every prompt tens of thousands of tokens, and extended
