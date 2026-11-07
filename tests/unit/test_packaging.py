@@ -24,3 +24,25 @@ def test_runtime_asset_is_packaged(asset):
     root = importlib.resources.files("tokirecur").joinpath(pkg)
     assert root is not None
     assert root.joinpath(name).is_file(), f"missing packaged asset: {asset}"
+
+
+def test_installers_install_the_embeddings_extra_by_default():
+    """The README, install.bat and the curl/irm one-liners all say the
+    embeddings extra is installed by default; install.sh did not, so the
+    benchmark's semantic similarity silently degraded to its proxy on
+    the platform that reads the README.
+
+    An empty TOKI_EXTRAS still means "no extras" (faster, no torch).
+    """
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    sh = (root / "install.sh").read_text(encoding="utf-8")
+    bat = (root / "install.bat").read_text(encoding="utf-8")
+
+    assert 'EXTRA=".[embeddings]"' in sh
+    assert 'set "EXTRA=.[embeddings]"' in bat
+    # The empty value has to be honoured as "no extras", which needs a
+    # "is it set" test rather than a "is it non-empty" one.
+    assert "TOKI_EXTRAS+set" in sh
+    assert 'if "%TOKI_EXTRAS%"=="" set "EXTRA=."' in bat

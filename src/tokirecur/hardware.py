@@ -74,7 +74,14 @@ _INTEL_E_CORE_FAMILIES = {6}  # same family; disambiguated by max freq
 #   0x46..   Older Skylake GT2 / GT4 / Iris Pro (family 6).
 #   0x4c..   Atom-class integrated graphics (Cherry Trail, Goldmont).
 #   0x3e..   Kaby Lake / Coffee Lake UHD 620/630.
-_INTEL_IGPU_PREFIXES = ("0x9a", "0x46", "0x4c", "0x3e")
+#: Intel integrated-GPU device-id prefixes.
+#:
+#: Alder Lake (0x9a), Alder Lake-N (0x46), Meteor Lake (0x4c), Tiger
+#: Lake (0x3e) and Lunar Lake (0x7d — the Arc 140V in the Core Ultra
+#: 200V series) are all integrated parts with no dedicated VRAM.
+#: Discrete Arc (0x56, 0x57, 0x64) is deliberately absent: those cards
+#: report real VRAM from sysfs and are worth offloading to.
+_INTEL_IGPU_PREFIXES = ("0x9a", "0x46", "0x4c", "0x3e", "0x7d")
 
 
 # ── CPU ────────────────────────────────────────────────────────────
@@ -613,6 +620,16 @@ def _scan_pci_gpus(drm_root: Path, already: list[GPUProfile]) -> list[GPUProfile
                 vram = _estimate_intel_vram_gb(device_id)
             else:
                 vram = _pci_vram_gb(dev)
+                if vram == 0.0:
+                    # An Intel GPU with no dedicated VRAM is an
+                    # integrated part, whatever its device id: a
+                    # discrete Arc card reports its VRAM from sysfs.
+                    # Without this the card reads as "discrete GPU" with
+                    # 0 GB, which is both wrong and the reason the
+                    # install wanted to replace a working Vulkan build
+                    # with a CPU one.
+                    shared = True
+                    vram = _estimate_intel_vram_gb(device_id)
         else:
             vram = 0.0
         # AMD GPUs on UMA systems (Strix Halo, AMD APUs) report no
@@ -641,20 +658,7 @@ def _scan_pci_gpus(drm_root: Path, already: list[GPUProfile]) -> list[GPUProfile
             (vendor == "AMD" and uma_carve)
             or (not shared and (vram >= 4 or vendor != "Intel"))
         )
-        reason_bits = []
-        if uma_carve:
-            reason_bits.append(
-                f"AMD iGPU carve ({vram:.1f} GB reserved) — unified memory"
-            )
-        elif shared:
-            reason_bits.append("shared system RAM")
-        if vram and vram < 4 and not uma_carve:
-            reason_bits.append(f"only {vram:.1f} GB VRAM")
-        if vendor == "Intel" and shared:
-            reason_bits.append("Intel iGPU — CPU is faster for LLM matmul")
-        elif vendor == "Intel" and vram and vram < 4:
-            reason_bits.append(f"Intel discrete with only {vram:.1f} GB VRAM")
-        reason = "; ".join(reason_bits) or "discrete GPU"
+        reason = _gpu_reason(vendor, vram, shared, uma_carve)
         found.append(GPUProfile(
             vendor=vendor, name=name, vram_gb=vram,
             driver=None, vulkan_score=score, shared_ram=shared,
@@ -1012,6 +1016,11 @@ def profile_box(force: bool = False) -> HardwareProfile:
     """
     cached = load_profile() if not force else None
     live_gpus: list | None = None
+    if cached is not None and cached.ram_gb <= 0:
+        # A profile with no RAM in it is a bad reading, not a fact: it
+        # sizes every KV and thread decision to nothing. Re-profile.
+        logger.info("hardware profile has no RAM recorded — re-profiling")
+        cached = None
     if cached is not None and cached.is_fresh() \
             and cached.schema_version == PROFILE_VERSION:
         live_gpus = enumerate_gpus()
@@ -1062,6 +1071,40 @@ _BACKEND_TABLE: dict[str, dict[str, str]] = {
     # Intel, and legacy NVIDIA) uses Metal.
     "Apple": {"darwin": "metal", "linux": "vulkan", "windows": "vulkan"},
 }
+
+
+def _gpu_reason(vendor: str, vram: float, shared: bool,
+                uma_carve: bool = False) -> str:
+    """Why this GPU is (or is not) used for LLM offload, in one line.
+
+    The line has to be true: an Intel iGPU with no dedicated VRAM used
+    to be described as a "discrete GPU", because the VRAM clause was
+    skipped when the number was zero. That is how a laptop with a
+    working Vulkan build ended up being told it had a CPU-only GPU.
+    """
+    if vendor == "Intel" and vram == 0.0:
+        # No dedicated VRAM means an integrated part, whatever the
+        # device id says.
+        shared = True
+    reason_bits = []
+    if uma_carve:
+        reason_bits.append(
+            f"AMD iGPU carve ({vram:.1f} GB reserved) — unified memory"
+        )
+    elif shared:
+        reason_bits.append(
+            "integrated GPU — shared system RAM"
+            if vendor == "Intel" else "shared system RAM"
+        )
+    if vram and vram < 4 and not uma_carve and not (vendor == "Intel" and shared):
+        reason_bits.append(f"only {vram:.1f} GB VRAM")
+    if vendor == "Intel" and shared:
+        reason_bits.append("Intel iGPU — CPU is faster for LLM matmul")
+    elif vendor == "Intel" and vram and vram < 4:
+        reason_bits.append(f"Intel discrete with only {vram:.1f} GB VRAM")
+    if not reason_bits:
+        return "integrated GPU — shared system RAM" if shared else "discrete GPU"
+    return "; ".join(reason_bits)
 
 
 def _gpu_eligible(gpu: GPUProfile) -> bool:
@@ -1202,10 +1245,42 @@ def _from_dict(data: dict) -> HardwareProfile:
     )
 
 
+def _ram_from_meminfo(text: str) -> float:
+    """Free RAM in GB, from the text of ``/proc/meminfo``.
+
+    ``MemAvailable`` is the honest number, but some kernels report it
+    as zero (or omit it) under a cgroup limit. A zero would size every
+    KV and thread decision to nothing, so fall back to half the total.
+    """
+    total = available = 0.0
+    for line in text.splitlines():
+        try:
+            # /proc/meminfo reports kibibytes: 1024 * 1024 kB in a GB.
+            # Dividing by 1024**3 (as this did) made every number a
+            # thousand times too small, so an 8 GB box reported 0.008 GB
+            # and the profile printed "ram=0GB".
+            if line.startswith("MemTotal:"):
+                total = int(line.split()[1]) / 1048576.0
+            elif line.startswith("MemAvailable:"):
+                available = int(line.split()[1]) / 1048576.0
+        except (ValueError, IndexError):
+            continue
+    if available > 0:
+        return available
+    if total > 0:
+        return total * 0.5
+    return 0.0
+
+
 def _available_gb() -> float:
     """Best-effort free RAM. Used to size thread count and KV cache
     decisions. Falls back to 16 GB (a common midrange desktop) when
-    the platform doesn't expose it cleanly."""
+    the platform doesn't expose it cleanly.
+
+    A zero reading is never returned: some kernels report
+    ``MemAvailable: 0`` (or omit it) under a cgroup limit, and a
+    profile with 0 GB of RAM sizes every KV decision to nothing.
+    """
     if sys.platform == "darwin":
         try:
             r = subprocess.run(
@@ -1219,10 +1294,8 @@ def _available_gb() -> float:
     if sys.platform.startswith("linux"):
         try:
             with open("/proc/meminfo") as f:
-                for line in f:
-                    if line.startswith("MemAvailable:"):
-                        return int(line.split()[1]) / 1024**3
-        except OSError:
+                return _ram_from_meminfo(f.read())
+        except (OSError, ValueError, IndexError):
             pass
     if sys.platform.startswith("win"):
         try:

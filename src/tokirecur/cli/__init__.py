@@ -2692,13 +2692,39 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
                                       "openvino", "metal")
                 and backend == "cpu"
                 and os.environ.get("TOKI_INSTALL_LLAMA_FORCE_DOWNGRADE") != "1"):
+            if not explicit_cpu:
+                # The profile recommended CPU, but this machine already
+                # runs a GPU build and its models are pinned to GPU
+                # offload. Replacing it with a CPU build would make
+                # every one of them refuse to start, and the install is
+                # not the place to decide the machine's GPU is unusable.
+                # Keep the binary and let the install finish.
+                click.echo(
+                    f"backend: keeping the existing {existing_kind} "
+                    f"llama-server at {existing} (the profile recommends "
+                    f"cpu, but a {existing_kind} build is already "
+                    f"installed and models pinned to GPU offload need it "
+                    f"— refresh it with: toki model install-llama "
+                    f"--backend {existing_kind})",
+                    err=True,
+                )
+                if name:
+                    try:
+                        spec = set_binary(name, str(existing), env=None)
+                        click.echo(
+                            f"registry: '{spec.name}' now uses {existing}"
+                        )
+                    except KeyError as e:
+                        click.echo(f"error: {e}", err=True)
+                        raise SystemExit(1) from None
+                return
             raise click.ClickException(
                 f"refusing to overwrite the existing {existing_kind} "
                 f"llama-server at {existing} with a CPU build — every "
                 f"model pinned to GPU offload would refuse to start. "
-                f"Re-run with --backend {existing_kind} to refresh the "
-                f"GPU build, or set TOKI_INSTALL_LLAMA_FORCE_DOWNGRADE=1 "
-                f"to force the CPU replacement."
+                f"To keep the GPU build, run: toki model install-llama "
+                f"--backend {existing_kind}. To replace it with a CPU "
+                f"build anyway, set TOKI_INSTALL_LLAMA_FORCE_DOWNGRADE=1."
             )
 
     # MLX has no release binary — it's a pip package. Install it, write

@@ -1285,3 +1285,59 @@ def test_registry_vram_matches_adapter_name():
     assert hardware._registry_vram_for(
         "Intel(R) Arc(TM) A770 Graphics (driver 32.0)", table) == 16.0
     assert hardware._registry_vram_for("NVIDIA GeForce RTX 4070", table) is None
+
+
+def test_intel_lunar_lake_igpu_is_not_called_a_discrete_gpu(monkeypatch, tmp_path):
+    """A Core Ultra 155U (Lunar Lake, 0x7d45) has no dedicated VRAM.
+
+    It used to be described as "discrete GPU" with 0 GB, because the
+    VRAM clause was skipped when the number was zero — and that is how
+    a box with a working Vulkan build was told it had a CPU-only GPU.
+    """
+    monkeypatch.setattr(hardware.sys, "platform", "linux")
+    monkeypatch.setattr(hardware.shutil, "which", lambda name: None)
+    fake_drm = tmp_path / "drm"
+    fake_drm.mkdir()
+    card = fake_drm / "card0" / "device"
+    card.mkdir(parents=True)
+    (card / "vendor").write_text("0x8086")
+    (card / "device").write_text("0x7d45")     # Lunar Lake Arc 140V iGPU
+    (card / "mem_info_vram_total").write_text("0")
+    monkeypatch.setattr(hardware, "_pci_device_name", lambda *_: "Intel Arc 140V")
+    monkeypatch.setattr(hardware, "Path", _DrmPathShim(fake_drm))
+
+    gpus = hardware.enumerate_gpus()
+    igpu = [g for g in gpus if g.vendor == "Intel"]
+    assert len(igpu) == 1
+    assert igpu[0].shared_ram is True
+    assert igpu[0].use_for_llm is False
+    assert "discrete GPU" not in igpu[0].reason
+    assert "integrated" in igpu[0].reason
+
+
+def test_gpu_reason_names_an_intel_gpu_without_vram_as_integrated():
+    assert "integrated GPU" in hardware._gpu_reason("Intel", 0.0, False)
+    assert "discrete GPU" not in hardware._gpu_reason("Intel", 0.0, False)
+    # A discrete Arc card with real VRAM is still a discrete GPU.
+    assert hardware._gpu_reason("Intel", 16.0, False) == "discrete GPU"
+
+
+def test_free_ram_reads_meminfo_in_gigabytes():
+    """/proc/meminfo reports kibibytes. Dividing by 1024**3 made every
+    number a thousand times too small, so an 8 GB box reported 0.008 GB
+    and the profile printed "ram=0GB"."""
+    from tokirecur.hardware import _ram_from_meminfo
+
+    text = "MemTotal:    33554432 kB\nMemAvailable:  8388608 kB\n"
+    assert _ram_from_meminfo(text) == 8.0
+
+
+def test_free_ram_is_never_zero():
+    """MemAvailable reported as zero (or missing) must not size every
+    KV and thread decision to nothing."""
+    from tokirecur.hardware import _ram_from_meminfo
+
+    zero_available = "MemTotal:    33554432 kB\nMemAvailable:        0 kB\n"
+    assert _ram_from_meminfo(zero_available) == 16.0
+    assert _ram_from_meminfo("MemTotal:    33554432 kB\n") == 16.0
+    assert _ram_from_meminfo("") == 0.0

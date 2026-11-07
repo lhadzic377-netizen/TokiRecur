@@ -7,6 +7,32 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- **An install no longer dies over a GPU build it did not ask for.** The
+  hardware profile recommended CPU on a laptop whose llama-server was a
+  working Vulkan build, and the install refused to overwrite it — which
+  is right, and also aborted the whole install, so the agent-config
+  wiring and the verification never ran. An auto-detected CPU backend
+  now keeps the existing GPU build and lets the install finish; an
+  explicit `--backend cpu` still refuses, and both messages name the
+  exact command (`toki model install-llama --backend vulkan`) instead
+  of a bare flag.
+- **The hardware profile read RAM in the wrong unit.** `/proc/meminfo`
+  reports kibibytes and the profile divided by 1024**3, so every Linux
+  box reported a thousand times too little: an 8 GB machine showed
+  `ram=0GB`, and that number feeds the KV and thread sizing. It also
+  now never reports zero, and a profile cached with no RAM in it is
+  re-profiled instead of trusted.
+- **An Intel iGPU is no longer called a discrete GPU.** A laptop with an
+  integrated Arc part (no dedicated VRAM) was described as
+  `vram=0.0GB use=no (discrete GPU)`: the VRAM clause was skipped when
+  the number was zero. Intel parts with no dedicated VRAM are now
+  reported as integrated, Lunar Lake (0x7d) is in the iGPU list, and
+  the reason line says why the CPU build is recommended.
+- **The installers agree about the extras.** The README, `install.bat`
+  and the curl/irm one-liners install the embeddings extra by default;
+  `install.sh` did not, so the benchmark's semantic similarity quietly
+  degraded to its proxy on Linux. It does now, and `TOKI_EXTRAS=` still
+  means no extras.
 - **Claude Code talks to the daemon again.** Claude Code sends the
   `ANTHROPIC_API_KEY` from the environment only when that key is on its
   approved list in `~/.claude.json`; a key it has never seen gets a

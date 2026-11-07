@@ -48,9 +48,18 @@ if [[ $EUID -ne 0 ]]; then
     fi
     _yellow_bar "python check" 10
 
-    EXTRA="."
-    if [[ -n "${TOKI_EXTRAS:-}" ]]; then
-      EXTRA=".[${TOKI_EXTRAS}]"
+    # The embeddings extra is the default: the README, install.bat and
+    # the curl/irm one-liners all say so, and the benchmark's semantic
+    # similarity needs it. TOKI_EXTRAS= (empty) means "no extras" —
+    # "${VAR+set}" rather than "${VAR:-}" so an empty value counts as
+    # set, and this works on the bash 3.2 that macOS still ships.
+    EXTRA=".[embeddings]"
+    if [[ -n "${TOKI_EXTRAS+set}" ]]; then
+      if [[ -z "${TOKI_EXTRAS}" ]]; then
+        EXTRA="."
+      else
+        EXTRA=".[${TOKI_EXTRAS}]"
+      fi
     fi
 
     if command -v pipx >/dev/null 2>&1; then

@@ -2430,3 +2430,88 @@ def test_install_macos_cpu_uses_local_cpu_build(tmp_path, monkeypatch, capsys):
     text = "".join(capsys.readouterr())
     assert "local CPU build" in text
     assert "landed backend cpu" in text
+
+
+# ── An existing GPU build is not silently replaced by a CPU one ────────
+
+
+def _fake_profile_cpu():
+    """A profile that recommends CPU, with no GPU and plenty of RAM."""
+    from tokirecur.hardware import CPUProfile
+
+    return type("P", (), {
+        "recommended": {"backend": "cpu", "ngl": 0, "threads": 4},
+        "cpu": CPUProfile(
+            vendor="GenuineIntel", name="Intel(R) Core(TM) Ultra 7 155U",
+            family=6, model=0x7d, physical_cores=4, logical_cores=8,
+            p_core_ids=[0, 1, 2, 3], e_core_ids=[], max_boost_mhz=5000,
+            simd=["avx2"],
+        ),
+        "gpus": [],
+        "ram_gb": 32.0,
+    })()
+
+
+def test_install_keeps_a_gpu_build_when_the_profile_recommends_cpu(tmp_path, monkeypatch):
+    """A box with a working Vulkan llama-server whose profile says CPU
+    must keep its binary.
+
+    Overwriting it with a CPU build makes every model pinned to GPU
+    offload refuse to start, and aborting the install over it turns a
+    non-problem into a broken installation.
+    """
+    from click.testing import CliRunner
+
+    from tokirecur import cli as cli_mod
+    from tokirecur import diagnose, hardware
+    from tokirecur.cli import install_llama
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    existing = bin_dir / "llama-server"
+    existing.write_bytes(b"MZ")
+
+    monkeypatch.delenv("TOKI_BACKEND", raising=False)
+    monkeypatch.delenv("TOKI_INSTALL_LLAMA_FORCE_DOWNGRADE", raising=False)
+    monkeypatch.setattr(hardware, "profile_box", lambda force=False: _fake_profile_cpu())
+    monkeypatch.setattr(cli_mod, "_find_local_llama_server", lambda: None)
+    monkeypatch.setattr(cli_mod, "_force_cpu_when_no_usable_gpu", lambda o, a, b: b)
+    monkeypatch.setattr(diagnose, "binary_backend", lambda p: "vulkan")
+
+    res = CliRunner().invoke(
+        install_llama, ["--to", str(bin_dir), "--backend", "auto"],
+    )
+
+    assert res.exit_code == 0, res.output
+    assert existing.read_bytes() == b"MZ", "the GPU build was replaced"
+    assert "keeping the existing vulkan llama-server" in res.output
+    # The message has to name the command that refreshes the build.
+    assert "toki model install-llama --backend vulkan" in res.output
+
+
+def test_install_refuses_an_explicit_cpu_over_a_gpu_build_and_names_the_command(
+    tmp_path, monkeypatch,
+):
+    """An explicit --backend cpu is a decision, not a mis-detection: the
+    refusal stays, and it has to name the command that keeps the GPU
+    build. "Re-run with --backend vulkan" was read as `toki --backend
+    vulkan`, which is not a command."""
+    from click.testing import CliRunner
+
+    from tokirecur import diagnose
+    from tokirecur.cli import install_llama
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "llama-server").write_bytes(b"MZ")
+
+    monkeypatch.delenv("TOKI_INSTALL_LLAMA_FORCE_DOWNGRADE", raising=False)
+    monkeypatch.setattr(diagnose, "binary_backend", lambda p: "vulkan")
+
+    res = CliRunner().invoke(
+        install_llama, ["--to", str(bin_dir), "--backend", "cpu"],
+    )
+
+    assert res.exit_code != 0
+    assert "toki model install-llama --backend vulkan" in res.output
+    assert "TOKI_INSTALL_LLAMA_FORCE_DOWNGRADE=1" in res.output
