@@ -184,12 +184,11 @@ def dg_interfaces() -> str:
     <rect x="132" y="26" width="104" height="82" rx="7" fill="rgba(255,255,255,0.03)" stroke="{STRUCT}"/>
     <rect x="132" y="26" width="104" height="15" rx="7" fill="rgba(255,255,255,0.05)"/>
     <circle cx="142" cy="33.5" r="2.4" fill="{HIT}"/>
-    {label(152, 37, "chat", INK, 7.5)}
-    <rect x="142" y="48" width="52" height="7" rx="3.5" fill="rgba(255,255,255,0.07)"/>
-    <rect x="142" y="60" width="76" height="7" rx="3.5" fill="rgba(71,224,226,0.2)"/>
-    <rect x="142" y="72" width="60" height="7" rx="3.5" fill="rgba(255,255,255,0.07)"/>
-    {label(142, 92, "single-page web UI", INK, 7.5)}
-    {label(142, 103, "toki web", DIM, 7)}
+    {label(152, 37, "api", INK, 7.5)}
+    {label(142, 56, "POST /v1/chat/completions", DIM, 6)}
+    {label(142, 68, "POST /v1/completions", DIM, 6)}
+    {label(142, 90, "OpenAI-compatible API", INK, 7.5)}
+    {label(142, 103, "any client", DIM, 7)}
     {arrow(112, 64, 130, 64, BRAND)}
     '''
     return wrap(body)

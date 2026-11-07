@@ -158,47 +158,7 @@
     </dl>
   </section>
 
-  <!-- ── 5 · the product, three times ─────────────────────────────────── -->
-  <section class="l-show l-show--stack">
-    <div class="l-show-copy l-show-copy--duo">
-      <div>
-        <p class="overline">The web UI</p>
-        <h2 >The one screen we do not fake.</h2>
-      </div>
-      <div>
-        <p class="section-sub">A single-page chat over the same daemon, with the cache made visible: every
-          reply says whether it was cached, how many tokens it read, and how long the first token took.</p>
-        <p class="l-show-note">Raw mode, cached mode, and a side-by-side comparison.</p>
-      </div>
-    </div>
-    <div class="l-shot-row">
-      <figure class="l-shot">
-        <div class="l-shot-scroll" tabindex="0" role="group" aria-label="The toki web session screenshot, scrollable">
-          <img src="/img/web-chat-panel.png?v=3" alt="A real toki web session: the left rail lists the daemon, the model and the slots; the transcript shows cached replies with their token counts and timings." width="1080" height="360" loading="lazy">
-        </div>
-      </figure>
-      <dl class="l-shot-notes" aria-label="How to read the transcript">
-        <div>
-          <dt>mode cached</dt>
-          <dd>The session is running against the shared KV cache.</dd>
-        </div>
-        <div>
-          <dt>59 tok in</dt>
-          <dd>The context the reply reports reading.</dd>
-        </div>
-        <div>
-          <dt>367 ms</dt>
-          <dd>Time to the first token of that reply.</dd>
-        </div>
-        <div>
-          <dt>2503 ms</dt>
-          <dd>The whole turn, first token to last.</dd>
-        </div>
-      </dl>
-    </div>
-    <p class="l-pan-hint">Swipe the window to see the rest of it.</p>
-  </section>
-
+  <!-- ── 5 · the launcher ───────────────────────────────────────────────── -->
   <section class="l-show l-show--stack l-show--launcher">
     <div class="l-show-copy l-show-copy--duo">
       <div>
@@ -283,8 +243,8 @@
       <li class="l-panel l-panel--wide">
         <!--DIAGRAM:dg-interfaces-->
         <div>
-          <h3>TUI + web chat</h3>
-          <p>Full-screen terminal chat and a production-ready single-page web UI ship with the package, one command each.</p>
+          <h3>TUI + API</h3>
+          <p>A full-screen terminal chat and the OpenAI-compatible API, in one package, in front of one daemon.</p>
         </div>
       </li>
     </ul>

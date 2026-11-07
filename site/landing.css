@@ -509,64 +509,13 @@
 .l-show-copy--duo .section-sub { margin-top: 0; max-width: 50ch; }
 .l-show-copy--duo .l-show-note { margin-top: var(--s5); }
 
-.l-shot {
-  margin: 0;
-  position: relative;
-  min-width: 0;
-}
-
-.l-shot-scroll { min-width: 0; }
-
-.l-shot-scroll:focus-visible,
 .l-launcher-scroll:focus-visible {
   outline: 2px solid var(--brand);
   outline-offset: 2px;
 }
 
-.l-shot-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 248px;
-  gap: clamp(24px, 3vw, 40px);
-  align-items: end;
-}
-
-.l-shot-notes {
-  margin: 0;
-  padding: 0 0 4px var(--s5);
-  border-left: 1px solid var(--line);
-  display: grid;
-  gap: var(--s4);
-}
-
-.l-shot-notes dt {
-  font-family: var(--mono);
-  font-size: 0.72rem;
-  letter-spacing: 0.02em;
-  color: var(--brand);
-}
-
-.l-shot-notes dd {
-  margin: 3px 0 0;
-  color: var(--muted);
-  font-size: 0.8rem;
-  line-height: 1.5;
-}
-
-.l-shot img {
-  display: block;
-  width: 100%;
-  height: auto;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-lg);
-  background: #08090b;
-  box-shadow:
-    0 40px 90px -50px rgba(0, 0, 0, 0.95),
-    0 0 120px -70px oklch(0.885 0.18 95 / 0.3);
-}
-
 /* The launcher capture is a terminal at native pixel size: no device frame,
-   no padding pretending it is a phone. It gets a wider plate than the web
-   UI because its text is denser and it has more to say. */
+   no padding pretending it is a phone. */
 .l-show.l-show--launcher {
   display: block;
   padding-top: clamp(56px, 6vw, 84px);
@@ -1267,15 +1216,6 @@
 
   .l-show-copy--duo { grid-template-columns: minmax(0, 1fr); }
 
-  .l-shot-row { grid-template-columns: minmax(0, 1fr); }
-
-  .l-shot-notes {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    padding: var(--s4) 0 0;
-    border-left: 0;
-    border-top: 1px solid var(--line);
-  }
-
   .l-show--launcher {
     padding-left: var(--gutter);
     padding-right: var(--gutter);
@@ -1328,20 +1268,6 @@
 }
 
 @media (max-width: 760px) {
-  .l-shot-scroll {
-    overflow-x: auto;
-    overflow-y: hidden;
-    scrollbar-width: thin;
-  }
-
-  .l-shot-scroll img {
-    width: 1080px;
-    max-width: none;
-    border-radius: 0;
-    border-left: 0;
-    border-right: 0;
-  }
-
   .l-launcher-scroll {
     overflow-x: auto;
     overflow-y: hidden;

@@ -77,9 +77,16 @@ if [[ "$DRY_RUN" == "1" ]]; then
   RELEASES_DIR="$SITE_ROOT/releases"
   CURRENT_LINK="$SITE_ROOT/current"
   VENV_DIR="$SITE_ROOT/venv"
+  ORIG_CADDY_CONFIG="$CADDY_CONFIG"
   CADDY_CONFIG="$DRY_ROOT/Caddyfile"
   UNIT_DIR="$DRY_ROOT/systemd"
   mkdir -p "$UNIT_DIR"
+  # Rehearse the Caddyfile step on a copy of the real one, so the dry run
+  # shows exactly what the merge would produce.
+  if [[ -f "$ORIG_CADDY_CONFIG" ]]; then
+    cp "$ORIG_CADDY_CONFIG" "$CADDY_CONFIG"
+    log "Dry run: rehearsing the Caddyfile merge on a copy of $ORIG_CADDY_CONFIG"
+  fi
   log "Dry run: nothing is installed, written to /etc, or started."
   log "Dry run root: $DRY_ROOT"
 else
@@ -225,11 +232,78 @@ fi
 if [[ -f "$CADDY_CONFIG" ]]; then
   cp "$CADDY_CONFIG" "$CADDY_CONFIG.bak.$(date +%s)"
 fi
-install -m 0644 "$TMP_CADDY" "$CADDY_CONFIG"
-rm -f "$TMP_CADDY"
+
+# The installer owns the two regions between the TOKI_GLOBAL and TOKI_SITE
+# markers and nothing else. A machine can host more than one site, and a
+# Caddyfile that already serves something else must come out of this
+# untouched.
+#
+# Caddy wants the global options block first in the file, so the global
+# region goes to the top and the site blocks to the bottom.
+MERGED_CADDY="$(mktemp)"
+KEEP_CADDY="$(mktemp)"
+if [[ -f "$CADDY_CONFIG" ]]; then
+  awk '
+    /^# TOKI_GLOBAL_BEGIN/ { skip = 1; next }
+    /^# TOKI_GLOBAL_END/   { skip = 0; next }
+    /^# TOKI_SITE_BEGIN/   { skip = 1; next }
+    /^# TOKI_SITE_END/     { skip = 0; next }
+    !skip { print }
+  ' "$CADDY_CONFIG" > "$KEEP_CADDY"
+else
+  : > "$KEEP_CADDY"
+fi
+
+# Split the rendered template into its global and site regions. The marker
+# comments stay with the region: they are how the next install finds the
+# blocks it owns and replaces them.
+GLOBAL_REGION="$(mktemp)"
+SITE_REGION="$(mktemp)"
+awk -v G="$GLOBAL_REGION" -v S="$SITE_REGION" '
+  /^# TOKI_GLOBAL_BEGIN/ { grab = "g"; print > G; next }
+  /^# TOKI_GLOBAL_END/   { if (grab == "g") print > G; grab = ""; next }
+  /^# TOKI_SITE_BEGIN/   { grab = "s"; print > S; next }
+  /^# TOKI_SITE_END/     { if (grab == "s") print > S; grab = ""; next }
+  grab == "g" { print > G }
+  grab == "s" { print > S }
+' "$TMP_CADDY"
+
+# A file that already has global options keeps them: Caddy allows one
+# global block, and the existing one may carry settings this installer
+# knows nothing about.
+HAS_GLOBAL=0
+if grep -qE '^[[:space:]]*\{[[:space:]]*$' "$KEEP_CADDY"; then
+  HAS_GLOBAL=1
+fi
+
+{
+  if [[ "$HAS_GLOBAL" == "0" && -s "$GLOBAL_REGION" ]]; then
+    cat "$GLOBAL_REGION"
+    printf '\n'
+  elif [[ "$HAS_GLOBAL" == "1" ]]; then
+    log "The Caddyfile already has global options; keeping them (the ACME email was not applied)."
+  fi
+  cat "$KEEP_CADDY"
+  if [[ -s "$KEEP_CADDY" && -s "$SITE_REGION" ]]; then
+    printf '\n'
+  fi
+  cat "$SITE_REGION"
+} > "$MERGED_CADDY"
+
+install -m 0644 "$MERGED_CADDY" "$CADDY_CONFIG"
+rm -f "$TMP_CADDY" "$MERGED_CADDY" "$KEEP_CADDY" "$GLOBAL_REGION" "$SITE_REGION"
 
 if command -v caddy >/dev/null; then
-  caddy validate --config "$CADDY_CONFIG" >/dev/null || fail "generated Caddyfile failed validation"
+  if ! caddy validate --config "$CADDY_CONFIG" >/dev/null; then
+    # Put back whatever was there before: a Caddyfile that does not parse is
+    # worse than no change at all.
+    LATEST_BAK="$(ls -1t "$CADDY_CONFIG".bak.* 2>/dev/null | head -1 || true)"
+    if [[ -n "$LATEST_BAK" ]]; then
+      log "Validation failed; restoring $LATEST_BAK"
+      install -m 0644 "$LATEST_BAK" "$CADDY_CONFIG"
+    fi
+    fail "generated Caddyfile failed validation"
+  fi
   ok "Caddyfile validated"
 else
   log "Caddy is not installed here, so the Caddyfile was not validated"
