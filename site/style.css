@@ -504,7 +504,7 @@ section > h2 + .section-sub { margin-top: var(--s4); }
   background: var(--brand-soft);
 }
 
-/* --- cards (pricing) ----------------------------------------------------- */
+/* --- cards --------------------------------------------------------------- */
 
 .card {
   position: relative;
@@ -789,84 +789,13 @@ footer {
   font-family: var(--mono);
 }
 
-/* --- pricing page --------------------------------------------------------- */
+/* --- error page ------------------------------------------------------------ */
 
-.pricing-page { padding-top: var(--s9) !important; }
+.error-page { padding-top: var(--s9) !important; }
 
-.pricing-h1 {
+.error-h1 {
   font-size: var(--step-3);
   margin-bottom: var(--s5);
-}
-
-.pricing-blurb {
-  color: var(--fg-dim);
-  max-width: 58ch;
-  margin-bottom: var(--s7);
-}
-
-.pricing-card {
-  max-width: 620px;
-  padding: var(--s7);
-}
-
-.price-row {
-  display: flex;
-  align-items: baseline;
-  gap: var(--s3);
-  margin-bottom: var(--s5);
-}
-
-.price {
-  font-family: var(--mono);
-  font-size: var(--step-3);
-  font-weight: 600;
-  letter-spacing: -0.03em;
-}
-
-.price-suffix { color: var(--muted); }
-
-.pricing-tagline {
-  color: var(--fg-dim);
-  margin-bottom: var(--s5);
-}
-
-.pricing-includes {
-  list-style: none;
-  padding: 0;
-  margin: 0 0 var(--s6);
-  display: grid;
-  gap: var(--s3);
-  color: var(--fg-dim);
-  font-size: 0.94rem;
-}
-
-.pricing-includes li {
-  padding-left: 26px;
-  position: relative;
-}
-
-.pricing-includes li::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 0.55em;
-  width: 12px;
-  height: 7px;
-  border-left: 2px solid var(--brand);
-  border-bottom: 2px solid var(--brand);
-  transform: rotate(-45deg);
-}
-
-.pricing-fine {
-  color: var(--muted);
-  font-size: 0.84rem;
-  line-height: 1.6;
-}
-
-.pricing-fine-joke {
-  color: var(--brand);
-  font-family: var(--mono);
-  font-size: 0.84rem;
 }
 
 /* --- legal pages ---------------------------------------------------------- */

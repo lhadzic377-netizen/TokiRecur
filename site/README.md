@@ -9,7 +9,6 @@ tracking: `dist/site/` is exactly what gets served, and it is rebuilt from
 ```
 site/                  source
   index.html           landing page
-  pricing.html         pricing page
   404.html             not-found page (served with a 404 status)
   style.css            design system + landing page
   fonts.css            self-hosted Geist / Geist Mono
@@ -49,7 +48,7 @@ python3 scripts/serve-site.py            # -> http://127.0.0.1:8903/
 Look at the site with `serve-site.py`, not with a generic static server.
 The deployment resolves a URL the way Caddy does: the path, then the path
 with `.html`, then the path as a directory index. That is what makes
-`/pricing`, `/privacy` and `/docs/install` work. A server that does not do
+`/privacy`, `/terms` and `/docs/install` work. A server that does not do
 that returns 404 for pages that are in the build.
 
 The build:
@@ -85,7 +84,7 @@ unit into a temporary directory, then prints what a real run would do.
 
 `scripts/Caddyfile.template` gives the site:
 
-- clean URLs (`/pricing` → `pricing.html`, `/docs/install` → `docs/install.html`),
+- clean URLs (`/privacy` → `privacy.html`, `/docs/install` → `docs/install.html`),
   which are the only addresses the site links to, the sitemap names and the
   canonical tags declare;
 - a real 404 (`/404.html`, served with a 404 status);

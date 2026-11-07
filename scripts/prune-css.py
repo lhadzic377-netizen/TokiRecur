@@ -26,7 +26,7 @@ BLOCKS_STYLE = [
     ("/* --- hero ", "/* --- the reuse diagram "),
     ("/* --- stats ", "/* --- video "),
     ("/* --- video ", "/* --- what ships "),
-    ("/* --- what ships ", "/* --- cards (pricing) "),
+    ("/* --- what ships ", "/* --- cards "),
     ("/* --- steps ", "/* --- honesty "),
     ("/* --- honesty ", "/* --- meet toki "),
     ("/* --- meet toki ", "/* --- benchmarks "),

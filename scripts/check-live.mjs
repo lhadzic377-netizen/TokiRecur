@@ -27,7 +27,6 @@ const args = Object.fromEntries(
 const BASE = String(args.url || "https://tokirecur.com").replace(/\/$/, "");
 const PAGES = [
   "/",
-  "/pricing",
   "/privacy",
   "/terms",
   "/404.html",

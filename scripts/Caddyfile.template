@@ -44,7 +44,7 @@
         -Server
     }
 
-    # /pricing -> pricing.html, /docs/ -> docs/index.html, and a real 404.
+    # /privacy -> privacy.html, /docs/ -> docs/index.html, and a real 404.
     try_files {path} {path}.html {path}/index.html
     file_server
 

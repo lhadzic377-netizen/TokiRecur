@@ -134,7 +134,7 @@ document.addEventListener("DOMContentLoaded", () => {
   hero.forEach((el) => el.classList.add("in-view"));
 
   const groups = document.querySelectorAll(
-    ".cards .card, .steps .reveal, .stats .stat, #benchmarks tbody .reveal, .arch .reveal, #pricing .reveal, #watch .reveal, .cta-final .reveal, .code.reveal"
+    ".cards .card, .steps .reveal, .stats .stat, #benchmarks tbody .reveal, .arch .reveal, #watch .reveal, .cta-final .reveal, .code.reveal"
   );
   stagger(groups, 0.08, 0.24);
 

@@ -3,7 +3,7 @@
 
 The site is deployed behind Caddy, which resolves a URL by trying the path
 itself, then the path with ``.html``, then the path as a directory index.
-That is what makes ``/pricing``, ``/privacy`` and ``/docs/install`` work.
+That is what makes ``/privacy``, ``/terms`` and ``/docs/install`` work.
 A plain static server does not do that, so opening the site through one
 gives you a 404 for pages that exist.
 

@@ -17,7 +17,6 @@ from urllib.parse import urlsplit
 DIST = Path(__file__).resolve().parents[1] / "dist" / "site"
 REQUIRED = (
     "index.html",
-    "pricing.html",
     "404.html",
     "style.css",
     "fonts.css",
@@ -102,7 +101,7 @@ def main() -> int:
         parts = urlsplit(locations[0])
         origin = f"{parts.scheme}://{parts.netloc}"
         paths = {urlsplit(loc).path for loc in locations}
-        for path in ("/", "/pricing", "/docs/"):
+        for path in ("/", "/docs/"):
             if path not in paths:
                 errors.append(f"sitemap.xml: missing {origin}{path}")
         for loc in locations:

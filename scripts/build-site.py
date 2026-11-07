@@ -26,13 +26,11 @@ DIST = REPO / "dist" / "site"
 
 PUBLIC_FILES = (
     "index.html",
-    "pricing.html",
     "404.html",
     "privacy.html",
     "terms.html",
     "style.css",
     "landing.css",
-    "pricing.css",
     "fonts.css",
     "head.js",
     "app.js",
@@ -277,7 +275,7 @@ def validate_links() -> list[str]:
 
 def write_discovery(site_url: str) -> None:
     base = site_url.rstrip("/")
-    pages = ["/", "/pricing"]
+    pages = ["/"]
     for legal in ("privacy.html", "terms.html"):
         if (DIST / legal).is_file():
             pages.append(f"/{legal[: -len('.html')]}")
