@@ -45,7 +45,10 @@ logger = logging.getLogger(__name__)
 # the SYCL build, and AMD/Intel VRAM comes from the 64-bit driver
 # registry value instead of WMI's 4 GB-capped AdapterRAM. The cached
 # recommendation must be rebuilt, not reused.
-PROFILE_VERSION = 5
+PROFILE_VERSION = 6
+# 6: a UMA AMD carve (0.5 GB on a Strix Halo) is judged on the
+# system pool, not on the reserved slice — profiles written by
+# 5 carry the slice and would keep recommending CPU.
 # Cache the profile for 30 days; after that, re-profile.
 # How long a cached hardware profile is trusted before re-profiling.
 # TOKI_PROFILE_TTL (seconds) overrides. 30 days is long because the
@@ -651,14 +654,25 @@ def _scan_pci_gpus(drm_root: Path, already: list[GPUProfile]) -> list[GPUProfile
         # GGML_HIP_UMA. Without this a 0.5 GB carve reads as "no usable
         # GPU" on a box that runs 35B models on the iGPU.
         uma_carve = vendor == "AMD" and 0.0 < vram < 2.0
+        carve = None
         if uma_carve:
             shared = True
+            # The sysfs figure is the slice the firmware reserved, not
+            # the budget: the GPU draws from the same pool as the CPU.
+            # Judge it on the pool, like the zero-VRAM path above and
+            # like Apple's unified memory, or a box that runs 35B
+            # models on the iGPU is told it has no usable GPU. The
+            # carve survives in the reason line.
+            carve = vram
+            pool = _total_ram_gb()
+            if pool >= 4:
+                vram = pool
         score = 0.3 if shared else 0.8 if vram >= 4 else 0.5
         use = (
             (vendor == "AMD" and uma_carve)
             or (not shared and (vram >= 4 or vendor != "Intel"))
         )
-        reason = _gpu_reason(vendor, vram, shared, uma_carve)
+        reason = _gpu_reason(vendor, vram, shared, uma_carve, carve)
         found.append(GPUProfile(
             vendor=vendor, name=name, vram_gb=vram,
             driver=None, vulkan_score=score, shared_ram=shared,
@@ -1074,7 +1088,8 @@ _BACKEND_TABLE: dict[str, dict[str, str]] = {
 
 
 def _gpu_reason(vendor: str, vram: float, shared: bool,
-                uma_carve: bool = False) -> str:
+                uma_carve: bool = False,
+                carve: float | None = None) -> str:
     """Why this GPU is (or is not) used for LLM offload, in one line.
 
     The line has to be true: an Intel iGPU with no dedicated VRAM used
@@ -1088,8 +1103,9 @@ def _gpu_reason(vendor: str, vram: float, shared: bool,
         shared = True
     reason_bits = []
     if uma_carve:
+        reserved = vram if carve is None else carve
         reason_bits.append(
-            f"AMD iGPU carve ({vram:.1f} GB reserved) — unified memory"
+            f"AMD iGPU carve ({reserved:.1f} GB reserved) — unified memory"
         )
     elif shared:
         reason_bits.append(

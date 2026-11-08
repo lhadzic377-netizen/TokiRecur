@@ -4,6 +4,21 @@ All notable changes to TokiRecur are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.14] - 2026-11-08
+
+### Fixed
+- **A unified-memory GPU is judged on the pool it shares.** The
+  firmware reserves a slice for the iGPU (0.5 GB on a Ryzen AI Max+),
+  sysfs reports that slice as VRAM, and the `vram_gb >= 4` gate threw
+  the part out — so a Strix Halo box that runs 35B models on its
+  Radeon 8060S was profiled as CPU-only, `ngl=0`, and told it had no
+  usable GPU. The carve is now only what the reason line reports; the
+  number the gate reads is the shared pool, as it already was for
+  AMD parts that report no carve at all and for Apple silicon. The
+  profile schema moves to 6 so a cached CPU recommendation is
+  recomputed, and `toki hardware` says `shared=` for these parts
+  instead of calling the pool VRAM.
+
 ## [0.3.13] - 2026-11-08
 
 ### Added

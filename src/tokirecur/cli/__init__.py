@@ -2540,8 +2540,11 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
                     f"p_cores={p_core} ram={prof.ram_gb:.0f}GB"
                 )
                 for g in prof.gpus:
+                    # A unified-memory GPU has no VRAM of its own; its
+                    # number is the pool it shares with the CPU.
+                    size = "shared" if g.shared_ram else "vram"
                     click.echo(
-                        f"  gpu: {g.vendor} {g.name} vram={g.vram_gb:.1f}GB "
+                        f"  gpu: {g.vendor} {g.name} {size}={g.vram_gb:.1f}GB "
                         f"use={'yes' if g.use_for_llm else 'no'} ({g.reason})"
                     )
             else:

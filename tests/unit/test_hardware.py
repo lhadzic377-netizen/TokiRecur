@@ -1341,3 +1341,58 @@ def test_free_ram_is_never_zero():
     assert _ram_from_meminfo(zero_available) == 16.0
     assert _ram_from_meminfo("MemTotal:    33554432 kB\n") == 16.0
     assert _ram_from_meminfo("") == 0.0
+
+
+def test_uma_amd_with_a_small_carve_is_judged_on_the_pool(monkeypatch, tmp_path):
+    """The firmware reserves a slice (0.5 GB on a Strix Halo) and the
+    sysfs figure is that slice, not the budget. Judging eligibility by
+    it is how a Ryzen AI box that runs 35B models on the iGPU was told
+    it had no usable GPU and handed the CPU build."""
+    monkeypatch.setattr(hardware.sys, "platform", "linux")
+    monkeypatch.setattr(hardware.shutil, "which", lambda name: None)
+    fake_drm = tmp_path / "drm"
+    fake_drm.mkdir()
+    card = fake_drm / "card0" / "device"
+    card.mkdir(parents=True)
+    (card / "vendor").write_text("0x1002")
+    (card / "device").write_text("0x1586")
+    (card / "mem_info_vram_total").write_text(str(int(0.5 * 1024**3)))
+    monkeypatch.setattr(hardware, "_pci_device_name", lambda *_: "Radeon 8060S")
+    monkeypatch.setattr(hardware, "Path", _DrmPathShim(fake_drm))
+    monkeypatch.setattr(hardware, "_total_ram_gb", lambda: 125.0)
+
+    gpus = hardware.enumerate_gpus()
+    amd = [g for g in gpus if g.vendor == "AMD"]
+    assert len(amd) == 1
+    assert amd[0].vram_gb == 125.0
+    assert amd[0].use_for_llm is True
+    assert "carve (0.5 GB reserved)" in amd[0].reason
+    assert "unified memory" in amd[0].reason
+    assert hardware._gpu_eligible(amd[0]) is True
+
+
+def test_uma_amd_on_linux_recommends_rocm(monkeypatch, tmp_path):
+    """And the recommendation follows: the GPU the box actually uses
+    is the one the profile names."""
+    monkeypatch.setattr(hardware.sys, "platform", "linux")
+    monkeypatch.setattr(hardware.shutil, "which", lambda name: None)
+    fake_drm = tmp_path / "drm"
+    fake_drm.mkdir()
+    card = fake_drm / "card0" / "device"
+    card.mkdir(parents=True)
+    (card / "vendor").write_text("0x1002")
+    (card / "device").write_text("0x1586")
+    (card / "mem_info_vram_total").write_text(str(int(0.5 * 1024**3)))
+    monkeypatch.setattr(hardware, "_pci_device_name", lambda *_: "Radeon 8060S")
+    monkeypatch.setattr(hardware, "Path", _DrmPathShim(fake_drm))
+    monkeypatch.setattr(hardware, "_total_ram_gb", lambda: 125.0)
+
+    cpu = CPUProfile(
+        vendor="AuthenticAMD", name="RYZEN AI MAX+ 395",
+        family=26, model=112, physical_cores=16, logical_cores=32,
+        p_core_ids=list(range(16)), e_core_ids=[],
+        max_boost_mhz=5187.0, simd=["avx512"],
+    )
+    rec = hardware._recommend_defaults(cpu, hardware.enumerate_gpus())
+    assert rec["backend"] == "rocm"
+    assert rec["ngl"] == 99
