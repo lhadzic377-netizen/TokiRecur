@@ -22,7 +22,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   budget, so whichever gave up first turned a slow turn into a 500 or
   a timeout. The upstream timeout is now 1800 s
   (`TOKI_BACKEND_TIMEOUT`), and on a box the profile calls CPU-only the
-  launcher gives Claude Code a 30-minute budget
+  launcher gives Claude Code a 25-minute budget
   (`TOKI_CLAUDE_TIMEOUT_MS` overrides it).
 - **An install no longer dies over a GPU build it did not ask for.** The
   hardware profile recommended CPU on a laptop whose llama-server was a

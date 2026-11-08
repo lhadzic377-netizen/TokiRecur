@@ -61,8 +61,8 @@ def test_claude_gets_a_long_budget_on_a_cpu_only_box(monkeypatch):
 
     env = selector._claude_timeout_env()
 
-    assert env["API_TIMEOUT_MS"] == "1800000"
-    assert env["CLAUDE_STREAM_IDLE_TIMEOUT_MS"] == "1800000"
+    assert env["API_TIMEOUT_MS"] == "1500000"
+    assert env["CLAUDE_STREAM_IDLE_TIMEOUT_MS"] == "1500000"
 
 
 def test_claude_keeps_the_defaults_on_a_gpu_box(monkeypatch):
@@ -95,8 +95,8 @@ def test_the_launch_plan_carries_the_budget(tmp_path, monkeypatch):
     )
     plan = selector.launch_cmd("chat", "claude", spec)
 
-    assert plan["env"]["API_TIMEOUT_MS"] == "1800000"
-    assert plan["env"]["CLAUDE_STREAM_IDLE_TIMEOUT_MS"] == "1800000"
+    assert plan["env"]["API_TIMEOUT_MS"] == "1500000"
+    assert plan["env"]["CLAUDE_STREAM_IDLE_TIMEOUT_MS"] == "1500000"
 
 
 # ── the numbers ──────────────────────────────────────────────────────

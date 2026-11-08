@@ -208,14 +208,15 @@ def _bound_env(spec: Any, client: str) -> dict[str, str]:
     return env
 
 
-#: Claude Code's own budgets for a local endpoint, in milliseconds.
+#: How long Claude Code should wait for a local turn, in milliseconds.
 #:
 #: Claude Code aborts a request after ten minutes (API_TIMEOUT_MS) and
 #: treats 300 seconds of silence as a dead stream. On a CPU-only box a
 #: prefill can spend that on its own — the client then gives up on a
-#: turn the daemon is still working on. Thirty minutes is the ceiling
-#: Claude Code allows.
-CLAUDE_CLIENT_TIMEOUT_MS = 1_800_000
+#: turn the daemon is still working on. Twenty-five minutes is five
+#: short of the daemon's own thirty, so the daemon is never the side
+#: that gives up first.
+CLAUDE_CLIENT_TIMEOUT_MS = 1_500_000
 
 
 def _claude_timeout_env() -> dict[str, str]:
