@@ -54,7 +54,7 @@
   <main class="doc" id="main" tabindex="-1">
     <h1 class="reveal">Production deployment</h1>
 
-    <p class="reveal">All three processes (llama-server, daemon, web UI) ship as systemd units in <code>packaging/systemd/</code>. Point <code>EnvironmentFile=</code> at a <code>/etc/toki-recur/toki.env</code> (chmod 600) with <code>TOKI_AUTH_TOKEN</code> set, that single token then gates <strong>both</strong> the daemon API and the web UI.</p>
+    <p class="reveal">The daemon and the web UI ship as systemd units in <code>packaging/systemd/</code>; llama-server runs as its own service on <code>127.0.0.1:8088</code>. Point <code>EnvironmentFile=</code> at a <code>/etc/toki-recur/toki.env</code> (chmod 600) with <code>TOKI_AUTH_TOKEN</code> set. That token gates the daemon API; the web UI is itself unauthenticated and proxies with that token, so protect the UI at the network or reverse-proxy layer.</p>
 
     <h2>Systemd</h2>
     <pre><code>sudo install -m 600 packaging/systemd/toki.env.example /etc/toki-recur/toki.env
@@ -62,11 +62,12 @@
 sudo install -m 644 packaging/systemd/toki-recur.service packaging/systemd/toki-recur-web.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now toki-recur toki-recur-web</code></pre>
+    <p class="note">The units expect llama-server to be answering on <code>127.0.0.1:8088</code> already. Start it with your own unit or <code>toki model use &lt;name&gt;</code> under the same user; the two units above do not launch it.</p>
     <p class="note">macOS uses a launchd LaunchDaemon instead; Windows wraps <code>toki serve</code> in NSSM or a scheduled task.</p>
 
     <h2>Web UI access + TLS</h2>
     <ul>
-      <li>The web UI is always open, no login page, no session cookie. <code>TOKI_AUTH_TOKEN</code> still protects the daemon: the web server authenticates every proxied call (REST + WebSocket) with its own configured credential.</li>
+      <li>The web UI is always open, no login page, no session cookie. <code>TOKI_AUTH_TOKEN</code> protects the daemon from direct clients, but the web server authenticates its proxied calls (REST + WebSocket) with that same token, so anyone who can reach the UI can use the daemon through it. Bind it to localhost or put your own authentication in front.</li>
       <li>Without a token the UI runs open, fine for localhost, exposed if bound to a network interface.</li>
       <li>Serve HTTPS + <code>wss://</code> with <code>--tls-cert</code> / <code>--tls-key</code>, or set <code>TOKI_WEB_TLS_CERT</code> / <code>TOKI_WEB_TLS_KEY</code> in the env file (the systemd unit picks them up).</li>
       <li>The web server refuses cross-origin requests and serves everything <code>Cache-Control: no-store</code> so a reload always gets one consistent copy of the UI.</li>
@@ -75,12 +76,12 @@ sudo systemctl enable --now toki-recur toki-recur-web</code></pre>
     <pre><code>toki web --tls-cert /etc/toki-recur/tls/toki-recur.pem \
          --tls-key  /etc/toki-recur/tls/toki-recur.key</code></pre>
 
-    <h2>Cross-session cache persistence (disabled)</h2>
+    <h2>Cross-session cache persistence (removed)</h2>
     <p>Prefix reuse is <strong>in-memory only</strong>: the engine routes similar prompts to the same llama-server slot and lets the slot's KV cache serve the shared prefix (<code>cache_prompt=true</code>). This is lossless, outputs are byte-identical to a no-cache run.</p>
     <p>Disk persistence via <code>?action=save</code> / <code>?action=restore</code> was removed: restoring disk KV corrupted precision (benchmarks showed 88% substantive divergence from baseline outputs). The <code>--slot-save-path</code> flag and the <code>.trkv</code> sidecar layer (<code>cache/blob.py</code>) remain in the codebase but are dormant, the engine never calls <code>cache_save</code> / <code>cache_load</code>, and starting llama-server with or without <code>--slot-save-path</code> changes nothing about behavior.</p>
 
     <h2>Installers</h2>
-    <p><code>install.sh</code>/<code>install.ps1</code> bootstrap the full stack themselves (own venv at <code>/opt/toki-recur</code>, package + llama-server + service unit), so they work standalone, they don't need the pipx install. CI executes both installers end-to-end on fresh runners and starts the installed daemon under systemd.</p>
+    <p><code>install.sh</code> bootstraps the full stack (own venv at <code>/opt/toki-recur</code>, package + llama-server + service unit) and works standalone without the pipx install. <code>install.ps1</code> installs the same stack on Windows but leaves the service to you (NSSM or a scheduled task). CI runs the Linux and macOS installers end-to-end on fresh runners and starts the installed daemon under systemd.</p>
     <pre><code># Linux  -> systemd + logrotate   (macOS -> launchd LaunchDaemon)
 sudo ./install.sh</code></pre>
 

@@ -59,24 +59,24 @@
 ├── src/tokirecur/
 │   ├── core/        # The 5-step algorithm, recycling engine
 │   ├── index/       # BruteForce + HNSW index, SQLite metadata
-│   ├── backend/     # llama-server HTTP adapter (uses upstream endpoints)
-│   ├── cache/       # KV blob storage (mmap'd, header-versioned)
-│   ├── api/         # FastAPI: OpenAI-compatible + admin endpoints
+│   ├── backend/     # llama-server HTTP adapter (slot routing on upstream endpoints)
+│   ├── cache/       # in-memory slot pool; blob/tree modules are dormant
+│   ├── api/         # FastAPI: OpenAI + Anthropic + admin endpoints
 │   ├── bench/       # The benchmark CLI (toki bench)
 │   └── cli/         # `toki` admin CLI
 ├── patches/         # Historical patch for older llama.cpp
 ├── docker/          # ROCm Dockerfile + docker-compose
-├── scripts/         # build_llama_cpp.sh
+├── scripts/         # installers, site build, llama.cpp helpers
 ├── tests/           # unit, integration, benchmarks
 └── benchmark/       # configs, reports, corpus</code></pre>
 
     <h2>Tests</h2>
     <pre><code>pytest tests/unit/ -v        # fast (seconds)
 pytest tests/ -v             # includes integration (needs a live llama-server)</code></pre>
-    <p>375+ unit tests cover the recycling engine, the index, the rate limiter, the tree-cache wiring, the persistent-slot pool, the .trkv sidecar format, the CLI config writers, and the OpenAI-compatible API (chat, completions, and Responses). CI runs the unit-test matrix on Python 3.11 / 3.12 / 3.13 on every push and PR, and executes the Linux and macOS system installers end-to-end.</p>
+    <p>1,200+ unit tests cover the recycling engine, the index, the rate limiter, the persistent-slot pool, the dormant .trkv format, the CLI config writers, and the OpenAI-compatible API (chat, completions, and Responses). CI runs the unit tests on Python 3.11 / 3.12 / 3.13 on Linux, and on 3.13 on macOS, Windows and arm64 Linux, every push and PR, and executes the Linux and macOS system installers end-to-end.</p>
 
     <h2>Benchmark harness</h2>
-    <p>Run on AMD Ryzen AI MAX+ 395 with Qwen3.5-9B-Q4_K_M via llama-server 9413, <code>--slot-save-path /tmp/toki/slot-save</code>:</p>
+    <p>One released measurement: AMD Ryzen AI MAX+ 395, Qwen3.5-9B-Q4_K_M, llama-server 9413. The same run is on the <a href="/docs/benchmark">benchmark page</a>; reuse is in-memory slot routing, so no <code>--slot-save-path</code> is involved.</p>
     <table tabindex="0">
       <thead><tr><th>Metric</th><th>Baseline</th><th>Recycled</th><th>Δ</th></tr></thead>
       <tbody>

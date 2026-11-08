@@ -59,7 +59,7 @@
     <h2>Completions</h2>
     <pre><code>POST /v1/completions
 POST /v1/chat/completions</code></pre>
-    <p>Standard OpenAI request/response shapes, with streaming (SSE) support. <code>max_tokens</code> is clamped to the effective context advertised by the daemon, so clients never hit "not enough tokens" 400s on small boxes.</p>
+    <p>Standard OpenAI request/response shapes, with streaming (SSE) support. <code>max_tokens</code> is clamped to the effective context advertised by the daemon, so a small box gets a smaller output budget instead of a 400.</p>
 
     <h2>Cache admin</h2>
     <pre><code>POST   /cache/lookup    # look up a prompt against the cached index
@@ -70,7 +70,7 @@ GET    /cache/stats     # hit rate, bytes, entries</code></pre>
     <pre><code>GET /healthz</code></pre>
 
     <h2>Auth</h2>
-    <p>Set <code>TOKI_AUTH_TOKEN</code> to gate the API. Clients send it as a standard <code>Authorization: Bearer &lt;token&gt;</code> header. The web UI itself is always open (no login); the web server authenticates every proxied daemon call with its own configured credential.</p>
+    <p>Set <code>TOKI_AUTH_TOKEN</code> to gate the API. Clients send it as a standard <code>Authorization: Bearer &lt;token&gt;</code> header. The web UI itself is always open (no login) and proxies with the daemon token, so anyone who can reach the UI can use the daemon through it; keep it on localhost or put your own authentication in front. With no token configured, the daemon accepts any value on loopback and refuses non-localhost requests.</p>
 
     <h2>Client wiring</h2>
     <p>Any OpenAI-compatible client works. Example, opencode:</p>
@@ -81,7 +81,7 @@ GET    /cache/stats     # hit rate, bytes, entries</code></pre>
       "npm": "@ai-sdk/openai-compatible",
       "options": {
         "baseURL": "http://127.0.0.1:8787/v1",
-        "apiKey": "demo-token"
+        "apiKey": "<token>"
       },
       "models": {
         "qwen3.5-9b": {
@@ -104,7 +104,7 @@ base_url = "http://127.0.0.1:8787/v1"
 wire_api = "responses"
 env_key = "TOKI_AUTH_TOKEN"
 [model_providers.tokirecur.env]
-TOKI_AUTH_TOKEN = "demo-token"</code></pre>
+TOKI_AUTH_TOKEN = "<token>"</code></pre>
 
     <p class="callout">Next: <a href="/docs/benchmark">Benchmark</a>, workloads, scoring, and measured results.</p>
   </main>

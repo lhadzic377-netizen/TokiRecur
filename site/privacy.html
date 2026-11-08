@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Privacy · Toki Recur</title>
-<meta name="description" content="No cookies, no analytics, no accounts, no third-party scripts. What the server logs, what the chat does, and what runs on your machine.">
+<meta name="description" content="No cookies, no analytics, no accounts, no third-party scripts. What the server logs and what runs on your machine.">
 <link rel="canonical" href="https://tokirecur.com/privacy">
 <link rel="icon" href="/favicon.png" type="image/png" sizes="any">
 <link rel="stylesheet" href="/fonts.css">
@@ -56,10 +56,10 @@
       the truth about that machine.</p>
 
     <h2>The chat</h2>
-    <p>The chat app on <span class="accent">chat.tokirecur.com</span> is a separate program running on the
-      same machine as this site. When it is running, the prompt you type is sent to the model that is running
-      there. This project does not forward conversations to a model provider, and there is no account system
-      behind it. The chat app may keep its own logs in the usual way a server does.</p>
+    <p><span class="accent">chat.tokirecur.com</span> has a DNS record but no chat service is deployed there
+      today, so the name does not answer requests. If one is deployed, this page will describe what it stores
+      before it is announced. The chat interfaces shipped in the package run on your own machine and talk only
+      to the daemon you point them at.</p>
 
     <h2>The software on your machine</h2>
     <p>The daemon, the terminal UI, and the web UI all run locally. The package talks to the model server you
@@ -77,7 +77,7 @@
       It is public, so anything you write there is public. If that is not what you want, say so in the issue and
       the details can be taken down.</p>
 
-    <p class="legal-updated">Last changed 6 November 2026.</p>
+    <p class="legal-updated">Last changed 9 November 2026.</p>
   </section>
 </main>
 <footer>

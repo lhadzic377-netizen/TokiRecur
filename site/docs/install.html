@@ -54,7 +54,7 @@
   <main class="doc" id="main" tabindex="-1">
     <h1 class="reveal">Install</h1>
 
-    <p class="reveal">Toki Recur is a Python app, install it with pipx, which isolates it in its own venv and puts <code>toki</code> on PATH. The repository is public and MIT licensed, so every command below works anonymously: no token, no account, no rate limit to hit.</p>
+    <p class="reveal">Toki Recur is a Python app, install it with pipx, which isolates it in its own venv and puts <code>toki</code> on PATH. The repository is public and MIT licensed, so every command below works anonymously: no token and no account. The only ceiling is GitHub's anonymous API rate limit.</p>
 
     <h2>Simplest: clone, then run the installer</h2>
     <p>Clone the repo once and run the installer from the checkout.
@@ -128,10 +128,10 @@ toki model install-llama --name 35b      # ...and point a registry model at it</
         <tr><td>Windows</td><td>aarch64</td><td>CUDA (auto NVIDIA), Vulkan, CPU</td></tr>
       </tbody>
     </table>
-    <p>The GPU backends are provided by the llama-server binary itself, Toki Recur talks to it over HTTP and is backend-agnostic. Every GPU install verifies the vendor runtime and a real device line from <code>llama-server --list-devices</code> before reporting success, so a missing driver cannot silently degrade to CPU: CUDA checks its paired <code>cudart</code>/<code>cublas</code> archive and <code>CUDA0</code>; ROCm checks <code>libamdhip64.so</code> / <code>amdhip64*.dll</code> and <code>ROCm0</code>; SYCL checks the oneAPI runtime, oneMKL and Level Zero on Linux and bundled <code>sycl*.dll</code> on Windows; OpenVINO checks the core runtime and the Intel GPU plugin; Vulkan checks the driver loader. Linux SYCL archives are not self-contained, so oneAPI is a real prerequisite there. CUDA 13.x needs driver 580.65+; the Linux 12.8 build needs 570.26+ (Windows 12.4 needs 551.61+). macOS ships one universal Metal build (there is no separate CPU asset); CPU-only mode is <code>-ngl 0</code> / <code>--device none</code>, and a Mac or VM without Metal runs that build on CPU with an explicit warning.</p>
+    <p>The GPU backends are provided by the llama-server binary itself, Toki Recur talks to it over HTTP and is backend-agnostic. GPU installs verify the vendor runtime, and CUDA, ROCm, SYCL, Vulkan and OpenVINO builds also run <code>llama-server --list-devices</code> and print the device line. If no device enumerates, the install warns loudly instead of reporting a silent success: CUDA checks its paired <code>cudart</code>/<code>cublas</code> archive and <code>CUDA0</code>; ROCm checks <code>libamdhip64.so</code> / <code>amdhip64*.dll</code> and <code>ROCm0</code>; SYCL checks the oneAPI runtime, oneMKL and Level Zero on Linux and bundled <code>sycl*.dll</code> on Windows; OpenVINO checks the core runtime and the Intel GPU plugin; Vulkan checks the driver loader. Linux SYCL archives are not self-contained, so oneAPI is a real prerequisite there. CUDA 13.x needs driver 580.65+; the Linux 12.8 build needs 570.26+ (Windows 12.4 needs 551.61+). macOS ships one universal Metal build (there is no separate CPU asset); CPU-only mode is <code>-ngl 0</code> / <code>--device none</code>, and a Mac or VM without Metal runs that build on CPU with an explicit warning.</p>
 
     <h2>System daemon installers</h2>
-    <p>Optional, run as a system daemon (dedicated user + service manager unit + log rotation, auto-start at boot). <code>install.sh</code>/<code>install.ps1</code> bootstrap the full stack themselves (own venv at <code>/opt/toki-recur</code>, package + llama-server + service unit), so they work standalone, they don't need the pipx install above:</p>
+    <p>Optional, run as a system daemon (dedicated user + service manager unit + log rotation, auto-start at boot). <code>install.sh</code> bootstraps the full stack (own venv at <code>/opt/toki-recur</code>, package + llama-server + service unit) and works standalone without the pipx install above. <code>install.ps1</code> installs the stack on Windows but leaves the service to you (NSSM or a scheduled task):</p>
     <pre><code># Linux  -> systemd + logrotate   (macOS -> launchd LaunchDaemon)
 sudo ./install.sh
 

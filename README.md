@@ -25,7 +25,7 @@ Reuse is in memory and lossless: outputs are byte-identical to a no-cache run. D
 
 ## Measured results
 
-Nine workloads across four models (Qwen3.5-9B, Qwen3.6-35B-A3B, Qwen3.6-27B, Qwen3.5-122B-A10B): **TTFT improves 62–96%** and **prefill throughput 410–1280%**, with the biggest gains on the largest MoE models. Full table on [tokirecur.com](https://tokirecur.com).
+Nine workloads across four models (Qwen3.5-9B, Qwen3.6-35B-A3B, Qwen3.6-27B, Qwen3.5-122B-A10B). On the seven workloads built around a shared prefix, **TTFT fell 20–96%** and **prefill throughput rose 33–1,283%**; the two control workloads (no shared prefix, adversarial) sit at 14–33% and 15–52%, which is what a prefix cache should do. The sparse MoE models top the tables. Full table on [tokirecur.com](https://tokirecur.com).
 
 ## What reuse covers: cold vs warm
 
@@ -47,7 +47,7 @@ What that means:
 - **It lives in memory.** A restart, a slot spill or eviction loses it; disk restore was removed. `cache_prompt: false` forces a fresh prefill.
 - **It is per model and per slot.** A different model, or a slot holding different contents, cannot serve the prefix.
 - **Across harnesses only if the tokens match.** OpenCode and Claude Code carry different system prompts and tool schemas, so switching between them starts cold unless you give both the same prefix.
-- **A hit needs at least 10 reused tokens.** Below that it is reported as a `soft_hit`, because save/load overhead exceeds the prefill saved.
+- **A hit needs at least 10 reused tokens.** Below that it is reported as a `soft_hit`, because the lookup and routing cost exceeds the prefill saved.
 
 These numbers are for interpreting the ratio, not a benchmark: a 2B model at 1.4k tokens. The gain scales with how much stable prefix your harness keeps in front of the changing turn. The daemon's `cache` block in `/v1/chat/completions` is routing metadata (which slot, whether the routing key matched); the token counts above come from llama-server's own `timings`.
 
@@ -93,7 +93,7 @@ Pure Python over the `llama-server` HTTP API, on any x86_64 or aarch64 device ru
 | Windows x86_64 / aarch64 | CUDA, SYCL, Vulkan, ROCm/HIP, OpenVINO, CPU | beta |
 
 - **macOS** ships one universal Metal build; there is no separate CPU asset, and `install-llama --backend cpu` says so rather than claiming a Metal install.
-- **CUDA** builds need `cudart`/`cublas`: the installer fetches the matching runtime and proves a real `CUDA0` device line before reporting success. CUDA 13.x needs driver 580.65+, the 12.8 Linux build 570.26+.
+- **CUDA** builds need `cudart`/`cublas`: the installer fetches the matching runtime and checks for a real `CUDA0` device line, warning loudly if none appears. CUDA 13.x needs driver 580.65+, the 12.8 Linux build 570.26+.
 - **Linux SYCL** links oneAPI DPC++, oneMKL and Level Zero; **ROCm** uses the system runtime. The installer verifies the libraries and refuses a partial install instead of silently falling back to CPU.
 - Windows is **beta**: launcher, chat, tap and every install path are implemented and unit-tested; real-hardware verification is ongoing. CI runs the suite on Linux, macOS and Windows, and executes the Linux/macOS installers end to end.
 
@@ -173,29 +173,29 @@ DELETE /cache/{id}            GET  /healthz
 ```
 ┌─────────────────┐      ┌──────────────────┐      ┌────────────────┐
 │  Client / agent │ ───► │  toki (daemon)   │ ───► │  llama-server  │
-│  (OpenAI API)   │      │                  │      │   (ROCm/HIP)   │
+│  (OpenAI API)   │      │                  │      │  (any backend) │
 └─────────────────┘      └──────────────────┘      └────────────────┘
                          │  embedding + index │
-                         │  SQLite + blobs    │
+                         │  SQLite metadata   │
                          └────────────────────┘
 ```
 
-The daemon embeds the prompt, finds the most similar cached prompt, verifies an exact prefix match on token IDs, then either restores the KV state and decodes only the novel tokens, or prefills and records the state for the next request.
+The daemon embeds the prompt, finds the most similar cached prompt, verifies an exact prefix match on token IDs, then routes the request to the llama-server slot that already holds that prefix (`cache_prompt=true`) and only the novel tokens are prefilled. On a miss it takes the normal path, and that slot's KV stays in memory for the next request.
 
 Beyond the base cache:
 
-- **Tree-structured KV** — blocks are content-addressed by token hash, so two prompts sharing a prefix share blocks; tree lookup can bypass embedding entirely.
-- **Persistent slot pool** — the top-N hottest prefixes get dedicated slots that never clear.
-- **Honest hits** — a hit requires at least 10 reused tokens; below that the save/load overhead exceeds the prefill saving, and it is reported as a `soft_hit` instead of inflating the rate.
+- **Persistent slot pool** — the hottest prefixes get slots held across requests instead of being recycled after every turn; the pool evicts least-recently-used slots when it is full.
+- **Tree index (dormant)** — `cache/tree.py` and the `.trkv` sidecar are still in the tree, but routing does not use them: the request path is in-memory slot routing plus the SQLite index.
+- **Honest hits** — a hit requires at least 10 reused tokens; below that the lookup and routing cost exceeds the prefill saving, and it is reported as a `soft_hit` instead of inflating the rate.
 - **Prefix-weighted similarity** — among candidates within 5% cosine similarity, the longest token list wins.
-- **Divergence classification** — outputs are graded identical / whitespace / restore-noise / substantive by semantic similarity.
+- **Divergence classification** — outputs are graded identical / whitespace / restore-noise (a legacy name for KV-restore artifacts) / substantive by semantic similarity.
 - **Embedding chunking** — long prompts are split into overlapping segments, with a deterministic hash fallback.
 
-`patches/` keeps a historical patch for older llama.cpp builds; current upstream already exposes the slot endpoints behind `--slot-save-path`.
+`patches/` keeps a historical patch for older llama.cpp builds. Current upstream exposes the slot endpoints itself, and the engine does not call save/restore: the patch and the `.trkv` layer are both dormant.
 
 ## Production deployment
 
-llama-server, the daemon and the web UI ship as systemd units in `packaging/systemd/`. One `TOKI_AUTH_TOKEN` from a `chmod 600` env file gates both the daemon and the web UI.
+The daemon and the web UI ship as systemd units in `packaging/systemd/`; llama-server runs as its own service on `127.0.0.1:8088`. One `TOKI_AUTH_TOKEN` from a `chmod 600` env file gates the daemon API; the web UI is itself unauthenticated and proxies with that token, so protect it at the network or reverse-proxy layer.
 
 ```bash
 sudo install -m 600 packaging/systemd/toki.env.example /etc/toki-recur/toki.env
@@ -205,7 +205,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now toki-recur toki-recur-web
 ```
 
-The web UI has no login page and no session cookie, which is fine on the default `127.0.0.1` binding. If you expose it, serve HTTPS + `wss://` with `--tls-cert` / `--tls-key` (or `TOKI_WEB_TLS_CERT` / `TOKI_WEB_TLS_KEY`). It refuses cross-origin requests and sends `Cache-Control: no-store`; the daemon token is never weakened by an open UI.
+The web UI has no login page and no session cookie. It proxies to the daemon with the daemon's own token when the client sends none, so anyone who can reach the UI can use the model through it. That is fine on the default `127.0.0.1` binding; if you expose it, put your own authentication in front and serve HTTPS + `wss://` with `--tls-cert` / `--tls-key` (or `TOKI_WEB_TLS_CERT` / `TOKI_WEB_TLS_KEY`). It refuses cross-origin requests and sends `Cache-Control: no-store`.
 
 ## Use it as an opencode backend
 
@@ -265,7 +265,7 @@ tokirecur/
 │   ├── core/        # recycling engine, the 5-step algorithm
 │   ├── index/       # brute-force + HNSW index, SQLite metadata
 │   ├── backend/     # llama-server HTTP adapter
-│   ├── cache/       # KV blob storage and slot pool
+│   ├── cache/       # in-memory slot pool; blob/tree modules are dormant
 │   ├── api/         # FastAPI: OpenAI + Anthropic + admin routes
 │   ├── bench/       # the benchmark CLI
 │   ├── cli/         # `toki` admin CLI
@@ -286,7 +286,7 @@ pytest tests/unit/ -v        # fast, no llama-server needed
 pytest tests/ -v             # includes integration (needs a live llama-server)
 ```
 
-285+ unit tests cover the recycling engine, the index, the rate limiter, the tree cache, the slot pool and the `.trkv` format. CI runs the unit matrix on Python 3.11 / 3.12 / 3.13 on every push and PR.
+1,200+ unit tests cover the recycling engine, the index, the rate limiter, the slot pool, the dormant `.trkv` format, the CLI config writers and the API. CI runs them on Python 3.11 / 3.12 / 3.13 on Linux, and on 3.13 on macOS, Windows and arm64 Linux, every push and PR.
 
 ## License
 

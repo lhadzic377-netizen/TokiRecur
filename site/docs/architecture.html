@@ -4,16 +4,16 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Architecture: Toki Recur Docs</title>
-<meta name="description" content="The 5-step recycling algorithm, targets, and how KV save/restore works without patching llama.cpp.">
+<meta name="description" content="The 5-step recycling algorithm, how in-memory slot routing works, and why the disk KV layer was removed.">
 <meta property="og:title" content="Architecture: Toki Recur Docs">
-<meta property="og:description" content="The 5-step recycling algorithm, targets, and how KV save/restore works without patching llama.cpp.">
+<meta property="og:description" content="The 5-step recycling algorithm, how in-memory slot routing works, and why the disk KV layer was removed.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://tokirecur.com/docs/architecture.html">
 <meta property="og:site_name" content="Toki Recur">
 <meta property="og:image" content="https://tokirecur.com/img/toki-bear.jpg">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Architecture: Toki Recur Docs">
-<meta name="twitter:description" content="The 5-step recycling algorithm, targets, and how KV save/restore works without patching llama.cpp.">
+<meta name="twitter:description" content="The 5-step recycling algorithm, how in-memory slot routing works, and why the disk KV layer was removed.">
 <meta name="twitter:image" content="https://tokirecur.com/img/toki-bear.jpg">
 <link rel="canonical" href="https://tokirecur.com/docs/architecture.html">
 <meta name="theme-color" content="#08090b">
@@ -56,10 +56,10 @@
 
     <pre class="reveal"><code>┌─────────────────┐      ┌──────────────────┐      ┌────────────────┐
 │  Client / agent │ ───► │  toki (daemon)   │ ───► │  llama-server  │
-│  (OpenAI API)   │      │                  │      │   (ROCm/HIP)   │
+│  (OpenAI API)   │      │                  │      │  (any backend) │
 └─────────────────┘      └──────────────────┘      └────────────────┘
                          │  embedding + index │
-                         │  SQLite + blobs    │
+                         │  SQLite metadata   │
                          └────────────────────┘</code></pre>
 
     <p><code>tokid</code> (the daemon) is a small FastAPI service that sits in front of <code>llama-server</code>. It intercepts requests and runs the <strong>5-step recycling algorithm</strong>:</p>
@@ -67,8 +67,8 @@
       <li>Embed the incoming prompt.</li>
       <li>Find the most similar cached prompt via cosine similarity.</li>
       <li>Verify exact prefix match on token IDs.</li>
-      <li>If hit: load the saved KV state via <code>?action=restore</code> and decode only the novel tokens.</li>
-      <li>If miss: full prefill, persist KV state via <code>?action=save</code> for the future.</li>
+      <li>If hit: route to the llama-server slot that already holds that prefix (<code>cache_prompt=true</code>); only the novel tokens are prefilled.</li>
+      <li>If miss: the normal full prefill runs, and that slot's KV stays in memory for the next request.</li>
     </ol>
 
     <h2>Targets</h2>
@@ -79,26 +79,22 @@
       <li>Up to 128 GB unified memory</li>
     </ul>
 
-    <h2>How KV save/restore works (no patch needed)</h2>
-    <p>As of llama.cpp b3524 (mid-2025), the upstream <code>llama-server</code> already exposes the endpoints we need behind the <code>--slot-save-path</code> flag:</p>
-    <pre><code>POST /slots/{id_slot}?action=save     body: {"filename": "..."}
-POST /slots/{id_slot}?action=restore  body: {"filename": "..."}
-POST /slots/{id_slot}?action=erase    body: {"filename": "..."}</code></pre>
-    <p>The Debian-packaged <code>llama-server 9413</code> already has these. <code>LlamaServerBackend</code> uses them directly. The <code>patches/</code> directory contains a historical patch for users on older llama.cpp and a <code>README.md</code> explaining the situation.</p>
+    <h2>Why there is no disk layer</h2>
+    <p>Upstream <code>llama-server</code> exposes slot save/restore endpoints behind <code>--slot-save-path</code>. Earlier builds used them to persist KV state to disk and restore it later. That was removed: restored KV corrupted precision in the benchmark (88% of divergent pairs were substantive, not cosmetic).</p>
+    <p><code>LlamaServerBackend</code> still carries the endpoint helpers and <code>patches/</code> keeps a historical patch for older llama.cpp, but the engine does not call <code>cache_save</code> / <code>cache_load</code>. Starting <code>llama-server</code> with or without <code>--slot-save-path</code> changes nothing about behavior.</p>
 
     <h2>Architectural improvements</h2>
     <p>Beyond the basic cache, the tool ships with:</p>
     <ol>
-      <li><strong>Tree-structured KV cache</strong>, KV tensors are tracked in BLOCK_SIZE chunks. Two prompts sharing a prefix share the same on-disk blocks (content-addressed by token hash). Provides a fast tree-hit lookup that bypasses embedding entirely.</li>
-      <li><strong>Persistent slot pool</strong>, the top-N most-frequently-used prefixes get dedicated llama-server slots that never clear. Skips the save/load cycle entirely for hot prefixes.</li>
-      <li><strong>Honest hit definition</strong> (<code>MIN_REUSE_FOR_HIT = 10</code>), a "hit" requires at least 10 tokens of prefix reuse. Below that, the save/load overhead exceeds the prefill savings, so it's reported as a <code>soft_hit</code> instead of inflating the hit rate.</li>
+      <li><strong>Persistent slot pool</strong>, the most-reused prefixes get slots held across requests instead of being recycled after every turn. The pool is LRU-bounded: when it is full, the least-recently-used slot is evicted. Ownership is an in-memory routing hint; no save/restore round-trip is made.</li>
+      <li><strong>Honest hit definition</strong> (<code>MIN_REUSE_FOR_HIT = 10</code>), a "hit" requires at least 10 tokens of prefix reuse. Below that, the lookup and routing cost exceeds the prefill saving, so it's reported as a <code>soft_hit</code> instead of inflating the hit rate.</li>
       <li><strong>Prefix-length-weighted similarity</strong> (<code>BruteForceIndex.search</code>), among candidates within 5% cosine similarity, prefers the one with the longest token list. Dampens the "cosine finds a 1-token lookalike" pathology.</li>
-      <li><strong>Substantive divergence classification</strong>, output divergence is classified into identical / whitespace-only / restore-noise / substantive via sentence-transformers semantic similarity. Reports the percentage of divergent pairs that are <em>real</em> (different meaning) vs cosmetic.</li>
+      <li><strong>Substantive divergence classification</strong>, output divergence is classified into identical / whitespace-only / restore-noise (a legacy name for KV-restore artifacts) / substantive via sentence-transformers semantic similarity. Reports the percentage of divergent pairs that are <em>real</em> (different meaning) vs cosmetic.</li>
       <li><strong>Embedding chunking fallback</strong> (<code>LlamaServerBackend.embed</code>), long prompts are split into overlapping segments and re-averaged, with a deterministic hash-based fallback when embedding fails entirely.</li>
     </ol>
 
     <h2>In-memory cache (current behavior)</h2>
-    <p>Prefix reuse is <strong>in-memory only</strong>: the engine routes similar prompts to the same llama-server slot and lets the slot's KV cache serve the shared prefix (<code>cache_prompt=true</code>). This is lossless, outputs are byte-identical to a no-cache run. Disk persistence via <code>?action=save</code>/<code>?action=restore</code> was removed after benchmarks showed 88% substantive divergence from baseline outputs; the <code>.trkv</code> sidecar layer remains in the codebase but is dormant.</p>
+    <p>Prefix reuse is <strong>in-memory only</strong>: the engine routes similar prompts to the same llama-server slot and lets the slot's KV cache serve the shared prefix (<code>cache_prompt=true</code>). This is lossless, outputs are byte-identical to a no-cache run. A restart, a slot spill or an eviction loses it. The <code>cache/tree.py</code> index and the <code>.trkv</code> sidecar remain in the codebase but are not on the request path, and disk persistence via <code>?action=save</code>/<code>?action=restore</code> was removed after the benchmark showed 88% substantive divergence from baseline outputs.</p>
 
     <p class="callout">Next: <a href="/docs/api">API reference</a>, endpoints and auth.</p>
   </main>

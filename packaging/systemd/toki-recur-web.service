@@ -16,7 +16,8 @@ LogsDirectory=toki-recur
 
 # Secrets + backend URLs. TOKI_WEB_RAW_URL / TOKI_WEB_DAEMON_URL and
 # optionally TOKI_WEB_TLS_CERT / TOKI_WEB_TLS_KEY / TOKI_WEB_TLS.
-# TOKI_AUTH_TOKEN here gates the web UI behind the login page.
+# TOKI_AUTH_TOKEN is forwarded to the daemon for proxied calls; the
+# web UI itself has no login page.
 EnvironmentFile=/etc/toki-recur/toki.env
 
 # Same explicit paths as the daemon: the web UI reads the registry and the

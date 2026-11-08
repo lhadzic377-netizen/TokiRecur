@@ -4,16 +4,16 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Command reference: Toki Recur Docs</title>
-<meta name="description" content="Every toki command: stack lifecycle, benchmark, cache management, diagnostics, and the API daemon.">
+<meta name="description" content="The toki commands: stack lifecycle, benchmark, cache management, diagnostics, and the API daemon.">
 <meta property="og:title" content="Command reference: Toki Recur Docs">
-<meta property="og:description" content="Every toki command: stack lifecycle, benchmark, cache management, diagnostics, and the API daemon.">
+<meta property="og:description" content="The toki commands: stack lifecycle, benchmark, cache management, diagnostics, and the API daemon.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://tokirecur.com/docs/commands.html">
 <meta property="og:site_name" content="Toki Recur">
 <meta property="og:image" content="https://tokirecur.com/img/toki-bear.jpg">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Command reference: Toki Recur Docs">
-<meta name="twitter:description" content="Every toki command: stack lifecycle, benchmark, cache management, diagnostics, and the API daemon.">
+<meta name="twitter:description" content="The toki commands: stack lifecycle, benchmark, cache management, diagnostics, and the API daemon.">
 <meta name="twitter:image" content="https://tokirecur.com/img/toki-bear.jpg">
 <link rel="canonical" href="https://tokirecur.com/docs/commands.html">
 <meta name="theme-color" content="#08090b">
@@ -55,8 +55,8 @@
     <h1 class="reveal">Command reference</h1>
 
     <h2>Shell</h2>
-    <pre><code>toki                  # run benchmark (default)
-toki interactive      # enter interactive REPL</code></pre>
+    <pre><code>toki                  # launcher on a TTY; help + stack status otherwise
+toki interactive      # enter the interactive shell</code></pre>
 
     <h2>Chat interfaces</h2>
     <pre><code>toki tui                                      # full-screen TUI chat (terminal)
@@ -66,8 +66,8 @@ toki diff --system "&lt;long&gt;" "&lt;user prompt&gt;"  # one-shot A/B comparis
 
 # Web UI on http://127.0.0.1:7777 (production-ready single-page chat)
 toki web                                      # foreground
-toki web --detach                             # background, log → /tmp/toki/web.log
-toki web --tls-cert cert.pem --tls-key key.pem  # HTTPS + wss, Secure cookies
+toki web --detach                             # background, log → ~/.local/state/tokirecur/web.log
+toki web --tls-cert cert.pem --tls-key key.pem  # HTTPS + wss
 toki web --port 8888 --daemon-url http://other:8787  # custom endpoint</code></pre>
 
     <p>In-chat slash commands (TUI chat): <code>/mode raw|cached|compare</code> · <code>/system &lt;text&gt;</code> · <code>/clear</code> · <code>/metrics</code> · <code>/max &lt;n&gt;</code> · <code>/temp &lt;f&gt;</code> · <code>/raw &lt;msg&gt;</code> · <code>/cached &lt;msg&gt;</code> · <code>/compare &lt;msg&gt;</code> · <code>/quit</code></p>
@@ -90,13 +90,13 @@ toki model stop &lt;name&gt;                         # stop llama-server + daemo
 toki model stop &lt;name&gt; --force                # stop even unmanaged stacks on the ports
 toki model pull &lt;hf-repo&gt; --use                # download, register, and start
 toki model pull &lt;hf-repo&gt; --file name.gguf    # pick a specific GGUF (or split)
-toki model pull &lt;hf-repo&gt; --name my9b --ctx-size 16384
+toki model pull &lt;hf-repo&gt; --name my9b --ctx 16384
 toki model remove &lt;name&gt;                      # drop from the registry
 toki model remove &lt;name&gt; --purge             # also delete weights + runtime state
 toki model remove &lt;name&gt; --force              # allow removing the active model
 toki model repair                               # backfill binary/env on legacy entries</code></pre>
 
-    <p class="note"><code>toki model pull</code> detects multi-file GGUF splits (the upstream llama.cpp convention <code>-NNNN-of-NNNN.gguf</code>) and downloads every sibling part automatically, picking the recommended Q4_K_M variant no longer leaves llama-server unable to find the other shards. The model's registry entry always points at the first part (the entry point llama-server loads); the rest land beside it. <code>toki model remove</code> defaults to keeping weights and state on disk so you can re-add the same name with <code>toki model pull</code> without re-downloading; pass <code>--purge</code> to free the disk.</p>
+    <p class="note"><code>toki model pull</code> detects multi-file GGUF splits (the upstream llama.cpp convention <code>-NNNN-of-NNNN.gguf</code>) and downloads every sibling part automatically, so choosing the recommended Q4_K_M variant no longer leaves llama-server unable to find the other shards. The model's registry entry always points at the first part (the entry point llama-server loads); the rest land beside it. <code>toki model remove</code> defaults to keeping weights and state on disk so you can re-add the same name with <code>toki model pull</code> without re-downloading; pass <code>--purge</code> to free the disk.</p>
 
     <h2>Benchmark (the headline tool)</h2>
     <pre><code>toki bench   # interactive: pick a model from the registry + a workload from a menu
@@ -118,18 +118,20 @@ toki bench --model ~/Downloads/Qwen3.5-9B-Q4_K_M.gguf \
         <tr><td><code>rag_chunks</code></td><td>~90%</td><td>RAG with shared document prefixes</td></tr>
         <tr><td><code>mixed</code></td><td>~50%</td><td>Mixed chat traffic</td></tr>
         <tr><td><code>no_overlap</code></td><td>0%</td><td>Baseline / worst-case validation</td></tr>
-        <tr><td><code>realistic_mixed</code></td><td>~95%</td><td>216 prompts across 5 real-world categories</td></tr>
+        <tr><td><code>realistic_mixed</code></td><td>~95%</td><td>201 prompts across 5 real-world categories</td></tr>
         <tr><td><code>stress_adversarial</code></td><td>varies</td><td>301 prompts with adversarial patterns</td></tr>
       </tbody>
     </table>
 
     <h2>Cache management</h2>
     <pre><code>toki stats                    # hit rate, bytes, entries
-toki evict --target-mb 4096   # LRU evict to fit budget</code></pre>
+toki evict --target-mb 4096   # LRU evict the index to fit a budget</code></pre>
+    <p class="note">There is no disk KV cache to save or restore. The KV state lives in llama-server's slots and is lost when the stack stops (<code>toki down</code>) or the slot is reused; the index on disk holds prompt metadata and embeddings, not KV tensors.</p>
 
     <h2>Diagnostics</h2>
-    <pre><code>toki doctor                          # llama-server, ROCm, GPU
-toki compare report.json report2.json # diff two bench reports</code></pre>
+    <pre><code>toki doctor                          # llama-server, backend, GPU
+# Inside `toki interactive`:
+compare report.json report2.json      # diff two bench reports</code></pre>
 
     <h2>OpenAI-compatible API server</h2>
     <p>Running under <code>toki up</code> (default 127.0.0.1:8787):</p>

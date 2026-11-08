@@ -55,7 +55,7 @@
     <h1 class="reveal">Launcher &amp; shells</h1>
 
     <h2>The launcher</h2>
-    <p>Bare <code>toki</code> opens an Ollama-style full-screen launcher in a black + yellow design: a letter-spaced yellow <code>TOKI</code> wordmark with tagline and amber divider, then a vertically-centred column of app cards, toki Chat, OpenCode, Hermes, OpenClaw, web dashboards, each bound to the pinned model (shown as a right-aligned chip). The active row is highlighted with a yellow accent bar. A status line shows the pinned model, backend health dots, and key hints; keys <code>1</code>–<code>5</code> jump straight to an app (or model).</p>
+    <p>Bare <code>toki</code> opens an Ollama-style full-screen launcher in a black + yellow design: a letter-spaced yellow <code>TOKI</code> wordmark with tagline and amber divider, then a vertically-centred column of app cards, toki Chat, OpenCode, Hermes, OpenClaw, web dashboards, each bound to the pinned model (shown as a right-aligned chip). The active row is highlighted with a yellow accent bar. A status line shows the pinned model, backend health dots, and key hints; keys <code>1</code>–<code>9</code> jump straight to an app (or model).</p>
 
     <table tabindex="0">
       <thead><tr><th>Key</th><th>Action</th></tr></thead>
@@ -131,7 +131,7 @@ toki tui --daemon-url http://other:8787    # custom daemon</code></pre>
     <h2>Web chat UI (<code>toki web</code>)</h2>
     <p>A production-ready single-page chat interface with a single-click mode toggle (Raw / Cached / Compare), streaming responses, and live per-message metrics. Default port is <strong>7777</strong>, uncommon and unlikely to clash with other localhost services.</p>
     <pre><code>toki web                                      # foreground, http://127.0.0.1:7777
-toki web --detach                             # background, log → /tmp/toki/web.log
+toki web --detach                             # background, log → ~/.local/state/tokirecur/web.log
 toki web --port 7778 --raw-url http://...:8088  # custom port + backend</code></pre>
     <ul>
       <li>Three inference modes via prominent toggle: Raw, Cached, Compare (side-by-side)</li>

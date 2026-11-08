@@ -114,7 +114,7 @@ toki bench --model ~/Downloads/Qwen3.5-9B-Q4_K_M.gguf \
       </tbody>
     </table>
 
-    <p>The headline number is <code>realistic_mixed</code>: 201 prompts across 5 real-world categories (RAG, tool-using, multi-turn, support, one-off), TTFT cut by two thirds, prefill nearly 6x faster, 88% cache hit rate, composite 84.4 (A). The <code>summarization</code> and <code>code_review</code> workloads are even stronger (A+). Low scores on <code>no_overlap</code> and the adversarial workloads are expected, zero-overlap prompts are the worst case for prefix caching, and the stress workload is designed to surface edge cases (false-positive hits from cosine similarity, minimal savings on short prompts, underperforming sequential growth).</p>
+    <p>The headline number is <code>realistic_mixed</code> (five real-world categories: RAG, tool-using, multi-turn, support, one-off), TTFT cut by two thirds, prefill nearly 6x faster, 88% cache hit rate, composite 84.4 (A). The <code>summarization</code> and <code>code_review</code> workloads are even stronger (A+). Low scores on <code>no_overlap</code> and the adversarial workloads are expected, zero-overlap prompts are the worst case for prefix caching, and the stress workload is designed to surface edge cases (false-positive hits from cosine similarity, minimal savings on short prompts, underperforming sequential growth).</p>
 
     <h3>Qwen3.6-35B-A3B (UD-Q4_K_M)</h3>
     <table tabindex="0">
@@ -132,7 +132,7 @@ toki bench --model ~/Downloads/Qwen3.5-9B-Q4_K_M.gguf \
       </tbody>
     </table>
 
-    <p>The 35B-A3B MoE benefits most from caching, its per-token compute is dominated by the 3B active experts, so skipping prefill shows up as larger relative TTFT and throughput gains than on the dense 9B (e.g. realistic_mixed 84.4 → 86.8 composite, summarization prefill speedup 1090% → 1187%). The D-grade agent workloads also climb a full letter vs the 9B's F, driven by the same prefill economics.</p>
+    <p>The 35B-A3B MoE benefits more than the dense 9B: its per-token compute is dominated by the 3B active experts, so skipping prefill shows up as larger relative TTFT and throughput gains (e.g. realistic_mixed 84.4 → 86.8 composite, summarization prefill speedup 1090% → 1187%). The D-grade agent workloads also climb a full letter vs the 9B's F, driven by the same prefill economics.</p>
 
     <h3>Qwen3.6-27B</h3>
     <table tabindex="0">
@@ -166,13 +166,14 @@ toki bench --model ~/Downloads/Qwen3.5-9B-Q4_K_M.gguf \
       </tbody>
     </table>
 
-    <p>Across all four models the pattern holds: the bigger and sparser the model, the
-    better the relative caching gains. The 122B-A10B tops every table (realistic_mixed
-    89.7, summarization 95.8, code_review 94.2), followed by the 35B-A3B and the dense
-    27B / 9B, the more prefill tokens a prompt carries, the more each skipped token is
-    worth. <code>no_overlap</code> is a control workload (0% hit by design) and
-    <code>stress_adversarial</code> deliberately maximizes false-positive hits and
-    short-prompt edge cases, so its scores stay low on every model.</p>
+    <p>Across all four models the pattern holds: sparsity, not size, drives the relative
+    caching gain. The 122B-A10B MoE tops every shared-prefix table (realistic_mixed 89.7, summarization
+    95.8, code_review 94.2) and the 35B-A3B beats the dense 9B, while the larger dense 27B
+    trails the smaller 9B on every shared-prefix workload. The more prefill a prompt
+    carries, the more each skipped token is worth. <code>no_overlap</code> is a control
+    workload (0% hit by design) and <code>stress_adversarial</code> deliberately maximizes
+    false-positive hits and short-prompt edge cases, so its scores stay low on every
+    model.</p>
 
     <p class="callout">Next: <a href="/docs/deploy">Production deploy</a>, systemd, auth, and TLS.</p>
   </main>

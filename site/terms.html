@@ -63,8 +63,9 @@
       of taking this site's word for it.</p>
 
     <h2>Your models and your prompts</h2>
-    <p>You run the models. The daemon keeps the key and value blocks of the prompts it sees in a cache on your
-      machine, and you can delete that cache whenever you like. If you point the daemon at a server you do not
+    <p>You run the models. The daemon routes requests to KV blocks that llama-server holds in memory, and
+      keeps prompt metadata and embeddings in a local index; <code>toki evict</code> trims that index and
+      <code>toki down</code> drops the KV state with the stack. If you point the daemon at a server you do not
       own, that operator receives the prompts, and this project is not responsible for what they do with them.</p>
 
     <h2>Names</h2>
@@ -76,7 +77,7 @@
       <a href="https://github.com/lhadzic377-netizen/TokiRecur/issues" target="_blank" rel="noopener">issue tracker</a>.
       It is public, so anything you write there is public.</p>
 
-    <p class="legal-updated">Last changed 6 November 2026.</p>
+    <p class="legal-updated">Last changed 9 November 2026.</p>
   </section>
 </main>
 <footer>

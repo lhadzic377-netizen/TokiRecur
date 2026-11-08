@@ -1094,7 +1094,7 @@ def status() -> None:
 @cli.command()
 @click.pass_context
 def interactive(ctx: click.Context) -> None:
-    """Start the interactive shell (the default when no subcommand is given)."""
+    """Start the interactive shell (the launcher is what bare `toki` opens)."""
     from .. import repl
     raise SystemExit(repl.run())
 
