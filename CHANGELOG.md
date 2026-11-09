@@ -4,6 +4,32 @@ All notable changes to TokiRecur are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **A split GGUF published under another name is fetched and linked.**
+  DeepSeek-V4.1-Flash-1017-GSQ-RCO-Coder ships five parts named
+  `-of-00006` and puts the sixth — the 110 GB Engram table — in the
+  repository root as `DeepSeek-V4.1-Flash-Engram-IQ4_NL.gguf`. The pull
+  fetched the five it could name and stopped, leaving a model whose
+  header still said `split.count = 6` and whose sixth part did not
+  exist. llama-server then refused to start:
+  `failed to open GGUF file '...-00006-of-00006.gguf'`. The missing
+  part is now found by reading the header of the repository's other
+  GGUFs — the part says what it is — and linked under the name
+  llama.cpp opens.
+- **A model with a tensor too big to hold resident keeps it on disk.**
+  The Engram table is 110 GB on its own; loaded eagerly it needs more
+  memory than the machine has and the server dies in the OOM killer
+  during model load, with nothing to read. llama.cpp reads such
+  tensors on demand when `--lazy-mode` is on, and the launch now
+  turns that on for any model carrying one.
+- **A split is sized by all of its parts, not the first.** The fit
+  planner read the weights from the file the registry points at, which
+  for a split is the metadata shard: 5.8 MB standing in for 72 GB of
+  weights. The launch therefore claimed the model needed no headroom
+  and asked for a context window that did not fit.
+
 ## [0.3.14] - 2026-11-08
 
 ### Fixed

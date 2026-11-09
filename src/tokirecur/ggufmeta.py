@@ -160,6 +160,7 @@ def _cache_key(path: Path | str) -> tuple[str, int, int] | None:
 _META_CACHE: dict[tuple[str, int, int], GgufMeta] = {}
 _KIND_CACHE: dict[tuple[str, int, int], GgufKind] = {}
 _TENSOR_CACHE: dict[tuple[str, int, int], list[str]] = {}
+_TENSOR_SIZE_CACHE: dict[tuple[str, int, int], dict[str, int]] = {}
 
 
 def read_gguf_meta(path: Path | str) -> GgufMeta:
@@ -443,6 +444,63 @@ def read_gguf_tensors(path: Path | str) -> list[str]:
     if key is not None:
         _TENSOR_CACHE[key] = result
     return list(result)
+
+
+def read_gguf_tensor_sizes(path: Path | str) -> dict[str, int]:
+    """Each tensor's name and its size in bytes, read from the header.
+
+    The size comes from where the tensor sits in the file: GGUF writes
+    the tensor data contiguously after the header, so a tensor runs from
+    its own offset to the next one's. That makes the size exact without
+    a table of quantisation block sizes, and it costs a few kilobytes of
+    reading however large the model is — which is how a caller learns
+    that one tensor is 110 GB without reading 110 GB.
+    """
+    key = _cache_key(path)
+    if key is not None:
+        cached = _TENSOR_SIZE_CACHE.get(key)
+        if cached is not None:
+            return dict(cached)
+    result = _read_gguf_tensor_sizes(path)
+    if key is not None:
+        _TENSOR_SIZE_CACHE[key] = result
+    return dict(result)
+
+
+def _read_gguf_tensor_sizes(path: Path | str) -> dict[str, int]:
+    sizes: dict[str, int] = {}
+    try:
+        file_end = os.path.getsize(path)
+        with open(path, "rb") as fh:
+            if fh.read(4) != _MAGIC:
+                return sizes
+            version = _read_bytes(fh, "<I")
+            count_fmt = "<I" if version < 3 else "<Q"
+            tensor_count = _read_bytes(fh, count_fmt)
+            kv_count = _read_bytes(fh, count_fmt)
+            for _ in range(kv_count):
+                _read_string(fh)
+                vtype = _read_bytes(fh, "<I")
+                _read_value(fh, vtype)
+            dim_fmt = "<I" if version < 2 else "<Q"
+            placed: list[tuple[str, int]] = []
+            for _ in range(tensor_count):
+                name = _read_string(fh)
+                n_dims = _read_bytes(fh, "<I")
+                for _ in range(n_dims):
+                    _read_bytes(fh, dim_fmt)
+                _read_bytes(fh, "<I")   # ggml type
+                offset = _read_bytes(fh, "<Q")
+                placed.append((name, offset))
+            # GGUF writes the tensor data contiguously after the header,
+            # so a tensor runs from its own offset to the next one's.
+            for i, (name, offset) in enumerate(placed):
+                end = placed[i + 1][1] if i + 1 < len(placed) else file_end
+                if end > offset:
+                    sizes[name] = end - offset
+    except (OSError, struct.error, UnicodeDecodeError, ValueError):
+        return sizes
+    return sizes
 
 
 def _read_gguf_tensors(path: Path | str) -> list[str]:

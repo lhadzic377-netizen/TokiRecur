@@ -45,6 +45,11 @@ import tomli_w
 from .. import winproc
 from ..claude_compat import approve_api_key
 from ..ggufmeta import GgufRope, read_gguf_meta
+from ..ggufsplit import (
+    expected_part_names,
+    read_split_info,
+    read_split_info_bytes,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -561,10 +566,7 @@ def _estimate_need(spec: ModelSpec) -> float:
     and text encoder — because the launch gate (_check_ram) must refuse
     honestly when the full pipeline will not fit, not just the GGUF.
     """
-    try:
-        weight_gb = resolve_gguf_path(spec).stat().st_size / 1e9
-    except FileNotFoundError:
-        weight_gb = 0.0
+    weight_gb = _model_weight_gb(spec)
     extra = 0.0
     if _spec_is_image(spec):
         for companion in (spec.vae, spec.llm):
@@ -827,6 +829,82 @@ def _model_max_ctx(spec: ModelSpec) -> int | None:
     return _model_window(spec)
 
 
+def _model_weight_gb(spec: ModelSpec) -> float:
+    """The model's weights on disk, in GB.
+
+    A multi-file split is one model: sizing it from the first part alone
+    reads the metadata shard (5.8 MB for the DeepSeek-V4.1 Coder) and
+    reports a 72 GB model as needing no headroom at all. Every part of
+    the split counts, and a part published under another name counts too
+    because it is the same weights.
+    """
+    try:
+        first = resolve_gguf_path(spec)
+    except (AttributeError, FileNotFoundError, OSError):
+        return 0.0
+    total = 0
+    try:
+        from ..ggufsplit import expected_part_names, read_split_info
+
+        info = read_split_info(first)
+        if info is not None and info.count > 1:
+            for name in expected_part_names(first, info):
+                part = Path(name)
+                if part.exists():
+                    total += part.stat().st_size
+        else:
+            total = first.stat().st_size
+    except (AttributeError, FileNotFoundError, OSError):
+        return 0.0
+    # A lazily-read tensor is not resident: llama.cpp reads its rows
+    # from disk on demand, so it must not count against the RAM the
+    # launch has to fit in. The DeepSeek-V4.1 Engram table is 110 GB on
+    # disk and none of it is resident.
+    try:
+        from ..ggufsplit import lazy_tensor_bytes
+
+        total -= lazy_tensor_bytes(first)
+    except Exception:
+        pass
+    if total < 0:
+        total = 0
+    # Not a split: a vision model's projector and a diffusion model's
+    # companions are separate weights the launch loads too.
+    try:
+        if _spec_is_image(spec):
+            for companion in (spec.vae, spec.llm):
+                if companion and Path(companion).is_file():
+                    total += Path(companion).stat().st_size
+    except (AttributeError, FileNotFoundError, OSError):
+        pass
+    return total / 1e9
+
+
+def _model_needs_lazy_load(spec: ModelSpec) -> bool:
+    """True when the model carries a tensor too big to keep resident.
+
+    llama.cpp reads some tensors on demand instead of loading them whole.
+    The DeepSeek-V4.1 Engram lookup table is 110 GB on its own, and
+    there is no machine that holds it: loaded eagerly the server dies
+    in the OOM killer during model load, with no error the operator can
+    read. With --lazy-mode on the table stays on disk and its rows are
+    read one at a time.
+
+    The threshold is the same one llama.cpp uses for its "auto" mode: a
+    tensor over 4 GiB is worth keeping lazy.
+    """
+    gguf = getattr(spec, "gguf", None)
+    if not gguf:
+        return False
+    try:
+        from ..ggufsplit import lazy_tensor_bytes
+
+        size = lazy_tensor_bytes(gguf)
+    except Exception:
+        return False
+    return size > (4 << 30)
+
+
 def _clamp_ctx(spec: ModelSpec, avail_gb: float | None = None,
                weight_gb: float | None = None) -> int:
     """Largest context (>= ``_CTX_FLOOR``) whose KV cache fits in RAM.
@@ -854,7 +932,7 @@ def _clamp_ctx(spec: ModelSpec, avail_gb: float | None = None,
         avail_gb = _available_gb()
     if weight_gb is None:
         try:
-            weight_gb = resolve_gguf_path(spec).stat().st_size / 1e9
+            weight_gb = _model_weight_gb(spec)
         except (AttributeError, FileNotFoundError, OSError):
             weight_gb = 0.0
     budget = avail_gb - weight_gb * 1.2 - 4.0
@@ -905,7 +983,7 @@ def _fit_plan(spec: ModelSpec, avail_gb: float | None = None,
         avail_gb = _available_gb()
     if weight_gb is None:
         try:
-            weight_gb = resolve_gguf_path(spec).stat().st_size / 1e9
+            weight_gb = _model_weight_gb(spec)
         except (AttributeError, FileNotFoundError, OSError):
             weight_gb = 0.0
     budget = avail_gb - weight_gb * 1.2 - 4.0
@@ -1779,6 +1857,101 @@ def _expand_gguf_patterns(filename: str, mmproj: str | None = None) -> list[str]
     return patterns
 
 
+def _remote_split_header(repo_id: str, path: str, endpoint: str | None = None) -> Any:
+    """Read a remote GGUF's split header with a small range request.
+
+    The header names the part a file is (``split.no`` / ``split.count``),
+    which is how a split part published under a different filename is
+    still recognised as a part. Only the first 64 KB are fetched.
+    """
+    try:
+        from huggingface_hub import hf_hub_url
+
+        url = hf_hub_url(repo_id, path, endpoint=endpoint)
+        with httpx.Client(follow_redirects=True, timeout=30.0) as client:
+            r = client.get(url, headers={"Range": "bytes=0-65535"})
+            if r.status_code not in (200, 206):
+                return None
+            return read_split_info_bytes(r.content)
+    except Exception:
+        return None
+
+
+def _resolve_split_gaps(
+    repo_id: str,
+    files: list[str],
+    first_part: str,
+    local_dir: Path,
+    endpoint: str | None = None,
+) -> list[str]:
+    """Fetch and link split parts the repository publishes under other names.
+
+    Some repos break the naming convention. DeepSeek-V4.1-Flash-1017-GSQ-RCO-Coder
+    publishes five parts named ``-of-00006`` and puts the sixth — the
+    110 GB Engram table — in the repository root under a different name.
+    llama.cpp still looks for ``-00006-of-00006.gguf`` and refuses to
+    start when it is absent.
+
+    The part still says what it is: its own header carries
+    ``split.count = 6`` and ``split.no = 5``. So the missing part is
+    found by reading the header of every other GGUF in the repository
+    (a 64 KB range request each), not by guessing from filenames. It is
+    then linked under the name llama.cpp expects.
+
+    Returns the names that were linked, for the caller's report.
+    """
+    linked: list[str] = []
+    local_first = local_dir / first_part
+    info = read_split_info(local_first)
+    if info is None or info.count <= 1:
+        return linked
+    expected = expected_part_names(local_first, info)
+    missing = [n for n in expected if not (local_dir / n).exists()]
+    if not missing:
+        return linked
+
+    # The repository's own file list, minus the parts already on disk.
+    wanted = {Path(n).name for n in missing}
+    published = [
+        f for f in files
+        if f.endswith(".gguf") and Path(f).name not in wanted
+    ]
+    for candidate in published:
+        remote = _remote_split_header(repo_id, candidate, endpoint)
+        if remote is None or remote.count != info.count:
+            continue
+        target_name = expected[remote.index] if remote.index < len(expected) else None
+        if target_name is None:
+            continue
+        target = local_dir / target_name
+        if target.exists():
+            continue
+        # Download the part, then link it under the expected name.
+        try:
+            from huggingface_hub import hf_hub_download
+
+            fetched = hf_hub_download(
+                repo_id, candidate, local_dir=str(local_dir),
+                endpoint=endpoint,
+            )
+        except Exception:
+            continue
+        fetched_path = Path(fetched)
+        if fetched_path.resolve() == target.resolve():
+            linked.append(target_name)
+            continue
+        try:
+            if target.exists() or target.is_symlink():
+                target.unlink()
+            target.symlink_to(Path("..") / Path(fetched_path).name
+                              if fetched_path.parent == local_dir
+                              else fetched_path)
+            linked.append(target_name)
+        except OSError:
+            continue
+    return linked
+
+
 def _auto_ctx_size(gguf: Path, *, parallel: int, kv: str) -> int:
     """Pick a context for a fresh pull that fits this machine.
 
@@ -1913,6 +2086,12 @@ def pull_model(
             local_dir=str(local_dir),
             resume_download=True,
         )
+        # A split part published under a different name is still a part:
+        # its own header says so. Find it and link it under the name
+        # llama.cpp looks for, or the model cannot boot.
+        linked = _resolve_split_gaps(
+            repo_id, files, filename, local_dir, endpoint,
+        )
     except Exception as e:
         raise RuntimeError(f"download failed: {e}") from e
     finally:
@@ -1920,6 +2099,12 @@ def pull_model(
             os.environ.pop("HF_ENDPOINT", None)
         else:
             os.environ["HF_ENDPOINT"] = old_endpoint
+    if linked:
+        for name in linked:
+            click.echo(
+                f"linked {Path(name).name} — this repo publishes that split "
+                f"part under another name"
+            )
 
     llama_port, daemon_port = next_free_ports(specs)
     binary, env = pull_defaults(specs)
@@ -2941,7 +3126,7 @@ def _binary_supports(binary: str, flag: str) -> bool:
         text = (out.stdout or "") + (out.stderr or "")
         for probe in (
             "--slot-save-path", "--alias", "--reasoning",
-            "--mlock", "--load-mode", "--device",
+            "--mlock", "--load-mode", "--device", "--lazy-mode",
         ):
             if probe in text:
                 found.add(probe)
@@ -3133,6 +3318,19 @@ def _llama_args(spec: ModelSpec, ctx_override: int | None = None,
             args += ["--slot-save-path", str(slot_dir)]
         except OSError:
             pass
+    # A model whose GGUF carries a very large lazily-read tensor (the
+    # DeepSeek-V4.1 Engram table is 110 GB) has to keep that tensor on
+    # disk. llama.cpp reads it row by row when --lazy-mode is on, and
+    # loads the whole thing into RAM when it is off — which on a 125 GB
+    # machine is an out-of-memory kill, not a slow start. The flag only
+    # exists in recent llama.cpp, and only the user's own extra_args
+    # should override it.
+    if (
+        _binary_supports(binary, "--lazy-mode")
+        and not any(a in ("--lazy-mode", "-lzm") for a in spec.extra_args)
+        and _model_needs_lazy_load(spec)
+    ):
+        args += ["--lazy-mode", "on"]
     args += spec.extra_args
     # Hard user overrides, appended LAST so llama.cpp's last-flag-wins
     # parser honours them even over registry extra_args pins.
