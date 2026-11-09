@@ -92,11 +92,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   x86_64: CUDA, SYCL, Vulkan, ROCm/HIP, OpenVINO, CPU; Windows ARM64: CUDA,
   Vulkan, CPU. macOS: one universal Metal build that runs CPU-only with
   `-ngl 0`.
-- **Installs prove the runtime they claim.** CUDA fetches the matching
-  `cudart`/`cublas`, checks the library major and requires a real `CUDA0`
-  device line; Linux SYCL verifies DPC++, oneMKL and Level Zero; ROCm verifies
-  `libamdhip64.so`. A partial install is refused rather than left to fall back
-  to CPU while reporting success.
+- **Installs check the runtime they claim.** CUDA fetches the matching
+  `cudart`/`cublas` and checks the library major; Linux SYCL verifies DPC++,
+  oneMKL and Level Zero; ROCm verifies `libamdhip64.so`. A missing runtime
+  refuses the install rather than leaving llama-server to fall back to CPU
+  while reporting success. The device line comes from
+  `llama-server --list-devices`; a machine whose driver enumerates no device
+  gets a loud warning, not a silent success.
+  (Corrected after release: this entry originally said the install
+  *required* a real `CUDA0` device line. The code has always warned
+  instead of refusing — only a missing runtime refuses.)
 - **A public site and docs at [tokirecur.com](https://tokirecur.com)**, built
   and deployed by the repo, with an installer that owns only marked regions of
   `/etc/caddy/Caddyfile` so other sites on the same machine are untouched.

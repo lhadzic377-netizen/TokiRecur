@@ -111,7 +111,7 @@ pwsh -File "$env:TEMP\toki-install.ps1"</code></pre>
     <h2>Fetch the llama-server binary</h2>
     <p>One command installs the matching official build, it auto-detects the best backend for your machine. Pass <code>--backend</code> to override.</p>
     <pre><code>toki model install-llama                 # auto-detect backend, latest release
-toki model install-llama --backend rocm  # force a backend (rocm|cuda|sycl|openvino|vulkan|metal|cpu)
+toki model install-llama --backend rocm  # force a backend (rocm|cuda|sycl|openvino|vulkan|metal|mlx|cpu)
 toki model install-llama --backend rocm --gfx 11.5.1  # set HSA_OVERRIDE_GFX_VERSION
 toki model install-llama --tag b6400     # pin a release tag
 toki model install-llama --name 35b      # ...and point a registry model at it</code></pre>
@@ -129,6 +129,7 @@ toki model install-llama --name 35b      # ...and point a registry model at it</
       </tbody>
     </table>
     <p>The GPU backends are provided by the llama-server binary itself, Toki Recur talks to it over HTTP and is backend-agnostic. GPU installs verify the vendor runtime, and CUDA, ROCm, SYCL, Vulkan and OpenVINO builds also run <code>llama-server --list-devices</code> and print the device line. If no device enumerates, the install warns loudly instead of reporting a silent success: CUDA checks its paired <code>cudart</code>/<code>cublas</code> archive and <code>CUDA0</code>; ROCm checks <code>libamdhip64.so</code> / <code>amdhip64*.dll</code> and <code>ROCm0</code>; SYCL checks the oneAPI runtime, oneMKL and Level Zero on Linux and bundled <code>sycl*.dll</code> on Windows; OpenVINO checks the core runtime and the Intel GPU plugin; Vulkan checks the driver loader. Linux SYCL archives are not self-contained, so oneAPI is a real prerequisite there. CUDA 13.x needs driver 580.65+; the Linux 12.8 build needs 570.26+ (Windows 12.4 needs 551.61+). macOS ships one universal Metal build (there is no separate CPU asset); CPU-only mode is <code>-ngl 0</code> / <code>--device none</code>, and a Mac or VM without Metal runs that build on CPU with an explicit warning.</p>
+    <p>macOS has one more, optional backend: <code>toki model install-llama --backend mlx --name &lt;model&gt;</code> pip-installs Apple's <code>mlx-lm</code> server and points that registry model at <code>mlx_lm.server</code>. It serves mlx-community model directories rather than GGUF files. It is a serving backend only: the daemon verifies a prefix with llama-server's <code>/tokenize</code> endpoint, which <code>mlx_lm.server</code> does not serve (it answers 404), so a model on MLX gets no KV reuse.</p>
 
     <h2>System daemon installers</h2>
     <p>Optional, run as a system daemon (dedicated user + service manager unit + log rotation, auto-start at boot). <code>install.sh</code> bootstraps the full stack (own venv at <code>/opt/toki-recur</code>, package + llama-server + service unit) and works standalone without the pipx install above. <code>install.ps1</code> installs the stack on Windows but leaves the service to you (NSSM or a scheduled task):</p>

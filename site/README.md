@@ -32,7 +32,7 @@ scripts/
   prune-css.py         removes the CSS for sections the redesign replaced
   design-explorer.py   assembles the twenty design candidates
   shoot-designs.mjs    renders the candidates so they can be compared
-  install-site.sh      installs Caddy, deploys the artifact, wires the chat
+  install-site.sh      installs Caddy, deploys the artifact, optionally wires the chat
   Caddyfile.template   the server config the installer fills in
   build-site-zip.sh    packages the artifact + installer as dist/toki-site.zip
 ```
@@ -71,6 +71,9 @@ The installer builds the site, deploys it as an immutable release under
 it, so a rollback is one `ln -sfn` away. It then writes `/etc/caddy/Caddyfile`
 from the template and validates it before Caddy is restarted.
 
+`--no-chat` skips the chat subdomain and the web UI service; `--no-toki` skips
+the tokirecur stack, leaving the static site alone.
+
 Prove the whole path without touching the machine:
 
 ```bash
@@ -91,7 +94,9 @@ unit into a temporary directory, then prints what a real run would do.
 - `no-cache` for HTML, `immutable` for fingerprinted assets;
 - `Content-Security-Policy`, `Strict-Transport-Security`, `X-Content-Type-Options`,
   `Referrer-Policy` and `Permissions-Policy` on every response;
-- a `www` → apex redirect and a `chat.<domain>` reverse proxy for the web chat.
+- a `www` → apex redirect and a `chat.<domain>` reverse proxy for the web
+  chat. The chat block is in the template and is removed by `--no-chat`; the
+  site itself does not need it.
 
 ## Design
 

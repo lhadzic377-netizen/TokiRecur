@@ -19,8 +19,14 @@ and the issue may be disclosed after the fix lands.
 
 ## Scope
 
-The TokiRecur daemon, CLI, API, and installers. If you're unsure whether
-something counts, report it anyway.
+The TokiRecur daemon, CLI, API, web UI, and installers. If you're unsure
+whether something counts, report it anyway.
+
+The web UI has no login of its own: it proxies to the daemon with the
+daemon's token, so anyone who can reach the UI can use the daemon through
+it. That is a property of the shipped design, not a bug report — but a
+deployment that exposes it to a network it should not reach is worth
+telling us about.
 
 ## Non-goals
 

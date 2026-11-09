@@ -4,7 +4,7 @@
 
 # Toki Recur
 
-KV cache reuse for local LLM inference. Exact prefix matching in front of `llama-server`, across CUDA, ROCm, SYCL, OpenVINO, Vulkan, Metal and CPU.
+KV cache reuse for local LLM inference. Exact prefix matching in front of `llama-server`, across its CUDA, ROCm, SYCL, OpenVINO, Vulkan, Metal and CPU builds.
 
 [![Release](https://img.shields.io/github/v/release/lhadzic377-netizen/TokiRecur?color=ffd60f&label=release)](https://github.com/lhadzic377-netizen/TokiRecur/releases)
 [![Website](https://img.shields.io/badge/site-tokirecur.com-ffd60f)](https://tokirecur.com)
@@ -93,13 +93,14 @@ Pure Python over the `llama-server` HTTP API, on any x86_64 or aarch64 device ru
 | Windows x86_64 / aarch64 | CUDA, SYCL, Vulkan, ROCm/HIP, OpenVINO, CPU | beta |
 
 - **macOS** ships one universal Metal build; there is no separate CPU asset, and `install-llama --backend cpu` says so rather than claiming a Metal install.
+- **MLX** is a second, optional macOS backend: `toki model install-llama --backend mlx --name <model>` pip-installs Apple's `mlx-lm` and points that registry model at `mlx_lm.server`. It serves mlx-community model directories, not GGUF files. It is a serving backend only: the daemon verifies a prefix with llama-server's `/tokenize` endpoint, which `mlx_lm.server` does not serve (it answers 404), so a model on MLX gets no KV reuse.
 - **CUDA** builds need `cudart`/`cublas`: the installer fetches the matching runtime and checks for a real `CUDA0` device line, warning loudly if none appears. CUDA 13.x needs driver 580.65+, the 12.8 Linux build 570.26+.
 - **Linux SYCL** links oneAPI DPC++, oneMKL and Level Zero; **ROCm** uses the system runtime. The installer verifies the libraries and refuses a partial install instead of silently falling back to CPU.
 - Windows is **beta**: launcher, chat, tap and every install path are implemented and unit-tested; real-hardware verification is ongoing. CI runs the suite on Linux, macOS and Windows, and executes the Linux/macOS installers end to end.
 
 ```bash
 toki model install-llama                 # latest release, auto-detected backend
-toki model install-llama --backend rocm  # rocm|cuda|sycl|openvino|vulkan|metal|cpu
+toki model install-llama --backend rocm  # rocm|cuda|sycl|openvino|vulkan|metal|mlx|cpu
 toki model install-llama --backend rocm --gfx 11.5.1   # HSA_OVERRIDE_GFX_VERSION
 toki model install-llama --tag b6400 --name 35b        # pin a release
 ```

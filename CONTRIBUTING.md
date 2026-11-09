@@ -21,13 +21,22 @@ cd TokiRecur
 ./install.sh
 ```
 
-`install.sh` runs `pipx install -e .` so any edit to `src/tokirecur/**` is
-picked up the moment the daemon restarts. No rebuild step.
+`install.sh` installs the checkout non-editable (`pipx install --force
+".[embeddings]"`), so an edit to `src/tokirecur/**` needs a re-run of the
+installer to take effect. For a live-editing loop, install the package
+editable yourself instead:
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e .[embeddings]
+```
+
+Then every edit is picked up when the daemon restarts. No rebuild step.
 
 ## Dev loop
 
 ```bash
-.venv/bin/pytest -q --ignore=tests/integration   # unit tests, ~12s
+.venv/bin/pytest -q --ignore=tests/integration   # unit tests, ~80s
 .venv/bin/pytest -q tests/unit/test_foo.py        # one file
 .venv/bin/pytest -k "test_name"                   # one test
 .venv/bin/ruff check src tests                    # lint
@@ -66,8 +75,11 @@ The test suite is fast and the loop is short: edit, run pytest, run ruff, commit
 
 ## Adding a TUI screen
 
-Textual only on Linux/macOS. On Windows the TUI is replaced by a plain CLI
-in `src/tokirecur/clilauncher.py` / `clichat.py` — keep that in sync.
+Textual runs on every platform, Windows included. `src/tokirecur/clilauncher.py`
+and `src/tokirecur/clichat.py` are the plain-CLI fallbacks: they are opt-in
+through `TOKI_CLI=1` (a remote shell, a screen reader, a console that cannot
+host a full-screen app) and are used automatically when Textual cannot be
+imported. Keep both in sync when a screen changes.
 
 ## Filing a PR
 
@@ -94,10 +106,10 @@ in `src/tokirecur/clilauncher.py` / `clichat.py` — keep that in sync.
 | `src/tokirecur/ctl/` | Registry, model state, daemon lifecycle. |
 | `src/tokirecur/api/` | FastAPI app the daemon serves. |
 | `src/tokirecur/backend/` | llama-server HTTP client, tool-call sanitisation. |
-| `src/tokirecur/tui/` | Textual launcher + chat UI (POSIX). |
-| `src/tokirecur/clilauncher.py`, `clichat.py` | Plain-CLI replacements (Windows). |
+| `src/tokirecur/tui/` | Textual launcher + chat UI (every platform). |
+| `src/tokirecur/clilauncher.py`, `clichat.py` | Plain-CLI fallbacks (`TOKI_CLI=1`). |
 | `src/tokirecur/diagnose.py` | `toki doctor` — GPU, binary, model state. |
 | `tests/unit/` | Fast tests, no llama-server required. |
 | `tests/integration/` | End-to-end tests, need a running llama-server. |
 | `AGENTS.md` | Dev-machine gotchas (this box). |
-| `install.sh` / `install.ps1` | One-shot installer; both pick up `main` automatically. |
+| `install.sh` / `install.ps1` | One-shot installers. `install.sh` installs the checkout it sits in; `install.ps1` downloads the `main` zipball. |
