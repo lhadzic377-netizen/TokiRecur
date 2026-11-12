@@ -5647,9 +5647,10 @@ def write_droid_config(
                 and str(model.get("displayName", "")).startswith("Toki Recur ("))
     ]
     endpoint = _client_endpoint(spec, _resolve_mode("droid", mode))
+    display = f"Toki Recur ({spec.label})"
     models.append({
         "model": spec.model_id,
-        "displayName": f"Toki Recur ({spec.label})",
+        "displayName": display,
         "baseUrl": endpoint,
         "apiKey": "${TOKI_AUTH_TOKEN}",
         "provider": "generic-chat-completion-api",
@@ -5657,6 +5658,14 @@ def write_droid_config(
     })
     cfg["customModels"] = models
     cfg["model"] = f"custom:{spec.model_id}"
+    # Droid also keeps the model a *session* starts with, and that one
+    # names the custom model by a slug of its display name. Left alone
+    # it keeps pointing at the model that was active when it was
+    # written, and droid then falls back to its own subscription
+    # ("No active subscription found") instead of the local route.
+    session = cfg.get("sessionDefaultSettings")
+    if isinstance(session, dict):
+        session["model"] = f"custom:{display.replace(' ', '-')}-0"
     _write_private_config(cfg_path, json.dumps(cfg, indent=2) + "\n")
     return cfg_path
 
@@ -6029,7 +6038,42 @@ def write_omp_config(
     else:
         text = yaml.safe_dump(cfg, sort_keys=False)
     _write_private_config(cfg_path, text)
+    _write_omp_roles(cfg_path, spec)
     return cfg_path
+
+
+def _write_omp_roles(models_path: Path, spec: ModelSpec) -> None:
+    """Point OMP's default role at the model that is being served.
+
+    OMP keeps two files: ``models.yml`` lists the providers, and
+    ``config.yml`` names the model each role uses. Writing only the
+    provider leaves the role pointing at whichever model was active
+    when it was written — and when that model is gone, OMP quietly
+    falls back to its own Ollama instead of the local route.
+    """
+    config_dir = models_path.parent
+    for name in ("config.yml", "config.yaml"):
+        path = config_dir / name
+        if not path.exists():
+            continue
+        try:
+            cfg = yaml.safe_load(path.read_text())
+        except (OSError, yaml.YAMLError):
+            continue
+        if not isinstance(cfg, dict):
+            continue
+        roles = cfg.get("modelRoles")
+        if not isinstance(roles, dict):
+            continue
+        ref = f"tokirecur/{spec.model_id}"
+        changed = False
+        for role, value in list(roles.items()):
+            if isinstance(value, str) and value.startswith("tokirecur/"):
+                roles[role] = ref
+                changed = True
+        if changed:
+            _write_private_config(path, yaml.safe_dump(cfg, sort_keys=False))
+        return
 
 
 def _client_modes_path(root: Path | None = None) -> Path:

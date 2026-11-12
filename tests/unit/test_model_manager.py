@@ -788,6 +788,59 @@ def test_omp_writer_uses_named_profile_directory(env, with_pulled_model, monkeyp
     assert out == root / "profiles" / "work" / "agent" / "models.yml"
 
 
+def test_omp_writer_refreshes_stale_model_role(env, with_pulled_model, monkeypatch):
+    """OMP's role must follow the model that is being served.
+
+    OMP keeps the providers in ``models.yml`` and the per-role model
+    choice in ``config.yml``. Writing only the provider leaves the role
+    naming a model that no longer exists, and OMP then quietly falls
+    back to its own Ollama instead of the local route.
+    """
+    spec = with_pulled_model["9b"]
+    config_dir = env / "omp-roles"
+    config_dir.mkdir()
+    (config_dir / "config.yml").write_text(
+        yaml.safe_dump({"modelRoles": {"default": "tokirecur/stale-model"}})
+    )
+    monkeypatch.setenv("PI_CODING_AGENT_DIR", str(config_dir))
+    ctl.write_omp_config(spec, [spec])
+    roles = yaml.safe_load((config_dir / "config.yml").read_text())["modelRoles"]
+    assert roles["default"] == f"tokirecur/{spec.model_id}"
+
+
+def test_omp_writer_leaves_foreign_roles_alone(env, with_pulled_model, monkeypatch):
+    """Only the local provider's roles are ours to rewrite."""
+    spec = with_pulled_model["9b"]
+    config_dir = env / "omp-foreign-role"
+    config_dir.mkdir()
+    (config_dir / "config.yml").write_text(
+        yaml.safe_dump({"modelRoles": {"default": "ollama/llama3"}})
+    )
+    monkeypatch.setenv("PI_CODING_AGENT_DIR", str(config_dir))
+    ctl.write_omp_config(spec, [spec])
+    roles = yaml.safe_load((config_dir / "config.yml").read_text())["modelRoles"]
+    assert roles["default"] == "ollama/llama3"
+
+
+def test_droid_writer_refreshes_session_default_model(env, with_pulled_model):
+    """Droid names the session's model by a slug of its display name.
+
+    Left alone it keeps pointing at the model that was active when it
+    was written, and droid then falls back to its own subscription
+    ("No active subscription found") instead of the local route.
+    """
+    spec = with_pulled_model["9b"]
+    path = env / "factory-settings.json"
+    path.write_text(json.dumps({
+        "sessionDefaultSettings": {"model": "custom:Toki-Recur-(Stale)-0"},
+    }))
+    ctl.write_droid_config(spec, [spec])
+    cfg = json.loads(path.read_text())
+    display = f"Toki Recur ({spec.label})"
+    assert cfg["sessionDefaultSettings"]["model"] == f"custom:{display.replace(' ', '-')}-0"
+    assert cfg["model"] == f"custom:{spec.model_id}"
+
+
 def test_hermes_models_dict_carries_context_length(env, with_pulled_model):
     """hermes's authoritative context source: per-model dict entries.
 

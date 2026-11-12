@@ -30,6 +30,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   model row shows the active mode's badge.
 
 ### Fixed
+- **Two harnesses no longer keep talking to a model that is gone.** OMP
+  keeps the providers in `models.yml` and the model each role uses in
+  `config.yml`, so writing only the provider left the role pointing at
+  whatever was active when it was written - and when that model was
+  removed, OMP quietly fell back to its own Ollama on port 11434.
+  Droid keeps the model a session starts with under a slug of the
+  custom model's display name, so it kept naming the old one and
+  answered "No active subscription found" instead of using the local
+  route. Both writers now refresh the selection as well as the
+  provider list.
 - **A mid-conversation system message no longer 500s the model.** The
   chat templates raise on a system message that is not the first one -
   "System message must be at the beginning" - and the request fails
