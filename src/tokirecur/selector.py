@@ -31,6 +31,8 @@ from .ctl import (
     cline_config_dir,
     load_registry,
     model_status,
+    qwen_model_ref,
+    qwen_uses_custom_providers,
     read_active,
     write_claude_config,
     write_cline_config,
@@ -307,7 +309,6 @@ def launch_cmd(interface: str, client: str, spec: Any | None) -> dict:
     model_ref = f"{provider}/{spec.model_id}"
     _refresh_client_config(spec, client)
     env = _bound_env(spec, client)
-    endpoint = _bound_endpoint(spec, client)
 
     if interface in {"chat", "tui"}:
         if client == "toki":
@@ -338,10 +339,17 @@ def launch_cmd(interface: str, client: str, spec: Any | None) -> dict:
         if client == "codex":
             return {"argv": ["codex"], "detach": False, "url": None, "env": env}
         if client == "qwen":
-            return {"argv": ["qwen", "--model", spec.model_id,
-                             "--openai-base-url", endpoint,
-                             "--auth-type", "openai"],
-                    "detach": False, "url": None, "env": env}
+            # Qwen Code 1.0 dropped --openai-base-url and --auth-type
+            # (both exit 1 as unknown options) and keys a custom
+            # provider's model as "<provider>/<model>", so --model needs
+            # the qualified name there and the bare id before it.
+            if qwen_uses_custom_providers():
+                argv = ["qwen", "--model", qwen_model_ref(spec)]
+            else:
+                argv = ["qwen", "--model", spec.model_id,
+                        "--openai-base-url", _bound_endpoint(spec, client),
+                        "--auth-type", "openai"]
+            return {"argv": argv, "detach": False, "url": None, "env": env}
         if client == "droid":
             return {"argv": ["droid"], "detach": False, "url": None, "env": env}
         if client == "cline":

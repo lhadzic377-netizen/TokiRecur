@@ -21,6 +21,13 @@ import os
 import pytest
 import yaml
 
+from tokirecur import ctl
+
+#: The real Qwen Code version probe, kept so a test that checks the
+#: launch flags against the installed binary can use it instead of the
+#: stub below.
+_real_qwen_major_version = ctl.qwen_major_version
+
 
 @pytest.fixture
 def isolated_registry(tmp_path, monkeypatch):
@@ -77,3 +84,22 @@ def _isolate_client_configs(tmp_path, monkeypatch):
     # A real token in the ambient env would leak into config assertions.
     if "TOKI_AUTH_TOKEN" in os.environ:
         monkeypatch.setenv("TOKI_AUTH_TOKEN", "test-token")
+    # The Qwen Code version decides which settings section the writer
+    # fills and which --model form the launcher passes, so a developer's
+    # installed qwen would change the output from one machine to the
+    # next. Tests that care about the 1.0 shape set the version
+    # themselves.
+    monkeypatch.setattr("tokirecur.ctl.qwen_major_version", lambda: None)
+
+
+@pytest.fixture
+def real_qwen_version(monkeypatch):
+    """The installed Qwen Code's version, for flag checks.
+
+    The launcher picks its flags from the version of the binary that is
+    actually there, so a check of those flags against that binary has
+    to ask the real probe rather than the stub.
+    """
+    monkeypatch.setattr(
+        "tokirecur.ctl.qwen_major_version", _real_qwen_major_version
+    )

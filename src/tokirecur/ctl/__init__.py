@@ -5184,6 +5184,60 @@ def _qwen_config_path() -> Path:
     return Path.home() / ".qwen" / "settings.json"
 
 
+#: Provider id used for the local route inside Qwen Code's settings.
+QWEN_PROVIDER_ID = "tokirecur"
+
+#: Cached result of the Qwen Code version probe (False = not probed yet).
+_qwen_version_cache: int | None | bool = False
+
+
+def qwen_major_version() -> int | None:
+    """Major version of the installed Qwen Code, or None when unknown.
+
+    1.0 replaced the ``modelProviders`` settings section with
+    ``providers`` and dropped the ``--openai-base-url`` / ``--auth-type``
+    flags, so the two releases need different settings and different
+    launch arguments. The probe is a version query, not a launch: it is
+    capped, cached for the process, and a failure only means "unknown".
+    """
+    global _qwen_version_cache
+    if _qwen_version_cache is not False:
+        return _qwen_version_cache
+    try:
+        proc = subprocess.run(
+            ["qwen", "--version"],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        _qwen_version_cache = None
+        return None
+    match = re.search(r"(\d+)\.", (proc.stdout or "") + (proc.stderr or ""))
+    _qwen_version_cache = int(match.group(1)) if match else None
+    return _qwen_version_cache
+
+
+def qwen_uses_custom_providers() -> bool:
+    """True when the installed Qwen Code reads the ``providers`` section.
+
+    1.0 does. Earlier releases read ``modelProviders``. When the version
+    cannot be probed the answer is False: that keeps the older route,
+    which the previous releases understood.
+    """
+    return (qwen_major_version() or 0) >= 1
+
+
+def qwen_model_ref(spec: ModelSpec) -> str:
+    """The model reference Qwen Code expects for this stack.
+
+    1.0 keys a custom-provider model as ``<provider>/<model>`` and
+    matches ``--model`` against that key, so a bare model id is
+    "Unknown model". Earlier releases only know the bare id.
+    """
+    if qwen_uses_custom_providers():
+        return f"{QWEN_PROVIDER_ID}/{spec.model_id}"
+    return spec.model_id
+
+
 def _factory_config_path() -> Path:
     explicit = os.environ.get("FACTORY_CONFIG")
     if explicit:
@@ -5457,7 +5511,26 @@ def write_qwen_config(
     spec: ModelSpec, specs: list[ModelSpec] | None = None,
     path: Path | None = None, mode: str | None = None,
 ) -> Path:
-    """Write Qwen Code's local OpenAI-compatible route and default model."""
+    """Write Qwen Code's local OpenAI-compatible route and default model.
+
+    Two settings shapes live here, because Qwen Code 1.0 changed the
+    schema:
+
+    * 1.0 reads the ``providers`` section. A provider entry carries
+      ``protocol``, ``baseUrl``, ``apiKey`` and a ``models`` list whose
+      entries use ``model`` (not ``id``). ``apiKey`` must be a literal:
+      1.0 rejects ``${VAR}`` as unresolved and sends a bare ``$VAR``
+      through untouched, so the token the daemon accepts is written
+      into the file, which stays 0600.
+    * Earlier releases read ``modelProviders``. 1.0 ignores that
+      section, so it is written either way: a downgrade then still has
+      a live route, and the endpoint it names is never stale.
+
+    The saved model name is provider-qualified on 1.0: a bare id is
+    resolved against the signed-in account (Qoder) and fails with
+    ``belongs to provider "qoder"``; earlier releases only know the
+    bare id.
+    """
     # The model as it is being served: at the active effort, when the
     # model understands that effort.
     cfg_path = path or _qwen_config_path()
@@ -5465,11 +5538,44 @@ def write_qwen_config(
     cfg = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
     if not isinstance(cfg, dict):
         cfg = {}
-    providers = cfg.get("modelProviders")
-    if not isinstance(providers, dict):
-        providers = {}
-        cfg["modelProviders"] = providers
-    entries = providers.get("openai")
+    endpoint = _client_endpoint(spec, _resolve_mode("qwen", mode))
+    display = f"Toki Recur ({spec.label})"
+    context = _effective_ctx(spec)
+    output = _client_output_limit(spec)
+    modern = qwen_uses_custom_providers()
+
+    if modern:
+        providers = cfg.get("providers")
+        if not isinstance(providers, dict):
+            providers = {}
+            cfg["providers"] = providers
+        providers[QWEN_PROVIDER_ID] = {
+            "protocol": "openai",
+            "baseUrl": endpoint,
+            "apiKey": configured_auth_token() or "",
+            "models": [{
+                "model": spec.model_id,
+                "displayName": display,
+                "contextWindow": context,
+                "maxOutputTokens": output,
+            }],
+        }
+        cfg["model"] = {"name": qwen_model_ref(spec)}
+        # 1.0 has no security.auth.baseUrl: the route lives entirely in
+        # the providers section, and the account auth type is the
+        # user's own choice. The stale key is dropped rather than left
+        # pointing at a dead endpoint.
+        security = cfg.get("security")
+        if isinstance(security, dict):
+            auth = security.get("auth")
+            if isinstance(auth, dict):
+                auth.pop("baseUrl", None)
+
+    legacy = cfg.get("modelProviders")
+    if not isinstance(legacy, dict):
+        legacy = {}
+        cfg["modelProviders"] = legacy
+    entries = legacy.get("openai")
     if not isinstance(entries, list):
         entries = []
     entries = [
@@ -5477,31 +5583,30 @@ def write_qwen_config(
         if not (isinstance(entry, dict)
                 and str(entry.get("name", "")).startswith("Toki Recur ("))
     ]
-    endpoint = _client_endpoint(spec, _resolve_mode("qwen", mode))
-    output = _client_output_limit(spec)
     entries.append({
         "id": spec.model_id,
-        "name": f"Toki Recur ({spec.label})",
+        "name": display,
         "envKey": "TOKI_AUTH_TOKEN",
         "baseUrl": endpoint,
         "wireApi": "chat-completions",
         "generationConfig": {
-            "contextWindowSize": _effective_ctx(spec),
+            "contextWindowSize": context,
             "samplingParams": {"max_tokens": output},
         },
     })
-    providers["openai"] = entries
-    cfg["model"] = {"name": spec.model_id}
-    security = cfg.get("security")
-    if not isinstance(security, dict):
-        security = {}
-        cfg["security"] = security
-    auth = security.get("auth")
-    if not isinstance(auth, dict):
-        auth = {}
-        security["auth"] = auth
-    auth["baseUrl"] = endpoint
-    auth["selectedType"] = "openai"
+    legacy["openai"] = entries
+    if not modern:
+        cfg["model"] = {"name": spec.model_id}
+        security = cfg.get("security")
+        if not isinstance(security, dict):
+            security = {}
+            cfg["security"] = security
+        auth = security.get("auth")
+        if not isinstance(auth, dict):
+            auth = {}
+            security["auth"] = auth
+        auth["baseUrl"] = endpoint
+        auth["selectedType"] = "openai"
     _write_private_config(cfg_path, json.dumps(cfg, indent=2) + "\n")
     return cfg_path
 

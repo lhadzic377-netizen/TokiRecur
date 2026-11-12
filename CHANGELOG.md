@@ -30,6 +30,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   model row shows the active mode's badge.
 
 ### Fixed
+- **Qwen Code 1.0 launches on the local model again.** The 1.0 preview
+  replaced the `modelProviders` settings section with `providers` and
+  removed the `--openai-base-url` and `--auth-type` flags, so the old
+  route was silently ignored and the launch exited 1 on an unknown
+  option. The writer now fills `providers` as well: a provider entry
+  with `protocol`, `baseUrl`, `apiKey` and a `models` list keyed by
+  `model` (not `id`). The token is written literally, because 1.0
+  rejects `${VAR}` as unresolved and passes a bare `$VAR` through
+  untouched; the settings file stays owner-only (0600). The saved model
+  name is provider-qualified (`tokirecur/<model>`), since 1.0 resolves a
+  bare id against the signed-in account and fails with `belongs to
+  provider "qoder"`. The launcher detects the installed version and
+  passes `qwen --model tokirecur/<model>` on 1.0, keeping the endpoint
+  flags for the releases that still accept them. The pre-1.0 section is
+  still written, so a downgrade keeps a live route.
 - **A split GGUF published under another name is fetched and linked.**
   DeepSeek-V4.1-Flash-1017-GSQ-RCO-Coder ships five parts named
   `-of-00006` and puts the sixth — the 110 GB Engram table — in the

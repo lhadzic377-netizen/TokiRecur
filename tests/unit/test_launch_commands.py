@@ -41,7 +41,9 @@ def _launch_argv(client: str) -> list[str]:
     "client",
     ["opencode", "mimo", "hermes", "qwen", "cline", "claude"],
 )
-def test_every_flag_the_launcher_passes_is_one_the_binary_knows(client, isolated_registry):
+def test_every_flag_the_launcher_passes_is_one_the_binary_knows(
+    client, isolated_registry, real_qwen_version,
+):
     """Check the binary's own help for each flag.
 
     Skipped where the client is not installed: the point is to catch a

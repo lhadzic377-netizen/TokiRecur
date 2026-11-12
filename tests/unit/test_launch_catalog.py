@@ -193,6 +193,35 @@ def test_new_client_raw_mode_uses_llama_endpoint(monkeypatch):
     assert plan["env"]["OPENAI_BASE_URL"] == "http://127.0.0.1:8112/v1"
 
 
+def test_qwen_1_0_launch_drops_removed_flags_and_qualifies_the_model(
+    monkeypatch,
+):
+    """1.0 exits 1 on --openai-base-url and --auth-type.
+
+    It also keys a custom provider's model as "<provider>/<model>", so
+    a bare model id is "Unknown model" there.
+    """
+    monkeypatch.setattr("tokirecur.selector.client_mode", lambda _: "managed")
+    monkeypatch.setattr("tokirecur.ctl.qwen_major_version", lambda: 1)
+    spec = _spec()
+    plan = launch_cmd("chat", "qwen", spec)
+    assert plan["argv"] == ["qwen", "--model", f"tokirecur/{spec.model_id}"]
+    assert "--openai-base-url" not in plan["argv"]
+    assert "--auth-type" not in plan["argv"]
+
+
+def test_qwen_before_1_0_keeps_the_endpoint_flags(monkeypatch):
+    monkeypatch.setattr("tokirecur.selector.client_mode", lambda _: "managed")
+    monkeypatch.setattr("tokirecur.ctl.qwen_major_version", lambda: 0)
+    spec = _spec()
+    plan = launch_cmd("chat", "qwen", spec)
+    assert plan["argv"] == [
+        "qwen", "--model", spec.model_id,
+        "--openai-base-url", "http://127.0.0.1:8811/v1",
+        "--auth-type", "openai",
+    ]
+
+
 def test_model_bound_client_still_requires_a_model():
     with pytest.raises(ValueError, match="requires an active model"):
         launch_cmd("chat", "opencode", None)

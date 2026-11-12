@@ -556,7 +556,9 @@ def test_new_client_config_writers_bind_active_model(env, with_pulled_model, mon
 
     qwen = json.loads(paths["qwen"].read_text())
     assert qwen["model"]["name"] == spec.model_id
+    # Pre-1.0 Qwen Code reads modelProviders; 1.0 reads providers.
     assert qwen["modelProviders"]["openai"][-1]["baseUrl"] == f"{spec.daemon_url}/v1"
+    assert "providers" not in qwen
 
     droid = json.loads(paths["droid"].read_text())
     assert droid["model"] == f"custom:{spec.model_id}"
@@ -637,6 +639,84 @@ def test_qwen_writer_honors_qwen_home(env, with_pulled_model, monkeypatch):
     monkeypatch.setenv("QWEN_HOME", str(home))
     out = ctl.write_qwen_config(spec, [spec])
     assert out == home / "settings.json"
+
+
+def test_qwen_writer_emits_1_0_providers_with_literal_token(
+    env, with_pulled_model, monkeypatch,
+):
+    monkeypatch.setenv("TOKI_AUTH_TOKEN", "test-tok-0123456789abcdef")
+    monkeypatch.setattr(ctl, "qwen_major_version", lambda: 1)
+    spec = with_pulled_model["9b"]
+    out = ctl.write_qwen_config(spec, [spec])
+    cfg = json.loads(out.read_text())
+    route = cfg["providers"]["tokirecur"]
+    assert route["protocol"] == "openai"
+    assert route["baseUrl"] == f"{spec.daemon_url}/v1"
+    # 1.0 rejects ${VAR} as unresolved, so the token the daemon accepts
+    # is written literally into the owner-only file.
+    assert route["apiKey"] == "test-tok-0123456789abcdef"
+    assert route["models"] == [{
+        "model": spec.model_id,
+        "displayName": f"Toki Recur ({spec.label})",
+        "contextWindow": ctl._effective_ctx(spec),
+        "maxOutputTokens": ctl._client_output_limit(spec),
+    }]
+    # 1.0 anchors the saved model to the provider that declares it; a
+    # bare id resolves against the signed-in account instead.
+    assert cfg["model"] == {"name": f"tokirecur/{spec.model_id}"}
+    # The pre-1.0 section is still written, so a downgrade keeps a live
+    # route instead of a stale endpoint.
+    legacy = cfg["modelProviders"]["openai"][-1]
+    assert legacy["id"] == spec.model_id
+    assert legacy["baseUrl"] == f"{spec.daemon_url}/v1"
+    if os.name == "posix":
+        assert out.stat().st_mode & 0o777 == 0o600
+
+
+def test_qwen_1_0_writer_drops_the_stale_auth_base_url(
+    env, with_pulled_model, monkeypatch,
+):
+    monkeypatch.setattr(ctl, "qwen_major_version", lambda: 1)
+    spec = with_pulled_model["9b"]
+    out = ctl.write_qwen_config(spec, [spec])
+    # A settings file written by an earlier release carries the route
+    # under security.auth.baseUrl; 1.0 has no such key.
+    cfg = json.loads(out.read_text())
+    cfg["security"] = {"auth": {"baseUrl": "http://127.0.0.1:1/v1",
+                                "selectedType": "openai"}}
+    out.write_text(json.dumps(cfg, indent=2))
+    out = ctl.write_qwen_config(spec, [spec])
+    cfg = json.loads(out.read_text())
+    assert "baseUrl" not in cfg["security"]["auth"]
+    # The account auth type is the user's own choice and is left alone.
+    assert cfg["security"]["auth"]["selectedType"] == "openai"
+
+
+def test_qwen_writer_keeps_legacy_route_and_is_idempotent(
+    env, with_pulled_model,
+):
+    spec = with_pulled_model["9b"]
+    out = ctl.write_qwen_config(spec, [spec])
+    ctl.write_qwen_config(spec, [spec])
+    cfg = json.loads(out.read_text())
+    entries = cfg["modelProviders"]["openai"]
+    assert len(entries) == 1
+    assert entries[0]["id"] == spec.model_id
+    assert entries[0]["envKey"] == "TOKI_AUTH_TOKEN"
+    assert cfg["model"] == {"name": spec.model_id}
+
+
+def test_qwen_writer_omits_api_key_when_none_is_configured(
+    env, with_pulled_model, monkeypatch,
+):
+    monkeypatch.setattr(ctl, "qwen_major_version", lambda: 1)
+    monkeypatch.setattr(ctl, "configured_auth_token", lambda: None)
+    spec = with_pulled_model["9b"]
+    out = ctl.write_qwen_config(spec, [spec])
+    cfg = json.loads(out.read_text())
+    # An empty key is the schema's unauthenticated endpoint; the daemon
+    # accepts loopback requests when no token is configured.
+    assert cfg["providers"]["tokirecur"]["apiKey"] == ""
 
 
 def test_kilo_writer_honors_config_dir(env, with_pulled_model, monkeypatch):
