@@ -109,6 +109,37 @@ def _merge_assistant(previous: dict, message: dict) -> None:
         previous["name"] = name
 
 
+def _demote_system_messages(messages: list[dict]) -> list[dict]:
+    """Turn a mid-conversation system message into a user message.
+
+    llama-server's chat templates raise on a system message that is
+    not the first one - "System message must be at the beginning" -
+    and the request fails with a 500 that reads like a server fault.
+
+    The clients that trigger it are the ones that inject context
+    mid-turn: Claude Code sends a hook result as a system message in
+    the middle of the conversation, and Codex sends its work-state
+    the same way. Both are really user-visible context, so they are
+    demoted rather than dropped.
+
+    The leading system message is left where it is: it is the
+    instruction preamble, and moving it would change the prompt the
+    model was given.
+    """
+    out: list[dict] = []
+    for index, raw in enumerate(messages):
+        if not isinstance(raw, dict) or index == 0:
+            out.append(raw)
+            continue
+        if raw.get("role") != "system":
+            out.append(raw)
+            continue
+        demoted = dict(raw)
+        demoted["role"] = "user"
+        out.append(demoted)
+    return out
+
+
 def _normalize_messages(messages: list[dict]) -> list[dict]:
     out: list[dict] = []
     for raw in messages:
@@ -125,6 +156,7 @@ def _normalize_messages(messages: list[dict]) -> list[dict]:
             _merge_assistant(out[-1], message)
             continue
         out.append(message)
+    out = _demote_system_messages(out)
     return out
 
 

@@ -30,6 +30,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   model row shows the active mode's badge.
 
 ### Fixed
+- **A mid-conversation system message no longer 500s the model.** The
+  chat templates raise on a system message that is not the first one -
+  "System message must be at the beginning" - and the request fails
+  with a Jinja error that reads like a server fault. The clients that
+  trigger it inject context mid-turn: Claude Code sends a hook result as
+  a system message, and Codex sends its work state the same way. Both
+  are really user-visible context, so they are demoted to a user turn;
+  the leading instruction preamble stays where it was.
 - **Qwen Code 1.0 launches on the local model again.** The 1.0 preview
   replaced the `modelProviders` settings section with `providers` and
   removed the `--openai-base-url` and `--auth-type` flags, so the old

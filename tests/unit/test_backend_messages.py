@@ -103,3 +103,50 @@ def test_complete_openai_sends_normalized_messages():
     assert client.payload["messages"] == [
         {"role": "assistant", "content": "a\nb"}
     ]
+
+
+def test_a_mid_conversation_system_message_is_demoted():
+    """llama-server's chat templates reject a system message that is
+    not the first one.
+
+    The clients that trigger it inject context mid-turn: Claude Code
+    sends a hook result as a system message, and Codex sends its
+    work-state the same way. Both are really user-visible context, so
+    they are demoted rather than dropped - and the request 500s
+    otherwise, with a Jinja error that reads like a server fault.
+    """
+    messages = [
+        {"role": "system", "content": "instruction preamble"},
+        {"role": "user", "content": "hi"},
+        {"role": "system", "content": "SessionStart hook output"},
+        {"role": "assistant", "content": "ok"},
+        {"role": "user", "content": "again"},
+    ]
+    out = _normalize_messages(messages)
+    assert [m["role"] for m in out] == [
+        "system", "user", "user", "assistant", "user",
+    ]
+    # The content is kept - only the role changes.
+    assert out[2]["content"] == "SessionStart hook output"
+    # The leading instruction preamble stays where it was.
+    assert out[0]["role"] == "system"
+    assert out[0]["content"] == "instruction preamble"
+
+
+def test_a_leading_system_message_is_never_demoted():
+    messages = [
+        {"role": "system", "content": "instruction preamble"},
+        {"role": "user", "content": "hi"},
+    ]
+    assert _normalize_messages(messages) == messages
+
+
+def test_two_mid_conversation_system_messages_are_both_demoted():
+    messages = [
+        {"role": "system", "content": "preamble"},
+        {"role": "system", "content": "first"},
+        {"role": "user", "content": "hi"},
+        {"role": "system", "content": "second"},
+    ]
+    out = _normalize_messages(messages)
+    assert [m["role"] for m in out] == ["system", "user", "user", "user"]
