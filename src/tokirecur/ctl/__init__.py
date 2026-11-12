@@ -43,7 +43,32 @@ except ImportError:  # pragma: no cover - Python 3.10
 import tomli_w
 
 from .. import winproc
+from ..adapters import (
+    KIND_DRAFT,
+    KIND_LORA,
+    AdapterMode,
+    active_mode,
+    active_mode_id,
+    adapter_launch_args,
+    adapter_modes,
+    attached_vram_gb,
+    kind_for_path,
+    mode_fields,
+    mode_id_for,
+    quant_of,
+    resolve_draft,
+)
 from ..claude_compat import approve_api_key
+from ..draft import (
+    DRAFT_N_MAX_DEFAULT,
+    SPEC_TYPE_DRAFT_DFLASH,
+    DraftSpec,
+    draft_needs_dspine,
+    draft_support_hint,
+    draft_supported_by,
+    dspine_adapter_hint,
+    looks_like_dspine_adapter,
+)
 from ..ggufmeta import GgufRope, read_gguf_meta
 from ..ggufsplit import (
     expected_part_names,
@@ -356,6 +381,28 @@ class ModelSpec:
     # a space-joined "--mmproj /path/to.gguf" dies at startup with
     # `invalid argument: --mmproj /path/to.gguf`.
     mmproj: str = ""
+    # A speculative-decoding draft for this model (a DSpine or DFlash2
+    # draft model). It is not a model in its own right: it reads this
+    # model's hidden states, so it belongs to this model alone and can
+    # never be launched by itself. Held as its own field for the same
+    # reason as mmproj — a path and a pairing, not argv flags — and
+    # because the fit planner has to know a drafter is coming.
+    draft: str = ""
+    # The rest of the draft's configuration: the speculation family, how
+    # many tokens it may propose, and where it came from.
+    draft_spec_type: str = ""
+    draft_n_max: int = 0
+    draft_repo: str = ""
+    draft_file: str = ""
+    draft_extra_args: list[str] = field(default_factory=list)
+    # Every adapter installed for this base model, as a selectable mode.
+    # An adapter is a second GGUF that cannot serve on its own (a DSpine
+    # draft, a LoRA); it is a way to run this model, not a model. The
+    # active entry's configuration is projected onto the flat draft*
+    # fields above so launch/fit code has one thing to read.
+    adapters: list[dict[str, Any]] = field(default_factory=list)
+    # Which catalog entry is active. "" runs the base model.
+    adapter_mode: str = ""
     # Image-generation stacks (binary "sd-server"): the diffusion GGUF
     # rides in `gguf` like any model, but the pipeline needs two more
     # weights beside it. Held as their own fields for the same reason as
@@ -869,8 +916,14 @@ def _model_weight_gb(spec: ModelSpec) -> float:
     if total < 0:
         total = 0
     # Not a split: a vision model's projector and a diffusion model's
-    # companions are separate weights the launch loads too.
+    # companions are separate weights the launch loads too. The
+    # projector matters even more beside a drafter: the DSpine card
+    # warns that auto-fit which ignores both leaves no room, and the
+    # first image request crashes.
     try:
+        mmproj = getattr(spec, "mmproj", "") or ""
+        if mmproj and Path(mmproj).is_file():
+            total += Path(mmproj).stat().st_size
         if _spec_is_image(spec):
             for companion in (spec.vae, spec.llm):
                 if companion and Path(companion).is_file():
@@ -936,6 +989,10 @@ def _clamp_ctx(spec: ModelSpec, avail_gb: float | None = None,
         except (AttributeError, FileNotFoundError, OSError):
             weight_gb = 0.0
     budget = avail_gb - weight_gb * 1.2 - 4.0
+    # The active adapter is not free: a drafter brings its weights, its
+    # own KV cache and the target's recurrent-state copies; a LoRA
+    # brings its own file. All of it comes out of this budget.
+    budget -= attached_vram_gb(spec, cap, getattr(spec, "parallel", 1))
     if not math.isfinite(budget):
         # RAM can't be measured (inf) or the measurement is garbage:
         # keep the configured window and let llama-server's own
@@ -987,6 +1044,13 @@ def _fit_plan(spec: ModelSpec, avail_gb: float | None = None,
         except (AttributeError, FileNotFoundError, OSError):
             weight_gb = 0.0
     budget = avail_gb - weight_gb * 1.2 - 4.0
+    # A drafter has to fit too. Upstream warns about exactly this:
+    # auto-fit leaves no room for the draft, and the server then fails
+    # to allocate and falls back to host copies (or the first image
+    # request crashes). The adapter's weights, its own small KV cache
+    # and the target's per-drafted-token recurrent-state copies all
+    # come out of the same budget.
+    budget -= attached_vram_gb(spec, cap, getattr(spec, "parallel", 1))
     if _kv_bytes_per_token(spec) is None or not math.isfinite(budget) or budget <= 0:
         # Unknown metadata/RAM (or weights alone don't fit — `_check_ram`
         # raises before launch): keep the spec's own config untouched.
@@ -1059,6 +1123,52 @@ def _check_ram(spec: ModelSpec) -> None:
         )
 
 
+def _check_draft(spec: ModelSpec) -> None:
+    """Refuse to start when the selected adapter mode cannot be attached.
+
+    An adapter is a second GGUF that changes how the base runs. A
+    missing file, a mode id that is no longer in the catalog, or a
+    build that cannot map the adapter's tensors would each turn a
+    working model into a stack that fails deep in the model load. Check
+    here, where the message can say what to do.
+    """
+    wanted = str(getattr(spec, "adapter_mode", "") or "").strip()
+    mode = active_mode(spec)
+    if mode is None:
+        if not wanted:
+            return
+        raise RuntimeError(
+            f"adapter mode '{wanted}' is not in '{spec.name}''s adapter "
+            f"catalog. Pick another mode in settings, or re-install the "
+            f"adapter."
+        )
+    if not mode.exists:
+        raise RuntimeError(
+            f"the adapter for '{spec.name}' is missing: {mode.gguf}. "
+            f"Re-install it, or select the base model in settings."
+        )
+    if mode.kind not in (KIND_DRAFT, KIND_LORA):
+        raise RuntimeError(
+            f"'{spec.name}' has adapter mode '{mode.id}' of kind "
+            f"'{mode.kind}', which this toki cannot attach."
+        )
+    if mode.kind != KIND_DRAFT:
+        return
+    draft = mode.draft_spec()
+    if draft is None:
+        return
+    # An ordinary DFlash2 draft runs on a stock build; only a DSpine
+    # conversion carries the tensors stock llama.cpp cannot map.
+    if not draft_needs_dspine(draft):
+        return
+    binary = _resolve_binary(spec)
+    if not draft_supported_by(binary):
+        raise RuntimeError(
+            f"'{spec.name}' has a DSpine draft that {binary} cannot load. "
+            f"{draft_support_hint()}"
+        )
+
+
 def load_registry(path: Path | None = None) -> list[ModelSpec]:
     """Load the model registry, creating the default file on first run.
 
@@ -1123,6 +1233,14 @@ def _build_spec(m: dict[str, Any]) -> ModelSpec:
     m.setdefault("binary", "llama-server")
     m.setdefault("extra_args", [])
     m.setdefault("source", "default")
+    m.setdefault("draft", "")
+    m.setdefault("draft_spec_type", "")
+    m.setdefault("draft_n_max", 0)
+    m.setdefault("draft_repo", "")
+    m.setdefault("draft_file", "")
+    m.setdefault("draft_extra_args", [])
+    m.setdefault("adapters", [])
+    m.setdefault("adapter_mode", "")
     return ModelSpec(raw=raw, **m)
 
 
@@ -1488,6 +1606,10 @@ def _effort_list(v: str) -> list[str]:
 
 _EDITABLE_FIELDS: dict[str, Callable[[str], Any]] = {
     "gguf": str,
+    # The active adapter mode ("" or BASE_MODE_ID for the base model).
+    # The full projection is written by update_spec_field; this entry
+    # only makes the field editable from the settings pane.
+    "adapter_mode": str,
     "llama_port": int,
     "daemon_port": int,
     "ctx_size": int,
@@ -1507,7 +1629,7 @@ _EDITABLE_FIELDS: dict[str, Callable[[str], Any]] = {
 # launch window changes; the running server cannot honour the new value).
 _RESTART_REQUIRED_FIELDS = frozenset({
     "ctx_size", "kv", "parallel", "binary", "gguf",
-    "llama_port", "daemon_port",
+    "llama_port", "daemon_port", "adapter_mode",
 })
 
 # Fields whose change only affects CLI client configs (opencode.json
@@ -1533,9 +1655,11 @@ def update_spec_field(
     effect so the edit actually takes effect on the running stack:
 
       * ``ctx_size``, ``kv``, ``parallel``, ``binary``, ``gguf``,
-        ``llama_port``, ``daemon_port`` → ``use_model(name)`` (stops
-        the running daemon if any, restarts with the new settings,
-        rewrites the model-capable CLI configs).
+        ``llama_port``, ``daemon_port``, ``adapter_mode`` →
+        ``use_model(name)`` (stops the running daemon if any, restarts
+        with the new settings, rewrites the model-capable CLI configs).
+        ``adapter_mode`` takes a catalog id (or ``__base__`` / ``""``)
+        and rewrites the flat draft projection in the same write.
 
       * ``max_tokens``, ``model_id``, ``reasoning`` → ``sync_cli_configs``
         only (no daemon restart).
@@ -1567,7 +1691,15 @@ def update_spec_field(
             raise KeyError(f"unknown model '{name}'")
         spec = specs[idx]
         new_raw = dict(spec.raw)
-        new_raw[field] = parsed
+        if field == "adapter_mode":
+            # One edit moves three things together: the catalog (a mode
+            # found beside the model gets registered by being picked),
+            # the active id, and the flat draft fields the launch and
+            # fit paths read. Writing only the id would leave the stack
+            # reading the previous adapter.
+            new_raw.update(mode_fields(spec, parsed))
+        else:
+            new_raw[field] = parsed
         # Mirror ModelSpec defaults so the dataclass accepts the new raw.
         new_raw.setdefault("label", name)
         new_raw.setdefault("kv", "f16")
@@ -1582,6 +1714,15 @@ def update_spec_field(
         new_raw.setdefault("source", "default")
         # Always re-declare key so the YAML reflects the change.
         new_spec = ModelSpec(raw=new_raw, **new_raw)
+        # A mode the build cannot attach is not a mode this stack can
+        # run. Refuse the switch before writing, with the same message
+        # the launch gate would give, instead of saving a model that
+        # cannot start. `apply=False` is the staging path.
+        if field == "adapter_mode" and apply:
+            try:
+                _check_draft(new_spec)
+            except RuntimeError as e:
+                raise ValueError(str(e)) from e
         specs[idx] = new_spec
         _atomic_write_text(
             reg,
@@ -1952,7 +2093,8 @@ def _resolve_split_gaps(
     return linked
 
 
-def _auto_ctx_size(gguf: Path, *, parallel: int, kv: str) -> int:
+def _auto_ctx_size(gguf: Path, *, parallel: int, kv: str,
+                   draft: DraftSpec | None = None) -> int:
     """Pick a context for a fresh pull that fits this machine.
 
     The request is the window the model can actually address — its
@@ -1965,6 +2107,12 @@ def _auto_ctx_size(gguf: Path, *, parallel: int, kv: str) -> int:
     When the GGUF metadata is unreadable the KV cannot be sized, so the
     conservative 16k default applies instead of the old flat 200k (still
     capped at the model max when that IS known).
+
+    A drafter, when one is attached, comes out of the same budget: its
+    weights, its own sliding-window KV cache, and the target's
+    recurrent-state copies per drafted token. The DSpine card warns
+    that auto-fit otherwise leaves no room for the drafter and the
+    server falls back to host copies (or dies on the first image).
     """
     meta = read_gguf_meta(gguf)
     model_max = meta.context_length if (meta and meta.context_length) else None
@@ -1977,8 +2125,537 @@ def _auto_ctx_size(gguf: Path, *, parallel: int, kv: str) -> int:
         daemon_port=0, ctx_size=max(window or _CTX_FLOOR, _CTX_FLOOR),
         parallel=parallel, kv=kv,
         max_tokens=1, model_id="_auto",
+        draft=draft.gguf if draft is not None else "",
+        draft_spec_type=draft.spec_type if draft is not None else "",
+        draft_n_max=draft.n_max if draft is not None else 0,
     )
     return max(_CTX_FLOOR, _clamp_ctx(placeholder))
+
+
+def _pull_draft(
+    *,
+    target_file: str,
+    local_dir: Path,
+    endpoint: str | None,
+    want: bool | None,
+    quant: str,
+    n_max: int | None,
+    binary: str,
+) -> dict[str, Any]:
+    """Fetch the speculative-decoding draft for a target, if it has one.
+
+    The draft is published by the model authors in their own
+    repository, so it is fetched from there — nothing is re-hosted. The
+    pairing is resolved from the target's own name (see
+    :mod:`tokirecur.draftmatch`): the draft's repository is the
+    target's family plus ``-DSpine-b16-GGUF``.
+
+    An adapter is registered as a selectable mode. It is *activated*
+    only when the installed llama-server can load it: stock llama.cpp
+    refuses a DSpine draft outright, so switching to one by default
+    would turn a working model into a stack that will not start —
+    the opposite of plug and play. ``want=True`` (the explicit
+    ``--draft``) fetches it and registers the mode even on a build that
+    cannot load it yet, but leaves the model on its base mode; the
+    settings dropdown then offers it for when the build is upgraded.
+
+    Returns the registry fields to merge into the target's entry. An
+    empty dict means "no adapter", which is the normal answer for a
+    model that has none.
+    """
+    if want is False:
+        return {}
+    from ..draftmatch import find_draft
+
+    try:
+        from huggingface_hub import HfApi
+    except ImportError:
+        if want:
+            raise RuntimeError(
+                "huggingface_hub is required to fetch a draft model "
+                "(pip install huggingface_hub)"
+            ) from None
+        return {}
+    candidate = find_draft(
+        target_file, quant=quant, api=HfApi(endpoint=endpoint),
+    )
+    if candidate is None:
+        if want:
+            raise RuntimeError(
+                f"no speculative-decoding draft found for "
+                f"{Path(target_file).name}. Pass --no-draft to skip the "
+                f"draft."
+            )
+        return {}
+
+    capable = draft_supported_by(binary)
+    if not capable and not want:
+        click.echo(
+            f"note: {Path(target_file).name} has a DSpine adapter "
+            f"({candidate.repo}/{candidate.file}), but this llama-server "
+            f"cannot load it — the model is registered without it. "
+            f"{draft_support_hint()}"
+        )
+        return {}
+
+    try:
+        from huggingface_hub import hf_hub_download
+
+        fetched = hf_hub_download(
+            candidate.repo,
+            candidate.file,
+            local_dir=str(local_dir),
+            endpoint=endpoint,
+        )
+    except Exception as e:
+        if want:
+            raise RuntimeError(
+                f"could not fetch the draft model {candidate.repo}"
+                f"/{candidate.file}: {e}"
+            ) from e
+        logger.info("draft fetch failed: %s", e)
+        click.echo(
+            f"note: could not fetch the draft model {candidate.repo}"
+            f"/{candidate.file} ({e}); the model is registered without it."
+        )
+        return {}
+
+    if n_max is None:
+        n_max = _draft_n_max_for(binary)
+    mode = AdapterMode(
+        id=mode_id_for(fetched),
+        label=f"DSpine {candidate.quant}".strip(),
+        kind=KIND_DRAFT,
+        gguf=str(fetched),
+        spec_type=SPEC_TYPE_DRAFT_DFLASH,
+        n_max=n_max,
+        repo=candidate.repo,
+        file=candidate.file,
+    )
+    if not capable:
+        click.echo(
+            f"note: fetched the DSpine adapter for "
+            f"'{Path(target_file).name}' and registered it as selectable "
+            f"mode '{mode.choice_label}', but this llama-server cannot "
+            f"load it yet, so the model stays on its base mode. "
+            f"{draft_support_hint()}"
+        )
+        logger.info(
+            "adapter mode for %s (inactive): %s (%s)",
+            target_file, candidate.repo, Path(candidate.file).name,
+        )
+        return {
+            "adapters": [mode.to_dict()],
+            "adapter_mode": "",
+        }
+    logger.info(
+        "adapter mode for %s: %s (%s)",
+        target_file, candidate.repo, Path(candidate.file).name,
+    )
+    return {
+        "adapters": [mode.to_dict()],
+        "adapter_mode": mode.id,
+        "draft": str(fetched),
+        "draft_spec_type": SPEC_TYPE_DRAFT_DFLASH,
+        "draft_n_max": n_max,
+        "draft_repo": candidate.repo,
+        "draft_file": candidate.file,
+    }
+
+
+def _draft_n_max_for(binary: str) -> int:
+    """The draft block size to start from on this backend.
+
+    The DSpine card's tuning table is explicit: 15 on CUDA, ROCm and
+    SYCL, 2-3 on Vulkan, where verifying a long block costs more than
+    the draft saves. Starting at the card's value means a fresh pull is
+    useful without a tuning pass; ``--draft-n-max`` still overrides it.
+    """
+    try:
+        from ..diagnose import binary_backend
+
+        backend = (binary_backend(binary) or "").lower()
+    except Exception:
+        backend = ""
+    return 3 if backend == "vulkan" else DRAFT_N_MAX_DEFAULT
+
+
+def _model_dir(spec: ModelSpec) -> Path | None:
+    """The directory a spec's weights live in, so an adapter can join them."""
+    gguf = str(getattr(spec, "gguf", "") or "").strip()
+    if not gguf:
+        return None
+    path = Path(gguf).expanduser()
+    if path.is_absolute():
+        return path.parent
+    return Path.home() / "models" / spec.name
+
+
+def _family_key(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(text or "").lower())
+
+
+def _spec_family_keys(spec: ModelSpec) -> set[str]:
+    from ..draftmatch import target_family
+
+    keys: set[str] = set()
+    for text in (getattr(spec, "gguf", ""), getattr(spec, "label", ""),
+                 spec.name):
+        text = str(text or "").strip()
+        if not text:
+            continue
+        name = Path(text).name
+        keys.add(_family_key(target_family(name)))
+        keys.add(_family_key(name))
+    return {k for k in keys if k}
+
+
+def find_target_for_adapter(
+    specs: list[ModelSpec], source: str,
+) -> ModelSpec | None:
+    """The installed base model an adapter belongs to, by family name.
+
+    An adapter cannot choose its own base: a DSpine draft for
+    Qwen3.8-27B is meaningless to any other model. The repository (or
+    file) names the target family, and the registry is matched against
+    it. Ambiguity is returned to the caller rather than guessed.
+    """
+    from ..draftmatch import adapter_target_family
+
+    family = adapter_target_family(source)
+    key = _family_key(family)
+    if not key:
+        return None
+    matches = [s for s in specs if key in _spec_family_keys(s)]
+    if len(matches) > 1:
+        raise RuntimeError(
+            f"several installed models match the adapter's target "
+            f"({family}): " + ", ".join(s.name for s in matches)
+            + ". Name the base model with --model."
+        )
+    return matches[0] if matches else None
+
+
+def _download_adapter(
+    repo_id: str,
+    *,
+    file: str | None,
+    quant: str,
+    local_dir: Path,
+    endpoint: str | None,
+) -> tuple[str, str]:
+    """Fetch one adapter GGUF from its authors' repository.
+
+    Nothing is re-hosted: the adapter is published by the authors, and
+    the pull points at that repository. Returns ``(repo, local_path)``.
+    """
+    try:
+        from huggingface_hub import HfApi, hf_hub_download
+    except ImportError:
+        raise RuntimeError(
+            "huggingface_hub is required to install an adapter "
+            "(pip install huggingface_hub)"
+        ) from None
+    api = HfApi(endpoint=endpoint)
+    try:
+        files = list(api.list_repo_files(repo_id))
+    except Exception as e:
+        raise RuntimeError(f"cannot reach '{repo_id}' on Hugging Face: {e}") from e
+    ggufs = [f for f in files if f.endswith(".gguf")]
+    from ..draftmatch import _DSPINE_QUANT_FILES
+
+    wanted = _DSPINE_QUANT_FILES.get(quant, quant)
+    if file is not None:
+        if file not in ggufs:
+            raise RuntimeError(
+                f"no file '{file}' in '{repo_id}'; candidates: "
+                + (", ".join(ggufs) if ggufs else "none")
+            )
+        chosen = file
+    else:
+        picks = [f for f in ggufs if wanted.lower() in Path(f).name.lower()]
+        if picks:
+            chosen = sorted(picks)[0]
+        elif len(ggufs) == 1:
+            chosen = ggufs[0]
+        elif not ggufs:
+            raise RuntimeError(f"'{repo_id}' has no GGUF files")
+        else:
+            raise RuntimeError(
+                f"'{repo_id}' has several GGUF files and none matches "
+                f"{wanted}; pick one with --file: " + ", ".join(ggufs[:8])
+            )
+    local_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        fetched = hf_hub_download(
+            repo_id, chosen, local_dir=str(local_dir), endpoint=endpoint,
+        )
+    except Exception as e:
+        raise RuntimeError(
+            f"could not fetch the adapter {repo_id}/{chosen}: {e}"
+        ) from e
+    return chosen, fetched
+
+
+def install_adapter(
+    source: str,
+    *,
+    model: str | None = None,
+    file: str | None = None,
+    quant: str = "Q4_K_M",
+    endpoint: str | None = None,
+    activate: bool | None = None,
+    n_max: int | None = None,
+    apply: bool = False,
+    registry: Path | None = None,
+) -> tuple[ModelSpec, AdapterMode, bool]:
+    """Install an adapter as a selectable mode of its base model.
+
+    ``source`` is either a GGUF on disk (a file dropped beside the
+    model, or anywhere with ``--model`` naming the base) or a Hugging
+    Face repository that publishes an adapter. The adapter is copied or
+    fetched into the base model's own directory, added to its
+    ``adapters:`` catalog, and — when the installed llama-server can
+    actually load it and the model is not already using another mode —
+    made the active mode.
+
+    ``activate=False`` registers the mode without switching;
+    ``activate=None`` (the default) switches only when the mode is the
+    first one and the build supports it. An explicit ``True`` on a
+    build that cannot load the adapter registers it inactive and says
+    why, instead of breaking a working stack.
+
+    Returns ``(updated_spec, mode, activated)``.
+    """
+    specs = load_registry(registry)
+    if not specs:
+        raise RuntimeError(
+            "the registry is empty — pull the base model first, then "
+            "install its adapter."
+        )
+
+    src = Path(source).expanduser()
+    from_file = src.is_file()
+    if not from_file and src.suffix.lower() == ".gguf":
+        raise RuntimeError(f"adapter file not found: {source}")
+
+    target: ModelSpec | None = None
+    if model:
+        target = next((s for s in specs if s.name == model), None)
+        if target is None:
+            raise KeyError(f"unknown model '{model}'")
+    elif from_file:
+        parent = src.resolve().parent
+        same_dir = [
+            s for s in specs
+            if (d := _model_dir(s)) is not None
+            and d.resolve() == parent
+        ]
+        if len(same_dir) == 1:
+            target = same_dir[0]
+        elif len(same_dir) > 1:
+            raise RuntimeError(
+                f"'{src}' sits beside several registered models; name the "
+                f"base with --model: " + ", ".join(s.name for s in same_dir)
+            )
+    if target is None:
+        target = find_target_for_adapter(specs, source)
+    if target is None:
+        from ..draftmatch import adapter_target_family
+
+        family = adapter_target_family(source)
+        raise RuntimeError(
+            f"no installed model matches this adapter's target "
+            f"({family or source}). Pull the base model first, then "
+            f"install the adapter, or name the base with --model."
+        )
+
+    repo = ""
+    remote_file = ""
+    local_dir = _model_dir(target)
+    if local_dir is None:
+        raise RuntimeError(f"'{target.name}' has no model directory")
+    if from_file:
+        local = src.resolve()
+        # A file already discoverable for this target (its own folder,
+        # or a sibling adapter folder named after the family) is used
+        # where it is: copying a 1.26 GB adapter to say "install" would
+        # be a duplicate, not an install.
+        from ..adapters import discover_adapters
+
+        discovered = {
+            str(Path(m.gguf).resolve()) for m in discover_adapters(target)
+        }
+        if str(local) not in discovered and local.parent != local_dir.resolve():
+            local_dir.mkdir(parents=True, exist_ok=True)
+            dest = local_dir / local.name
+            if dest.resolve() != local:
+                shutil.copy2(local, dest)
+            local = dest
+    else:
+        repo = source
+        remote_file, fetched = _download_adapter(
+            source, file=file, quant=quant,
+            local_dir=local_dir, endpoint=endpoint,
+        )
+        local = Path(fetched).resolve()
+
+    kind = kind_for_path(local)
+    if kind is None:
+        raise RuntimeError(
+            f"'{local.name}' does not look like an adapter: it carries no "
+            f"DSpine tensors and no LoRA tensors. A base model is not an "
+            f"adapter; pull it as a model instead."
+        )
+    if kind == KIND_DRAFT:
+        label = "DSpine" + (
+            f" {quant_of(local)}" if looks_like_dspine_adapter(local.name) else ""
+        )
+    else:
+        label = f"LoRA {local.stem}"
+    if kind == KIND_DRAFT and n_max is None:
+        n_max = _draft_n_max_for(_resolve_binary(target))
+    mode = AdapterMode(
+        id=mode_id_for(local.name),
+        label=label.strip(),
+        kind=kind,
+        gguf=str(local),
+        repo=repo,
+        file=remote_file,
+        n_max=n_max or DRAFT_N_MAX_DEFAULT,
+    )
+
+    capable = True
+    if kind == KIND_DRAFT:
+        draft = mode.draft_spec()
+        needs_dspine = bool(draft is not None and draft_needs_dspine(draft))
+        if needs_dspine:
+            capable = draft_supported_by(_resolve_binary(target))
+    if activate is None:
+        # First adapter on a model that is running its base: switch it
+        # on. A model already running another mode (including a legacy
+        # flat draft) keeps that mode until the person picks.
+        activate = capable and active_mode(target) is None
+    if not capable:
+        click.echo(
+            f"note: registered '{mode.choice_label}' as a mode of "
+            f"'{target.name}', but this llama-server cannot load it yet, "
+            f"so the model stays on its current mode. {draft_support_hint()}"
+        )
+        activate = False
+
+    reg = registry or DEFAULT_REGISTRY
+    with _flock(reg):
+        specs = load_registry(reg)
+        idx = next((i for i, s in enumerate(specs) if s.name == target.name), None)
+        if idx is None:
+            raise KeyError(f"unknown model '{target.name}'")
+        current = specs[idx]
+        catalog = [m.to_dict() for m in adapter_modes(current)]
+        # Introducing a catalog to a legacy entry must not forget the
+        # mode it is already running: the flat draft becomes catalog
+        # entry zero and stays active unless this install activates
+        # another.
+        legacy: AdapterMode | None = None
+        if not catalog:
+            legacy = active_mode(current)
+            if legacy is not None:
+                catalog.append(legacy.to_dict())
+        existing = next(
+            (m for m in adapter_modes(current) if m.id == mode.id), None
+        )
+        if existing is not None:
+            if Path(existing.gguf).resolve() == Path(mode.gguf).resolve():
+                mode = existing
+            else:
+                suffix = 2
+                while any(m.id == f"{mode.id}-{suffix}"
+                          for m in adapter_modes(current)):
+                    suffix += 1
+                mode = AdapterMode(
+                    id=f"{mode.id}-{suffix}",
+                    label=mode.choice_label,
+                    kind=mode.kind,
+                    gguf=mode.gguf,
+                    spec_type=mode.spec_type,
+                    n_max=mode.n_max,
+                    repo=mode.repo,
+                    file=mode.file,
+                    extra_args=mode.extra_args,
+                )
+                catalog.append(mode.to_dict())
+        else:
+            catalog.append(mode.to_dict())
+
+        raw = dict(current.raw)
+        raw["adapters"] = catalog
+        if legacy is not None and not activate:
+            # Keep the legacy mode as the active one; its flat fields
+            # are already the projection of it.
+            raw["adapter_mode"] = legacy.id
+        merged = ModelSpec(raw=raw, **raw)
+        if activate:
+            raw.update(mode_fields(merged, mode.id))
+        new_spec = ModelSpec(raw=raw, **raw)
+        specs[idx] = new_spec
+        _atomic_write_text(
+            reg,
+            yaml.safe_dump({"models": [s.raw for s in specs]}, sort_keys=False),
+        )
+        invalidate_registry_cache(reg)
+
+    if apply and activate:
+        try:
+            use_model(new_spec.name, stop_others=False, registry=reg,
+                      force_restart=True)
+        except (RuntimeError, OSError) as exc:
+            logger.warning(
+                "could not restart '%s' after installing its adapter: %s",
+                new_spec.name, exc,
+            )
+            raise
+    return new_spec, mode, activate
+
+
+def remove_adapter(
+    model: str,
+    mode_id: str,
+    *,
+    registry: Path | None = None,
+) -> tuple[ModelSpec, bool]:
+    """Remove an adapter mode from a model, switching to base if active.
+
+    Returns ``(updated_spec, was_active)``. The adapter file is left on
+    disk: it may be shared, and deleting weights is not a settings edit.
+    """
+    reg = registry or DEFAULT_REGISTRY
+    was_active = False
+    with _flock(reg):
+        specs = load_registry(reg)
+        idx = next((i for i, s in enumerate(specs) if s.name == model), None)
+        if idx is None:
+            raise KeyError(f"unknown model '{model}'")
+        current = specs[idx]
+        catalog = adapter_modes(current)
+        keep = [m for m in catalog if m.id != mode_id]
+        if len(keep) == len(catalog):
+            raise KeyError(
+                f"'{model}' has no adapter mode '{mode_id}'"
+            )
+        raw = dict(current.raw)
+        raw["adapters"] = [m.to_dict() for m in keep]
+        was_active = active_mode_id(current) == mode_id
+        if was_active:
+            merged = ModelSpec(raw=raw, **raw)
+            raw.update(mode_fields(merged, ""))
+        new_spec = ModelSpec(raw=raw, **raw)
+        specs[idx] = new_spec
+        _atomic_write_text(
+            reg,
+            yaml.safe_dump({"models": [s.raw for s in specs]}, sort_keys=False),
+        )
+        invalidate_registry_cache(reg)
+    return new_spec, was_active
 
 
 def pull_model(
@@ -1992,6 +2669,9 @@ def pull_model(
     reasoning: str = "auto",
     registry: Path | None = None,
     choose_file: Callable[[list[tuple[str, int | None]]], str] | None = None,
+    draft: bool | None = None,
+    draft_quant: str = "Q4_K_M",
+    draft_n_max: int | None = None,
 ) -> ModelSpec:
     """Download a GGUF from Hugging Face (mirror-friendly) and register it.
 
@@ -2009,6 +2689,15 @@ def pull_model(
     existing spec's custom build (e.g. the machine's tuned ROCm
     llama.cpp) when available; ``reasoning`` selects the thinking-model
     handling.
+
+    ``draft`` controls the speculative-decoding draft: True fetches the
+    DSpine draft that belongs to this target, False skips it, and None
+    (the default) fetches one when the target has one and the installed
+    llama-server can load it. The draft is downloaded from the
+    repository that publishes it — nothing is re-hosted — and
+    registered beside the target, so the stack starts with the drafter
+    already attached. ``draft_n_max`` defaults to the DSpine card's
+    value for the build's backend (15 on CUDA/ROCm/SYCL, 3 on Vulkan).
     """
     if not name:
         name = repo_id.rstrip("/").rsplit("/", 1)[-1]
@@ -2020,6 +2709,40 @@ def pull_model(
     specs = load_registry(registry)
     if any(s.name == name for s in specs):
         raise ValueError(f"model '{name}' already exists in the registry")
+
+    # A DSpine repository holds adapters, not targets. Pulling one is a
+    # request to install a mode of the target that is already here; when
+    # the target is not installed there is nothing to attach it to, and
+    # the explanation says which model to pull first.
+    if looks_like_dspine_adapter(repo_id):
+        from ..draftmatch import adapter_target_family
+
+        target = find_target_for_adapter(specs, repo_id)
+        if target is None:
+            family = adapter_target_family(repo_id)
+            raise RuntimeError(
+                f"'{repo_id}' is DSpine adapter weights, not a model. It "
+                f"attaches to the {family} target, and no installed model "
+                f"matches that. Pull the target first (for example "
+                f"`toki model pull <owner>/{family}-GGUF`) and run this "
+                f"again; the adapter then becomes a selectable mode of it."
+            )
+        activate = None if draft is None else bool(draft)
+        spec, mode, active = install_adapter(
+            repo_id,
+            model=target.name,
+            file=file,
+            quant=draft_quant,
+            endpoint=endpoint,
+            activate=activate,
+            n_max=draft_n_max,
+            registry=registry,
+        )
+        click.echo(
+            f"installed adapter '{mode.choice_label}' for '{spec.name}'"
+            + (" (active)" if active else " (selectable; not active)")
+        )
+        return spec
 
     # A projector is not a model. Caught before the hub round-trip so the
     # error is the same offline as online.
@@ -2074,6 +2797,13 @@ def pull_model(
                 + ", ".join(candidates[:8])
             )
 
+    # A DSpine adapter is not a model. It reads its target's hidden
+    # states and cannot answer a prompt on its own, so pulling one as a
+    # model would register a stack that can never serve. Caught before
+    # the download so nobody waits for 1.26 GB to learn that.
+    if looks_like_dspine_adapter(filename):
+        raise RuntimeError(dspine_adapter_hint(filename))
+
     local_dir = Path.home() / "models" / name
     local_dir.mkdir(parents=True, exist_ok=True)
     old_endpoint = os.environ.get("HF_ENDPOINT")
@@ -2100,11 +2830,16 @@ def pull_model(
         else:
             os.environ["HF_ENDPOINT"] = old_endpoint
     if linked:
-        for name in linked:
+        for part in linked:
             click.echo(
-                f"linked {Path(name).name} — this repo publishes that split "
+                f"linked {Path(part).name} — this repo publishes that split "
                 f"part under another name"
             )
+
+    # A file named neutrally can still be an adapter; its own header
+    # says what it is. Refuse it before it becomes a registry entry.
+    if draft_needs_dspine(DraftSpec(gguf=str(local_dir / filename))):
+        raise RuntimeError(dspine_adapter_hint(filename))
 
     llama_port, daemon_port = next_free_ports(specs)
     binary, env = pull_defaults(specs)
@@ -2112,9 +2847,37 @@ def pull_model(
     if is_image:
         # A diffusion denoiser: no llama defaults, no ctx, no env pins.
         binary, env = "sd-server", {}
+    # The speculative-decoding draft for this target, if it has one.
+    # Fetched from the repository that publishes it (nothing is
+    # re-hosted) and registered beside the target, so the stack starts
+    # with the drafter already attached. The installed binary decides
+    # whether it can actually be attached: a stock build cannot load a
+    # DSpine draft, and attaching one anyway would break a model that
+    # otherwise works.
+    draft_fields = _pull_draft(
+        target_file=filename,
+        local_dir=local_dir,
+        endpoint=endpoint,
+        want=draft,
+        quant=draft_quant,
+        n_max=draft_n_max,
+        binary=binary,
+    )
+    draft_for_ctx = (
+        DraftSpec(
+            gguf=str(draft_fields["draft"]),
+            spec_type=str(draft_fields.get("draft_spec_type")
+                          or SPEC_TYPE_DRAFT_DFLASH),
+            n_max=int(draft_fields.get("draft_n_max") or DRAFT_N_MAX_DEFAULT),
+        )
+        if draft_fields.get("draft") else None
+    )
     if ctx_size is None:
         try:
-            ctx_size = 0 if is_image else _auto_ctx_size(local_dir / filename, parallel=2, kv=kv)
+            ctx_size = 0 if is_image else _auto_ctx_size(
+                local_dir / filename, parallel=2, kv=kv,
+                draft=draft_for_ctx,
+            )
         except Exception:
             if is_image:
                 ctx_size = 0
@@ -2149,6 +2912,8 @@ def pull_model(
         # Vision models only accept images when llama-server is given the
         # projector; without this field the stack starts and answers blind.
         "mmproj": str(local_dir / mmproj_file) if mmproj_file else "",
+        # The speculative-decoding draft, when this target has one.
+        **draft_fields,
     }
     spec = ModelSpec(raw=raw, **raw)
     save_registry([*specs, spec], registry)
@@ -3136,6 +3901,16 @@ def _binary_supports(binary: str, flag: str) -> bool:
     return flag in found
 
 
+def draft_for(spec: ModelSpec) -> DraftSpec | None:
+    """The speculative-decoding draft the active adapter mode supplies.
+
+    The adapter catalog decides; a registry that predates it (flat
+    ``draft:`` fields, no ``adapters:``) is read through the same
+    resolution, so a hand-written entry keeps working.
+    """
+    return resolve_draft(spec)
+
+
 def model_aliases(spec: ModelSpec) -> list[str]:
     """Every model name the stack can hand to a client or receive back.
 
@@ -3331,6 +4106,11 @@ def _llama_args(spec: ModelSpec, ctx_override: int | None = None,
         and _model_needs_lazy_load(spec)
     ):
         args += ["--lazy-mode", "on"]
+    # The active adapter mode rides along with the target: a draft with
+    # --spec-draft-model, a LoRA with --lora. Each flag is its own argv
+    # token — a joined "--spec-draft-model /path" dies at startup. A
+    # missing file is caught by _check_draft before we get here.
+    args += adapter_launch_args(spec)
     args += spec.extra_args
     # Hard user overrides, appended LAST so llama.cpp's last-flag-wins
     # parser honours them even over registry extra_args pins.
@@ -3643,6 +4423,7 @@ def start_model(spec: ModelSpec, wait: bool = True) -> None:
             raise FileNotFoundError(f"model file not found: {spec.gguf}")
         resolve_gguf_path(spec)  # raises a one-command hint when missing
         _check_ram(spec)
+        _check_draft(spec)
         ctx, kv, parallel = _fit_plan(spec)
         if ctx < spec.ctx_size or kv != spec.kv or parallel != spec.parallel:
             logger.warning(

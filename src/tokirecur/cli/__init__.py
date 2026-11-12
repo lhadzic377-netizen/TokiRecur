@@ -1243,6 +1243,171 @@ def model_status() -> None:
         )
 
 
+@model.group("adapter")
+def adapter_group() -> None:
+    """Install and select adapter modes of a base model.
+
+    An adapter is a second GGUF that changes how a base model runs: a
+    DSpine/DFlash2 draft makes it speculate, a LoRA patches its
+    weights. It cannot be served on its own, so it is a selectable mode
+    of the base — not a model entry.
+    """
+
+
+@adapter_group.command("list")
+@click.option("--model", "model_name", default=None,
+              help="Only show this model's adapters.")
+def adapter_list(model_name: str | None) -> None:
+    """Show each model's adapter modes and which one is active."""
+    from ..adapters import (
+        active_mode_id,
+        available_modes,
+        describe_active,
+        discover_adapters,
+    )
+    from ..ctl import load_registry
+
+    specs = load_registry()
+    if model_name is not None:
+        specs = [s for s in specs if s.name == model_name]
+        if not specs:
+            click.echo(f"error: unknown model '{model_name}'", err=True)
+            raise SystemExit(1)
+    shown = False
+    for spec in specs:
+        modes = available_modes(spec)
+        found = discover_adapters(spec)
+        if not modes and not found:
+            continue
+        shown = True
+        click.echo(f"{spec.name}: {describe_active(spec)}")
+        active = active_mode_id(spec)
+        for mode in modes:
+            mark = "*" if mode.id == active else " "
+            state = "" if mode.exists else "  (file missing)"
+            click.echo(
+                f"  {mark} {mode.id}  {mode.choice_label}  [{mode.kind}]{state}"
+            )
+        for mode in found:
+            click.echo(
+                f"    {mode.id}  {mode.choice_label}  "
+                f"[{mode.kind}] (found on disk; select it to register)"
+            )
+    if not shown:
+        click.echo("no adapter modes installed.")
+
+
+@adapter_group.command("add")
+@click.argument("source")
+@click.option("--model", "model_name", default=None,
+              help="Registry name of the base model (inferred from the "
+                   "file's directory or the adapter's family when omitted).")
+@click.option("--file", "gguf_file", default=None,
+              help="Exact adapter GGUF in a repository with several.")
+@click.option("--quant", default="Q4_K_M",
+              help="Preferred adapter quantisation for a repository.")
+@click.option("--endpoint", default=None,
+              help="HF mirror base URL, e.g. http://localhost:8090.")
+@click.option("--n-max", "n_max", default=None, type=int,
+              help="How many tokens a draft may propose per block "
+                   "(default: 15 on CUDA/ROCm/SYCL, 3 on Vulkan).")
+@click.option("--activate/--no-activate", "activate", default=None,
+              help="Switch the model to this mode now (default: switch "
+                   "when it is the first adapter and the build can load it).")
+def adapter_add(
+    source: str,
+    model_name: str | None,
+    gguf_file: str | None,
+    quant: str,
+    endpoint: str | None,
+    n_max: int | None,
+    activate: bool | None,
+) -> None:
+    """Install an adapter GGUF or repository as a mode of its base.
+
+    SOURCE is a local .gguf or a Hugging Face repository that publishes
+    adapter weights. A local file is copied into the base model's own
+    directory; a repository is fetched from its authors (nothing is
+    re-hosted). The mode appears in the launcher's settings dropdown.
+    """
+    from ..ctl import install_adapter
+
+    try:
+        spec, mode, active = install_adapter(
+            source,
+            model=model_name,
+            file=gguf_file,
+            quant=quant,
+            endpoint=endpoint,
+            activate=activate,
+            n_max=n_max,
+        )
+    except (ValueError, RuntimeError, KeyError) as e:
+        click.echo(f"error: {e}", err=True)
+        raise SystemExit(1) from None
+    click.echo(
+        f"installed '{mode.choice_label}' ({mode.kind}) for '{spec.name}'"
+    )
+    if active:
+        click.echo(
+            f"  active — run `toki model use {spec.name}` to restart with it."
+        )
+    else:
+        click.echo("  not active — pick it in `toki` → settings (s).")
+
+
+@adapter_group.command("use")
+@click.argument("mode_id")
+@click.option("--model", "model_name", required=True,
+              help="Registry name of the base model.")
+@click.option("--no-restart", is_flag=True,
+              help="Write the registry without restarting the stack.")
+def adapter_use(mode_id: str, model_name: str, no_restart: bool) -> None:
+    """Select an installed adapter mode (or the base, with __base__)."""
+    from ..ctl import update_spec_field
+
+    try:
+        spec = update_spec_field(
+            model_name, "adapter_mode", mode_id, apply=not no_restart,
+        )
+    except (ValueError, RuntimeError, KeyError, OSError) as e:
+        click.echo(f"error: {e}", err=True)
+        raise SystemExit(1) from None
+    from ..adapters import describe_active
+
+    click.echo(f"{spec.name}: {describe_active(spec)}"
+               + ("" if no_restart else " (restarted)"))
+
+
+@adapter_group.command("remove")
+@click.argument("mode_id")
+@click.option("--model", "model_name", required=True,
+              help="Registry name of the base model.")
+@click.option("--no-restart", is_flag=True,
+              help="Write the registry without restarting the stack.")
+def adapter_remove(mode_id: str, model_name: str, no_restart: bool) -> None:
+    """Remove a mode from a model. The adapter file is left on disk."""
+    from ..ctl import remove_adapter, use_model
+
+    try:
+        spec, was_active = remove_adapter(model_name, mode_id)
+    except (RuntimeError, KeyError, OSError) as e:
+        click.echo(f"error: {e}", err=True)
+        raise SystemExit(1) from None
+    click.echo(f"removed '{mode_id}' from '{spec.name}'")
+    if was_active:
+        if no_restart:
+            click.echo("  the model is now on its base mode; restart it to apply.")
+        else:
+            try:
+                use_model(spec.name, stop_others=False, force_restart=True)
+            except (RuntimeError, OSError) as e:
+                click.echo(f"error: could not restart '{spec.name}': {e}",
+                           err=True)
+                raise SystemExit(1) from None
+            click.echo("  restarted on the base mode.")
+
+
 @model.command()
 @click.argument("name")
 @click.option(
@@ -1515,9 +1680,20 @@ def repair() -> None:
                    "reasoning with headroom (default); 'on' forces "
                    "thinking on; 'off' passes --reasoning off to "
                    "llama-server at launch.")
+@click.option("--draft/--no-draft", "draft", default=None,
+              help="Attach the DSpine adapter that belongs to this "
+                   "target (default: attach it when the target has one "
+                   "and the build can load it; --no-draft skips it).")
+@click.option("--draft-quant", "draft_quant", default="Q4_K_M",
+              help="Which adapter quantisation to fetch (Q4_K_M, Q8_0).")
+@click.option("--draft-n-max", "draft_n_max", default=None, type=int,
+              help="How many tokens the drafter may propose per block "
+                   "(default: 15 on CUDA/ROCm/SYCL, 3 on Vulkan, where a "
+                   "long draft costs more to verify than it saves).")
 def pull(repo: str, name: str | None, gguf_file: str | None, ctx_size: int,
          kv: str, endpoint: str | None, use_it: bool,
-         reasoning: str) -> None:
+         reasoning: str, draft: bool | None, draft_quant: str,
+         draft_n_max: int | None) -> None:
     """Download a GGUF from Hugging Face and register it.
 
     Uses huggingface_hub, so `HF_ENDPOINT` (or --endpoint) transparently
@@ -1531,13 +1707,27 @@ def pull(repo: str, name: str | None, gguf_file: str | None, ctx_size: int,
     try:
         spec = pull_model(repo, name, file=gguf_file, ctx_size=ctx_size,
                           kv=kv, endpoint=endpoint, reasoning=reasoning,
-                          choose_file=_pick_gguf_interactive)
+                          choose_file=_pick_gguf_interactive,
+                          draft=draft, draft_quant=draft_quant,
+                          draft_n_max=draft_n_max)
     except (ValueError, RuntimeError, KeyError) as e:
         click.echo(f"error: {e}", err=True)
         raise SystemExit(1) from None
     click.echo(f"pulled '{spec.name}' -> {spec.gguf}")
     click.echo(f"  llama :{spec.llama_port}  daemon :{spec.daemon_port}  "
                f"ctx {spec.ctx_size}  kv {spec.kv}")
+    from ..adapters import active_mode, adapter_modes
+
+    mode = active_mode(spec)
+    if mode is not None:
+        click.echo(
+            f"  adapter mode: {mode.choice_label} ({Path(mode.gguf).name})"
+        )
+    elif adapter_modes(spec):
+        click.echo(
+            f"  adapters: {len(adapter_modes(spec))} installed; "
+            f"active: base model (pick one in `toki` settings)"
+        )
     if use_it:
         use_model(spec.name)
         click.echo(f"model '{spec.name}' is up and active everywhere.")

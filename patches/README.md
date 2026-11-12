@@ -43,3 +43,29 @@ What is left here is historical:
 Do not start `llama-server` with `--slot-save-path` for Toki Recur. The
 daemon does not read those files, and the directory would only collect
 KV blobs nobody restores.
+
+# DSpine draft support
+
+DSpine is not a patch in this directory. Upstream support is llama.cpp PR
+[#31941](https://github.com/ggml-org/llama.cpp/pull/31941) ("spec : add
+DSpine draft support"), and the branch the DSpine model card names is
+[`Ajay9o9/llama.cpp#dspine`](https://github.com/Ajay9o9/llama.cpp/tree/dspine)
+— current `master` plus that one commit. Toki Recur detects the support in
+the installed binary (the `dspine_codebook` tensor name is compiled into
+`libllama`) and attaches a draft only when it is present:
+
+```bash
+git clone -b dspine https://github.com/Ajay9o9/llama.cpp.git
+cd llama.cpp
+cmake -B build -DGGML_HIP=ON -DAMDGPU_TARGETS=gfx1151
+cmake --build build --config Release -j
+# then set the model's `binary:` in ~/.config/tokirecur/models.yaml to
+#   /home/you/llama.cpp/build/bin/llama-server
+```
+
+Stock llama.cpp refuses the files rather than running them incorrectly,
+which is why the pull does not activate a DSpine mode on a build that
+cannot load one. The adapter is still registered in the model's
+`adapters:` catalog, so it appears in the launcher's settings dropdown
+and can be selected once `binary:` points at the DSpine build; the
+launch gate refuses that selection with the same explanation until then.

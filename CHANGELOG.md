@@ -6,6 +6,29 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **Adapters are selectable modes of their base model.** An adapter is
+  a second GGUF tied to one target: a DSpine/DFlash2 draft reads the
+  base's hidden states, a LoRA patches its weights, and neither can
+  serve a prompt alone. The registry now keeps an `adapters:` catalog
+  per model and one active `adapter_mode:`; the active entry is
+  projected onto the flat `draft*` fields, so launch and fit read one
+  thing and a hand-written `draft:` registry still resolves as a mode.
+  The launcher's settings pane lists `base model (no adapter)` plus
+  every installed adapter — and any adapter GGUF found beside the
+  model — and picking one restarts the stack with it. `toki model
+  adapter add|list|use|remove` manages the catalog; `toki model pull`
+  attaches a DSpine adapter to its installed target as a mode and, when
+  the target is missing, says which base to pull first. An adapter that
+  cannot be attached (missing file, stale id, unknown kind, build
+  without DSpine) is refused before the launch. The fit planner and
+  RAM gate reserve the active adapter's weights, its own 8k KV window,
+  and the target's recurrent-state copies per drafted token. `--draft`
+  fetches and registers the mode even on a stock build but keeps the
+  model on its base; `--draft-quant` and `--draft-n-max` choose the
+  file and block size (default 15 on CUDA/ROCm/SYCL, 3 on Vulkan). The
+  model row shows the active mode's badge.
+
 ### Fixed
 - **A split GGUF published under another name is fetched and linked.**
   DeepSeek-V4.1-Flash-1017-GSQ-RCO-Coder ships five parts named

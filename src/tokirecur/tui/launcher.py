@@ -26,6 +26,14 @@ from textual.reactive import reactive
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, Select, Static
 
+from ..adapters import (
+    BASE_MODE_ID,
+    active_mode_id,
+    describe_active,
+)
+from ..adapters import (
+    active_mode as active_adapter_mode,
+)
 from ..ctl import (
     load_registry,
     model_file_missing,
@@ -43,7 +51,7 @@ from . import art
 # launcher doesn't have to import a private symbol.
 _RESTART_REQUIRED_FIELDS = frozenset({
     "ctx_size", "kv", "parallel", "binary", "gguf",
-    "llama_port", "daemon_port",
+    "llama_port", "daemon_port", "adapter_mode",
 })
 
 # Fields whose change replaces the running model with a *different*
@@ -381,6 +389,9 @@ class LauncherApp(App[dict | None]):
             return
         self.focus_pane = "settings"
         self.settings_idx = 0
+        # Rescan the adapter choices: an adapter GGUF dropped beside a
+        # model while the launcher was open becomes selectable here.
+        invalidate_settings_rows()
         self._refresh += 1
 
     def _current_setting(self) -> tuple[str, str, str] | None:
@@ -497,16 +508,27 @@ class LauncherApp(App[dict | None]):
             # Modal: ask first. Use a different label for the model-swap
             # fields (gguf / binary) — those change the model entirely,
             # not just its tuning.
+            spec = next((s for s in self.specs if s.name == name), None)
+            shown = _display_choice(spec, field, new_value)
             if field in _MODEL_SWAP_FIELDS:
-                title = f"{name}.{field} → {new_value}"
+                title = f"{name}.{field} → {shown}"
                 body = (
                     f"This replaces the running model with a different one.\n\n"
                     f"Current model: {name}\n"
-                    f"New {field}: {new_value}\n\n"
+                    f"New {field}: {shown}\n\n"
                     f"llama-server will be stopped and restarted."
                 )
+            elif field == "adapter_mode":
+                title = f"{name} · adapter mode"
+                body = (
+                    f"The model will restart as: {shown}.\n\n"
+                    "Its weights are shared; only the adapter and its fit "
+                    "reservation change.\n"
+                    "Approximate downtime: a few seconds.\n\n"
+                    "Proceed?"
+                )
             else:
-                title = f"{name}.{field} = {new_value}"
+                title = f"{name}.{field} = {shown}"
                 body = (
                     "llama-server will be stopped and restarted with the new setting.\n"
                     "Approximate downtime: a few seconds.\n\n"
@@ -890,6 +912,13 @@ class LauncherApp(App[dict | None]):
             mmproj = getattr(spec, "mmproj", "") or ""
             vision_ok = bool(mmproj) and Path(mmproj).exists()
             vision_bad = bool(mmproj) and not vision_ok
+            # The active adapter mode is how this model actually runs.
+            # A mode whose file is gone is a stack that will not start;
+            # a stale id is a catalog edit nobody finished.
+            adapter = active_adapter_mode(spec)
+            adapter_id = active_mode_id(spec)
+            adapter_bad = adapter is not None and not adapter.exists
+            adapter_stale = bool(adapter_id) and adapter is None
             # A model whose file has gone is not a model. The registry
             # keeps the row - the weights may come back - but the person
             # has to be told, or they pin it and watch a launch fail with
@@ -910,6 +939,15 @@ class LauncherApp(App[dict | None]):
                     row.append(" [no projector]", style=f"bold {art.RED}")
                 elif vision_ok:
                     row.append(" [vision]", style=f"dim {art.AMBER}")
+                if adapter_stale:
+                    row.append(f" [{adapter_id} missing]",
+                               style=f"bold {art.RED}")
+                elif adapter_bad:
+                    row.append(f" [no {adapter.badge}]",
+                               style=f"bold {art.RED}")
+                elif adapter is not None:
+                    row.append(f" [{adapter.badge}]",
+                               style=f"dim {art.AMBER}")
                 if show_dots:
                     row.append("  ", style="dim")
                     row.append("●", style=art.GREEN if llama else art.RED)
@@ -927,6 +965,15 @@ class LauncherApp(App[dict | None]):
                     row.append(" [no projector]", style=f"bold {art.RED}")
                 elif vision_ok:
                     row.append(" [vision]", style=f"dim {art.AMBER}")
+                if adapter_stale:
+                    row.append(f" [{adapter_id} missing]",
+                               style=f"bold {art.RED}")
+                elif adapter_bad:
+                    row.append(f" [no {adapter.badge}]",
+                               style=f"bold {art.RED}")
+                elif adapter is not None:
+                    row.append(f" [{adapter.badge}]",
+                               style=f"dim {art.AMBER}")
                 if show_dots:
                     row.append("  ", style="dim")
                     row.append("●", style=art.GREEN if llama else art.RED)
@@ -945,6 +992,14 @@ class LauncherApp(App[dict | None]):
                     detail += f"  ·  {rope}"
                 if variant.effort is not None:
                     detail += f"  ·  reasoning {variant.effort}"
+                if adapter is not None:
+                    detail += f"  ·  adapter {adapter.choice_label}"
+                elif adapter_stale:
+                    detail += (
+                        f"  ·  adapter mode '{adapter_id}' is not installed"
+                    )
+                if adapter_bad:
+                    detail += f"  — adapter missing: {adapter.gguf}"
                 if gone:
                     detail += f"  — the file is gone: {getattr(spec, 'gguf', '')}"
                 elif vision_bad:
@@ -1081,6 +1136,7 @@ RECORDER_FIELD = "record turns"
 
 _SETTINGS_FIELDS: tuple[str, ...] = (
     "gguf",
+    "adapter_mode",
     "llama_port",
     "daemon_port",
     "ctx_size",
@@ -1440,6 +1496,47 @@ def _live_value(app: LauncherApp, spec: Any, field: str) -> Any:
     return getattr(spec, field, None)
 
 
+def _edit_value(spec: Any, field: str, fallback: str = "") -> str:
+    """The registry value to prefill an editor with.
+
+    Always the registry value, never the "reg:X · live:Y" display
+    string: the user types a value, not a sentence, and feeding the
+    display string back makes the parser reject it. The base adapter
+    mode is stored as "" but the Select needs a non-blank sentinel.
+    """
+    if spec is None:
+        return fallback
+    raw = getattr(spec, field, "")
+    if field == "adapter_mode":
+        mode = active_adapter_mode(spec)
+        return str(raw or (mode.id if mode is not None else "") or BASE_MODE_ID)
+    return str(raw)
+
+
+def _display_choice(spec: Any, field: str, value: str) -> str:
+    """A dropdown value as the person sees it, for confirm copy."""
+    if field != "adapter_mode":
+        return value
+    from ..adapters import (
+        BASE_LABEL,
+        BASE_MODE_ID,
+        available_modes,
+        discover_adapters,
+    )
+
+    if value == BASE_MODE_ID:
+        return BASE_LABEL
+    if spec is not None:
+        mode = next(
+            (m for m in [*available_modes(spec), *discover_adapters(spec)]
+             if m.id == value),
+            None,
+        )
+        if mode is not None:
+            return mode.choice_label
+    return value
+
+
 def _choices_for_field(spec: Any, field: str) -> dict[str, str] | None:
     """Return the dropdown choices for ``field`` on ``spec``.
 
@@ -1454,6 +1551,13 @@ def _choices_for_field(spec: Any, field: str) -> dict[str, str] | None:
     clear error, so the dropdown can safely show every preset.
     The ``custom…`` option is always appended.
     """
+    if field == "adapter_mode":
+        # Base model first, then every installed adapter, then any
+        # adapter GGUF found beside the model that is not registered
+        # yet. Picking a found one registers it as it activates.
+        from ..adapters import choice_map
+
+        return choice_map(spec)
     base = _SETTINGS_CHOICES.get(field)
     if base is None:
         return base
@@ -1550,7 +1654,16 @@ def _settings_rows(
     except Exception:
         live_part = ()
     recorder = _recorder_row()
-    key = (tuple(s.name for s in specs), live_part, recorder)
+    # The active adapter mode and the catalog size are part of the
+    # rendering: switching modes changes the row a poll later leaves
+    # untouched.
+    adapter_part = tuple(
+        ((mode.id if mode is not None else ""),
+         len(getattr(s, "adapters", None) or []))
+        for s in specs
+        for mode in [active_adapter_mode(s)]
+    )
+    key = (tuple(s.name for s in specs), live_part, adapter_part, recorder)
     cached = _SETTINGS_ROWS_CACHE.get(key)
     if cached is not None:
         return cached
@@ -1559,6 +1672,26 @@ def _settings_rows(
     for spec in specs:
         for field in _SETTINGS_FIELDS:
             if field not in ctl_mod._EDITABLE_FIELDS:
+                continue
+            if field == "adapter_mode":
+                # Only models that have an adapter (or a stale mode id
+                # worth surfacing) get the row. Every model would
+                # otherwise carry a "base model (no adapter)" line.
+                from ..adapters import (
+                    available_modes,
+                    discover_adapters,
+                )
+
+                if not (
+                    available_modes(spec)
+                    or discover_adapters(spec)
+                    or active_mode_id(spec)
+                ):
+                    continue
+                # Show the mode's name, not its registry id: "DSpine
+                # Q4_K_M" is what was picked, "qwen3.8-...-q4-k-m" is
+                # an implementation detail.
+                rows.append((spec.name, field, describe_active(spec)))
                 continue
             reg_value = getattr(spec, field, None)
             live_value = _live_value(app, spec, field)

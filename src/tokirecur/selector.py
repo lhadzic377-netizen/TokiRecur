@@ -22,6 +22,7 @@ from rich.prompt import Prompt
 from rich.table import Table
 
 from . import winproc
+from .adapters import active_mode, active_mode_id
 from .ctl import (
     _effective_ctx,
     _resolve_mode,
@@ -450,6 +451,18 @@ def menu_lines(specs: list) -> list[tuple[str, str]]:
             badge = "[vision]"
         else:
             badge = ""
+        # The active adapter mode is how the stack actually runs, so it
+        # belongs on the row: a missing adapter is a stack that will not
+        # start, and a stale mode id is a catalog edit nobody finished.
+        mode = active_mode(spec)
+        if mode is not None:
+            mark = f"[{mode.badge}]" if mode.exists else f"[no {mode.badge}]"
+        elif active_mode_id(spec):
+            mark = f"[{active_mode_id(spec)} missing]"
+        else:
+            mark = ""
+        if mark:
+            badge = (badge + " " + mark) if badge else mark
         rows.append((spec.name,
                      f"{mark} {spec.label}  llama={llama} daemon={daemon} "
                      f"ctx={ctx}  :{spec.llama_port}/:{spec.daemon_port}"
