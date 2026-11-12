@@ -10,6 +10,7 @@ import json
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from tokirecur.web import server as server_mod
 from tokirecur.web.server import (
@@ -345,8 +346,9 @@ class TestParsePrometheusMetrics:
         )
         fake = FakeHttpx(get_response=FakeResponse(payload=None, text=text))
         fake_async_client(fake)
-        app = create_web_app(raw_url="http://raw:8088", daemon_url="http://daemon:8787")
-        with TestClient(app) as client:
+        app = create_web_app(raw_url="http://raw:8088", daemon_url="http://daemon:8787",
+                            allowed_hosts={"testserver"})
+        with TestClient(app, base_url="http://127.0.0.1:7777") as client:
             r = client.get("/v1/metrics/live")
         assert r.json()["cache_hits"] == 1
         assert r.json()["cache_misses"] == 2
@@ -368,8 +370,9 @@ class TestPrecisionProxy:
         }
         fake = FakeHttpx(post_response=FakeResponse(payload=body))
         fake_async_client(fake)
-        app = create_web_app(raw_url="http://raw:8088", daemon_url="http://daemon:8787")
-        with TestClient(app) as client:
+        app = create_web_app(raw_url="http://raw:8088", daemon_url="http://daemon:8787",
+                            allowed_hosts={"testserver"})
+        with TestClient(app, base_url="http://127.0.0.1:7777") as client:
             r = client.post("/v1/precision", json={"max_tokens": 32})
         assert r.status_code == 200
         assert r.json() == body
@@ -378,8 +381,9 @@ class TestPrecisionProxy:
     def test_daemon_unreachable_returns_error(self, fake_async_client):
         fake = FakeHttpx(post_response=FakeResponse(payload={}, status_code=503))
         fake_async_client(fake)
-        app = create_web_app(raw_url="http://raw:8088", daemon_url="http://daemon:8787")
-        with TestClient(app) as client:
+        app = create_web_app(raw_url="http://raw:8088", daemon_url="http://daemon:8787",
+                            allowed_hosts={"testserver"})
+        with TestClient(app, base_url="http://127.0.0.1:7777") as client:
             r = client.post("/v1/precision", json={})
         assert "error" in r.json()
 
@@ -389,7 +393,8 @@ class TestPrecisionProxy:
 
 def _chat_client(monkeypatch, fake):
     monkeypatch.setattr(server_mod.httpx, "AsyncClient", lambda *a, **k: fake)
-    return create_web_app(raw_url="http://raw:8088", daemon_url="http://daemon:8787")
+    return create_web_app(raw_url="http://raw:8088", daemon_url="http://daemon:8787",
+                            allowed_hosts={"testserver"})
 
 
 class TestWsChat:
@@ -409,8 +414,9 @@ class TestWsChat:
             )
         )
         fake_async_client(fake)
-        app = create_web_app(raw_url="http://raw:8088", daemon_url="http://daemon:8787")
-        with TestClient(app) as client:
+        app = create_web_app(raw_url="http://raw:8088", daemon_url="http://daemon:8787",
+                            allowed_hosts={"testserver"})
+        with TestClient(app, base_url="http://127.0.0.1:7777") as client:
             with client.websocket_connect("/ws/chat") as ws:
                 ws.send_json({
                     "mode": "cached", "prompt": "hi", "max_tokens": 8,
@@ -443,8 +449,9 @@ class TestWsChat:
             )
         )
         fake_async_client(fake)
-        app = create_web_app(raw_url="http://raw:8088", daemon_url="http://daemon:8787")
-        with TestClient(app) as client:
+        app = create_web_app(raw_url="http://raw:8088", daemon_url="http://daemon:8787",
+                            allowed_hosts={"testserver"})
+        with TestClient(app, base_url="http://127.0.0.1:7777") as client:
             with client.websocket_connect("/ws/chat") as ws:
                 ws.send_json({
                     "mode": "raw", "prompt": "hi", "max_tokens": 8,
@@ -471,8 +478,9 @@ class TestWsChat:
         ]
         fake = FakeHttpx(stream_response=FakeStreamResponse(sse(*chunks)))
         fake_async_client(fake)
-        app = create_web_app(raw_url="http://raw:8088", daemon_url="http://daemon:8787")
-        with TestClient(app) as client:
+        app = create_web_app(raw_url="http://raw:8088", daemon_url="http://daemon:8787",
+                            allowed_hosts={"testserver"})
+        with TestClient(app, base_url="http://127.0.0.1:7777") as client:
             with client.websocket_connect("/ws/chat") as ws:
                 ws.send_json({
                     "mode": "cached", "prompt": "long", "max_tokens": 8,
@@ -501,8 +509,9 @@ class TestWsChat:
             )
         )
         fake_async_client(fake)
-        app = create_web_app(raw_url="http://raw:8088", daemon_url="http://daemon:8787")
-        with TestClient(app) as client:
+        app = create_web_app(raw_url="http://raw:8088", daemon_url="http://daemon:8787",
+                            allowed_hosts={"testserver"})
+        with TestClient(app, base_url="http://127.0.0.1:7777") as client:
             with client.websocket_connect("/ws/chat") as ws:
                 ws.send_json({"mode": "raw", "prompt": "hi", "max_tokens": 8})
                 done = None
@@ -512,3 +521,81 @@ class TestWsChat:
                         done = msg
                         break
         assert done["text"] == "yo"
+
+
+class TestHostAllowlist:
+    """The Host header is the one thing a rebinding attacker cannot
+    make match us: the browser sends the name it resolved. Comparing
+    Origin against Host is not enough, because under rebinding both are
+    attacker-controlled."""
+
+    def _app(self, **kw):
+        return create_web_app(
+            raw_url="http://raw:8088", daemon_url="http://daemon:8787",
+            **kw,
+        )
+
+    def test_unknown_host_is_refused(self):
+        app = self._app()
+        with TestClient(app, base_url="http://evil.example:7777") as client:
+            r = client.get("/config")
+            assert r.status_code == 403
+
+    def test_loopback_host_is_allowed(self):
+        app = self._app()
+        with TestClient(app, base_url="http://127.0.0.1:7777") as client:
+            r = client.get("/config")
+            assert r.status_code == 200
+
+    def test_localhost_is_allowed(self):
+        app = self._app()
+        with TestClient(app, base_url="http://localhost:7777") as client:
+            r = client.get("/config")
+            assert r.status_code == 200
+
+    def test_extra_host_is_allowed_when_configured(self):
+        app = self._app(allowed_hosts={"tokibox.local"})
+        with TestClient(app, base_url="http://tokibox.local:7777") as client:
+            r = client.get("/config")
+            assert r.status_code == 200
+
+    def test_websocket_with_unknown_host_is_refused(self):
+        app = self._app(allowed_hosts={"tokibox.local"})
+        with TestClient(app, base_url="http://127.0.0.1:7777") as client:
+            with pytest.raises(WebSocketDisconnect):
+                with client.websocket_connect("/ws/chat"):
+                    pass
+
+
+class TestRemoteBindRequiresToken:
+    """The UI is open by design and attaches the daemon's own token to
+    every proxied call. That is fine on loopback and an open,
+    token-lending proxy anywhere else."""
+
+    def _app(self, **kw):
+        return create_web_app(
+            raw_url="http://raw:8088", daemon_url="http://daemon:8787",
+            allowed_hosts={"127.0.0.1", "tokibox.local"},
+            **kw,
+        )
+
+    def test_no_token_is_refused_when_required(self, monkeypatch):
+        monkeypatch.setattr(server_mod, "_configured_token", lambda: "secret")
+        app = self._app(require_token=True)
+        with TestClient(app, base_url="http://127.0.0.1:7777") as client:
+            r = client.get("/config")
+            assert r.status_code == 401
+
+    def test_the_right_token_is_accepted(self, monkeypatch):
+        monkeypatch.setattr(server_mod, "_configured_token", lambda: "secret")
+        app = self._app(require_token=True)
+        with TestClient(app, base_url="http://127.0.0.1:7777") as client:
+            r = client.get("/config", headers={"Authorization": "Bearer secret"})
+            assert r.status_code == 200
+
+    def test_the_token_may_come_from_the_query(self, monkeypatch):
+        monkeypatch.setattr(server_mod, "_configured_token", lambda: "secret")
+        app = self._app(require_token=True)
+        with TestClient(app, base_url="http://127.0.0.1:7777") as client:
+            r = client.get("/config?token=secret")
+            assert r.status_code == 200

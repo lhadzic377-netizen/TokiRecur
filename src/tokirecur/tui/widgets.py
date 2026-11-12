@@ -605,7 +605,15 @@ class Sidebar(Static):
                 if s.get("context_tokens") and s.get("max_context_tokens"):
                     pct = min(100, s["context_tokens"] * 100 // s["max_context_tokens"])
                 marker = "★" if s.get("reserved") else "·"
-                sess = self.session_to_slot.get(s["slot_id"])
+                # The daemon's map is session_id -> slot_id, so the
+                # slot has to be looked up by scanning it. Indexing it
+                # by the slot id never matched, and the per-slot
+                # session label was silently never shown.
+                sess = next(
+                    (sid for sid, sl in self.session_to_slot.items()
+                     if sl == s["slot_id"]),
+                    None,
+                )
                 sess_label = ""
                 if sess:
                     short = sess[:5] if len(sess) > 5 else sess

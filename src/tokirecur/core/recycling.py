@@ -21,6 +21,7 @@ must correspond to a token that is byte-identical in the new prompt.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import os
@@ -621,8 +622,13 @@ class RecyclingEngine:
         routing_text = _last_routing_text(messages, reasoning_effort)
 
         started = time.perf_counter()
+        # Routing tokenizes + embeds over blocking HTTP and may spill a
+        # slot; run it off the event loop so a streaming request does not
+        # stall every other request and health check (the sync serve_chat
+        # path is offloaded the same way by the API layer).
         new_tokens, new_embedding, slot_id, reuse_depth, spilled, cache_prompt, cache_id = (
-            self._route_request(
+            await asyncio.to_thread(
+                self._route_request,
                 tokenize_text=routing_text,
                 max_slots=max_slots,
                 session_id=session_id,
@@ -666,21 +672,22 @@ class RecyclingEngine:
                 "prefill_tokens_per_sec": 0.0,
             }
 
-        yield {
-            "kind": "result",
-            "result": self._finalize_request(
-                tokenize_text=routing_text,
-                new_tokens=new_tokens,
-                new_embedding=new_embedding,
-                slot_id=slot_id,
-                reuse_depth=reuse_depth,
-                spilled=spilled,
-                session_id=session_id,
-                backend_result=backend_result,
-                started=started,
-                cache_id=cache_id,
-            ),
-        }
+        # Finalizing writes the index (SQLite) and may query llama-server
+        # for a free pool slot — both blocking, so keep them off the loop.
+        result = await asyncio.to_thread(
+            self._finalize_request,
+            tokenize_text=routing_text,
+            new_tokens=new_tokens,
+            new_embedding=new_embedding,
+            slot_id=slot_id,
+            reuse_depth=reuse_depth,
+            spilled=spilled,
+            session_id=session_id,
+            backend_result=backend_result,
+            started=started,
+            cache_id=cache_id,
+        )
+        yield {"kind": "result", "result": result}
 
     def _init_slot_state(self) -> None:
         """Initialise per-slot state maps. Idempotent; safe to call
@@ -715,7 +722,7 @@ class RecyclingEngine:
         slot via prefix matching (or round-robin if no match).
         Pool-owned slots are NOT spilled — they persist for hot prefixes.
         """
-        if slot_id in self.persistent_pool._slots:
+        if self.persistent_pool.owns_slot(slot_id):
             logger.debug("slot %d is pool-owned; skipping spill", slot_id)
             return
         try:
@@ -778,7 +785,7 @@ class RecyclingEngine:
 
         for slot_id, prev_tokens in self._slot_history.items():
             # Skip pool-owned slots unless their prefix actually matches.
-            if slot_id in self.persistent_pool._slots:
+            if self.persistent_pool.owns_slot(slot_id):
                 continue
             depth = compute_reuse_depth(prev_tokens, new_tokens)
             if depth > best_depth:
@@ -788,14 +795,14 @@ class RecyclingEngine:
         # If no slot has any prefix match, round-robin among non-pool slots.
         if best_depth == 0:
             used = set(self._slot_history.keys())
-            pool_owned = set(self.persistent_pool._slots.keys())
+            pool_owned = self.persistent_pool.owned_slot_ids
             for slot_id in range(max_slots):
                 if slot_id not in used and slot_id not in pool_owned:
                     return slot_id, 0
             # All non-pool slots used; pick the LRU non-pool slot.
             non_reserved = {
                 k: v for k, v in self._slot_use_count.items()
-                if k not in self.persistent_pool._slots
+                if k not in pool_owned
             }
             if non_reserved:
                 return min(non_reserved.items(), key=lambda kv: kv[1])[0], 0
@@ -831,7 +838,7 @@ class RecyclingEngine:
 
     def _is_slot_reserved(self, slot_id: int) -> bool:
         # A slot is "reserved" iff it is owned by the pool.
-        return slot_id in self.persistent_pool._slots
+        return self.persistent_pool.owns_slot(slot_id)
 
     def slot_state(self) -> dict:
         """Return current per-slot state for observability.
@@ -840,6 +847,7 @@ class RecyclingEngine:
         UI uses this to render a live slot-status panel.
         """
         self._init_slot_state()
+        pool_owned = self.persistent_pool.owned_slot_ids
         return {
             "slots": [
                 {
@@ -847,7 +855,7 @@ class RecyclingEngine:
                     "context_tokens": self._slot_context_tokens.get(sid, 0),
                     "last_prompt_tokens": len(self._slot_history.get(sid, [])),
                     "use_count": self._slot_use_count.get(sid, 0),
-                    "reserved": sid in self.persistent_pool._slots,
+                    "reserved": sid in pool_owned,
                 }
                 for sid in sorted(
                     set(self._slot_history)
@@ -861,7 +869,7 @@ class RecyclingEngine:
             },
             "spill_count": self._spill_count,
             "max_context_tokens": self._max_context_tokens,
-            "reserved_slots": sorted(self.persistent_pool._slots.keys()),
+            "reserved_slots": sorted(pool_owned),
         }
 
     def reset_state(self) -> None:

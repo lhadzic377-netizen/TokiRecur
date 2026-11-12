@@ -1263,11 +1263,16 @@ def test_curl_download_writes_file_and_returns(tmp_path, monkeypatch):
 
 
 def test_curl_download_passes_bearer_token(tmp_path, monkeypatch):
-    """When GITHUB_TOKEN is set, curl gets an Authorization header."""
+    """When GITHUB_TOKEN is set, curl gets an Authorization header.
+
+    The header travels in a 0600 curl config file, not in argv: argv is
+    world-readable through /proc while the download runs.
+    """
     from tokirecur.cli import _curl_download
 
     dest = tmp_path / "blob"
     calls: list[list[str]] = []
+    configs: list[str] = []
 
     class _Result:
         returncode = 0
@@ -1275,6 +1280,8 @@ def test_curl_download_passes_bearer_token(tmp_path, monkeypatch):
 
     def fake_run(cmd, **kwargs):
         calls.append(cmd)
+        cfg = cmd[cmd.index("--config") + 1]
+        configs.append(Path(cfg).read_text())
         dest.write_bytes(b"x")
         return _Result()
 
@@ -1282,7 +1289,8 @@ def test_curl_download_passes_bearer_token(tmp_path, monkeypatch):
     monkeypatch.setattr("tokirecur.cli.subprocess.run", fake_run)
     _curl_download("/usr/bin/curl", "https://example.test/x", dest,
                    label="download x", token="ghp_test123")
-    assert any(a == "Authorization: Bearer ghp_test123" for a in calls[0])
+    assert "Authorization: Bearer ghp_test123" in configs[0]
+    assert not any("ghp_test123" in arg for arg in calls[0])
 
 
 def test_curl_download_raises_on_zero_byte_output(tmp_path, monkeypatch):

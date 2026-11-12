@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -249,3 +250,56 @@ def test_cli_round_trip(tmp_path):
     out = runner.invoke(cli, ["tap", "off"])
     assert out.exit_code == 0
     assert tap.is_enabled() is False
+
+
+def test_a_claimed_roll_name_is_not_stolen(monkeypatch, tmp_path):
+    """The roll name is claimed before the rename.
+
+    The daemon and the TUI write the same day file, and the write lock
+    is per process. Without the claim both could find the roll name
+    free, and the second rename would overwrite the just-rolled file
+    with the fresh base - losing the records in it.
+    """
+    monkeypatch.setenv("TOKI_TAP_DIR", str(tmp_path))
+    monkeypatch.setenv("TOKI_TAP_FILE_MB", "0.001")
+    tap.set_enabled(True)
+    for _ in range(20):
+        tap.record(endpoint="chat", model="m", result=_result(output_text="x" * 60))
+
+    rolled = sorted(Path(tap.tap_dir()).glob("*.jsonl"))
+    # Every rolled file holds records; none was overwritten by a later
+    # rename into the same name.
+    total = sum(len(p.read_text().splitlines()) for p in rolled)
+    assert total == 20
+    # The names are distinct - a second roll never reused a name.
+    names = [p.name for p in rolled]
+    assert len(names) == len(set(names))
+
+
+def test_a_short_write_is_completed(monkeypatch, tmp_path):
+    """os.write may write less than it was given.
+
+    A short write truncates the JSONL line, and a truncated line
+    breaks every reader of the file.
+    """
+    monkeypatch.setenv("TOKI_TAP_DIR", str(tmp_path))
+    tap.set_enabled(True)
+
+    real_write = os.write
+    state = {"first": True}
+
+    def short_write(fd, data):
+        if state["first"]:
+            state["first"] = False
+            return real_write(fd, data[:5])  # a partial write
+        return real_write(fd, data)
+
+    monkeypatch.setattr(tap.os, "write", short_write)
+    try:
+        tap.record(endpoint="chat", model="m", result=_result(output_text="hello"))
+    finally:
+        monkeypatch.setattr(tap.os, "write", real_write)
+
+    lines = (Path(tap.tap_dir()) / f"{tap._today()}.jsonl").read_text().splitlines()
+    assert len(lines) == 1
+    assert json.loads(lines[0])["completion"] == "hello"

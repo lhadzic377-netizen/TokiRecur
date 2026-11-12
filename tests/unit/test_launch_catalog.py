@@ -139,9 +139,6 @@ def test_new_client_launch_plans_pin_the_selected_model(monkeypatch):
     monkeypatch.setattr("tokirecur.selector.client_mode", lambda _: "managed")
     spec = _spec()
     expected = {
-        "qwen": ["qwen", "--model", spec.model_id,
-                 "--openai-base-url", "http://127.0.0.1:8811/v1",
-                 "--auth-type", "openai"],
         "droid": ["droid"],
         "cline": ["cline", "--config",
                   str(Path.home() / ".cline" / "tokirecur"),

@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -760,8 +761,32 @@ def web(host: str, port: int, raw_url: str, daemon_url: str,
 
     from ..web import create_web_app
 
-    app = create_web_app(raw_url=raw_url, daemon_url=daemon_url)
+    # The UI is open by design (no login page) and it attaches the
+    # daemon's own credential to every proxied call. That is fine on
+    # loopback and a hole anywhere else: on the LAN the server becomes
+    # an open, token-lending proxy for the model. A non-loopback bind
+    # therefore asks for the token, and the machine's own name is
+    # allowed as a Host.
+    remote = host not in ("127.0.0.1", "localhost", "::1", "")
+    allowed_hosts = set()
+    if remote:
+        allowed_hosts.add(host)
+        try:
+            allowed_hosts.add(socket.gethostname())
+        except OSError:
+            pass
+    app = create_web_app(
+        raw_url=raw_url,
+        daemon_url=daemon_url,
+        allowed_hosts=allowed_hosts,
+        require_token=remote,
+    )
     scheme = "https" if tls_cert else "http"
+    if remote:
+        click.echo(
+            f"  → serving on {host}: the UI now requires the daemon token "
+            f"(pass ?token=... or an Authorization header)"
+        )
 
     if detach:
         import subprocess
@@ -782,7 +807,9 @@ def web(host: str, port: int, raw_url: str, daemon_url: str,
             winproc.resolve_argv(cmd),
             env={**os.environ,
                  "TOKI_WEB_RAW_URL": raw_url,
-                 "TOKI_WEB_DAEMON_URL": daemon_url},
+                 "TOKI_WEB_DAEMON_URL": daemon_url,
+                 "TOKI_WEB_ALLOWED_HOSTS": ",".join(sorted(allowed_hosts)),
+                 "TOKI_WEB_REQUIRE_TOKEN": "1" if remote else "0"},
             stdout=open(log_path, "ab"),
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
@@ -2227,25 +2254,41 @@ def _curl_download(
         "-o", str(dest),
         url,
     ]
+    cfg_path: str | None = None
     if token:
-        cmd.insert(-1, "-H")
-        cmd.insert(-1, f"Authorization: Bearer {token}")
+        # Keep the bearer token out of argv: /proc/<pid>/cmdline is
+        # world-readable, so a token passed via -H leaks to every local
+        # user for the whole download. curl reads it from a 0600 config
+        # file (mkstemp) that is removed immediately after the run.
+        import tempfile
+        fd, cfg_path = tempfile.mkstemp(prefix="toki-curl-", suffix=".cfg")
+        with os.fdopen(fd, "w") as cfg:
+            cfg.write(f'header = "Authorization: Bearer {token}"\n')
+        cmd.insert(-1, "--config")
+        cmd.insert(-1, cfg_path)
 
     click.echo(f"{label}: using curl with --retry-all-errors…")
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        stderr = (result.stderr or "").strip()
-        raise _RetryableDownloadError(
-            f"curl exited {result.returncode}: "
-            f"{stderr or 'unknown error'}"
-        )
-    # curl --fail aborts on HTTP 4xx/5xx, leaving dest empty/partial
-    # (or never creating it). Either way the request never got a body.
-    if not dest.exists() or dest.stat().st_size == 0:
-        raise _RetryableDownloadError(
-            "curl wrote 0 bytes (likely 4xx/5xx — "
-            "check the URL or your GitHub token)"
-        )
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            stderr = (result.stderr or "").strip()
+            raise _RetryableDownloadError(
+                f"curl exited {result.returncode}: "
+                f"{stderr or 'unknown error'}"
+            )
+        # curl --fail aborts on HTTP 4xx/5xx, leaving dest empty/partial
+        # (or never creating it). Either way the request never got a body.
+        if not dest.exists() or dest.stat().st_size == 0:
+            raise _RetryableDownloadError(
+                "curl wrote 0 bytes (likely 4xx/5xx — "
+                "check the URL or your GitHub token)"
+            )
+    finally:
+        if cfg_path is not None:
+            try:
+                os.unlink(cfg_path)
+            except OSError:
+                pass
 
 
 def _raise_download_error(
@@ -2274,6 +2317,36 @@ def _raise_download_error(
         f"    - auth:  export TOKI_GITHUB_TOKEN=<PAT> then re-run\n"
         f"    - VPN:   disable / change VPN / proxy and re-run\n"
     )
+
+
+def _extract_tar_safe(tf, dest: Path) -> None:
+    """Extract a tar archive without path traversal.
+
+    ``filter="data"`` exists only on Python 3.10.12+/3.11.4+. On stock LTS
+    interpreters (Ubuntu 22.04 = 3.10.6, Debian 12 = 3.11.2) it raises
+    TypeError; rather than fall back to unfiltered ``extractall``
+    (CVE-2007-4559), validate every member and link target stays inside
+    ``dest`` before extracting.
+    """
+    try:
+        tf.extractall(dest, filter="data")
+        return
+    except TypeError:
+        pass
+    root = dest.resolve()
+    for member in tf.getmembers():
+        target = (root / member.name).resolve()
+        if not target.is_relative_to(root):
+            raise RuntimeError(
+                f"refusing to extract unsafe tar member: {member.name!r}"
+            )
+        if member.issym() or member.islnk():
+            link = (target.parent / member.linkname).resolve()
+            if not link.is_relative_to(root):
+                raise RuntimeError(
+                    f"refusing to extract unsafe tar link: {member.name!r}"
+                )
+    tf.extractall(dest)
 
 
 def _pick_asset(
@@ -2533,10 +2606,7 @@ def _download_and_unpack_zip(api, asset: dict, bin_dir: Path,
         else:
             import tarfile
             with tarfile.open(zip_path) as tf:
-                try:
-                    tf.extractall(tmp_dir, filter="data")
-                except TypeError:
-                    tf.extractall(tmp_dir)
+                _extract_tar_safe(tf, tmp_dir)
         # The archive may nest its files under a top-level folder;
         # strip exactly one level so llama-server.exe and the runtime
         # DLLs land directly in bin_dir.
@@ -3095,10 +3165,7 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
             import tarfile
 
             with tarfile.open(zip_path) as tf:
-                try:
-                    tf.extractall(tmp, filter="data")
-                except TypeError:  # Python < 3.12
-                    tf.extractall(tmp)
+                _extract_tar_safe(tf, tmp)
 
         matches = sorted(Path(tmp).rglob(exe_name))
         if not matches:

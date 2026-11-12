@@ -622,7 +622,9 @@ def _estimate_need(spec: ModelSpec) -> float:
                     extra += Path(companion).stat().st_size / 1e9
             except OSError:
                 pass
-    return (weight_gb + extra) * 1.2 + 4.0
+    need = (weight_gb + extra) * 1.2 + 4.0
+    need += attached_vram_gb(spec, spec.ctx_size, getattr(spec, "parallel", 1))
+    return need
 
 
 def _available_gb() -> float:
@@ -4643,16 +4645,29 @@ def remove_model(
     purged_weights = False
     purged_state = False
     if purge:
-        weights_dir = Path(spec.gguf).parent.resolve()
-        # Don't follow a symlink that points outside the user's models dir.
+        models_root = (Path.home() / "models").resolve()
+        # Resolve the real weights location rather than trusting the raw
+        # spec.gguf parent: portable/default entries store a bare filename,
+        # so Path(spec.gguf).parent is "." and resolves to the CWD — which
+        # would rmtree whatever directory the command happened to run from.
         try:
-            weights_dir.relative_to(Path.home() / "models")
-            shutil.rmtree(weights_dir, ignore_errors=True)
-            purged_weights = True
+            weights_dir = resolve_gguf_path(spec).parent.resolve()
+        except FileNotFoundError:
+            weights_dir = (models_root / spec.name).resolve()
+        # Only ever remove a strict per-model subdirectory of ~/models.
+        # Never the models root itself (an absolute gguf placed directly
+        # in ~/models resolves to it) and never anything outside it
+        # (legacy custom paths the user opted into).
+        try:
+            weights_dir.relative_to(models_root)
         except ValueError:
-            # gguf path lives outside ~/models (legacy custom paths) —
-            # leave it alone, the user opted in to that layout.
             purged_weights = False
+        else:
+            if weights_dir != models_root and weights_dir.is_dir():
+                shutil.rmtree(weights_dir, ignore_errors=True)
+                purged_weights = True
+            else:
+                purged_weights = False
 
         state_dir = spec.state_dir()
         shutil.rmtree(state_dir, ignore_errors=True)

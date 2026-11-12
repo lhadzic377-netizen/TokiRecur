@@ -23,10 +23,56 @@ STATIC_DIR = Path(__file__).parent / "static"
 TEMPLATE_DIR = Path(__file__).parent / "templates"
 
 
+def _num(value, default: float = 0.0) -> float:
+    """A number, whatever the report actually held.
+
+    A report is a JSON file someone else wrote. A null where a number
+    was expected made the dashboard's first arithmetic call throw, and
+    the whole table - and the summary - went blank.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return default
+    return float(value)
+
+
+def _text(value, default: str = "") -> str:
+    """A string, whatever the report actually held."""
+    if value is None:
+        return default
+    if isinstance(value, str):
+        return value
+    return str(value)
+
+
 def create_dashboard_app(*, reports_dir: Path) -> FastAPI:
     """Build a FastAPI app serving the dashboard."""
     app = FastAPI(title="Toki Recur Dashboard")
     app.state.reports_dir = reports_dir
+
+    @app.middleware("http")
+    async def content_security_policy(request, call_next):
+        """The dashboard renders report fields, so it needs a policy.
+
+        The values come from report JSON: the model is a GGUF file
+        name, the workload is an arbitrary string from a shared
+        workload file. A script in any of them must not run in the
+        dashboard's origin.
+        """
+        response = await call_next(request)
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            (
+                "default-src 'self'; "
+                "script-src 'self'; "
+                "style-src 'self' 'unsafe-inline'; "
+                "img-src 'self' data:; "
+                "connect-src 'self'; "
+                "frame-ancestors 'none'; "
+                "base-uri 'self'; "
+                "form-action 'self'"
+            ),
+        )
+        return response
 
     @app.get("/api/reports")
     async def list_reports() -> JSONResponse:
@@ -44,19 +90,19 @@ def create_dashboard_app(*, reports_dir: Path) -> FastAPI:
                 baseline = data.get("baseline", {})
                 reports.append({
                     "file": path.name,
-                    "model": meta.get("model", "unknown"),
-                    "workload": workload.get("name", "unknown"),
-                    "prompts": workload.get("prompt_count", 0),
-                    "composite": score.get("composite", 0),
-                    "grade": score.get("grade", "N/A"),
-                    "ttft_improvement_pct": score.get("ttft_improvement_pct", 0),
-                    "prefill_skip_pct": score.get("prefill_skip_pct", 0),
-                    "hit_rate_pct": score.get("cache_hit_rate_pct", 0),
-                    "throughput_gain_pct": score.get("throughput_gain_pct", 0),
-                    "speedup": score.get("speedup", 1.0),
-                    "timestamp": meta.get("timestamp", 0),
-                    "duration_baseline_sec": baseline.get("duration_sec", 0),
-                    "duration_recycled_sec": recycled.get("duration_sec", 0),
+                    "model": _text(meta.get("model"), "unknown"),
+                    "workload": _text(workload.get("name"), "unknown"),
+                    "prompts": _num(workload.get("prompt_count"), 0),
+                    "composite": _num(score.get("composite"), 0),
+                    "grade": _text(score.get("grade"), "N/A"),
+                    "ttft_improvement_pct": _num(score.get("ttft_improvement_pct"), 0),
+                    "prefill_skip_pct": _num(score.get("prefill_skip_pct"), 0),
+                    "hit_rate_pct": _num(score.get("cache_hit_rate_pct"), 0),
+                    "throughput_gain_pct": _num(score.get("throughput_gain_pct"), 0),
+                    "speedup": _num(score.get("speedup"), 1.0),
+                    "timestamp": _num(meta.get("timestamp"), 0),
+                    "duration_baseline_sec": _num(baseline.get("duration_sec"), 0),
+                    "duration_recycled_sec": _num(recycled.get("duration_sec"), 0),
                 })
             except Exception:
                 # Skip malformed reports.

@@ -41,7 +41,7 @@ if [[ $EUID -ne 0 ]]; then
     # ── full user install ───────────────────────────────────────────
     cd "$(dirname "${BASH_SOURCE[0]}")"
 
-    PYTHON="${PYTHON:-$(command -v python3 || command -v python)}"
+    PYTHON="${PYTHON:-$(command -v python3 || command -v python || true)}"
     if [[ -z "$PYTHON" ]]; then
       echo "error: python3 not found — install Python 3.10+ first" >&2
       exit 1
@@ -79,7 +79,7 @@ if [[ $EUID -ne 0 ]]; then
       echo "pipx not found — installing it to the user site first…"
       "$PYTHON" -m pip install --user pipx
       "$PYTHON" -m pipx install "$EXTRA"
-      TOKI="$(command -v toki || "$HOME/.local/bin/toki")"
+      TOKI="$(command -v toki || echo "$HOME/.local/bin/toki")"
     fi
 
     TOKI="${TOKI:-$(command -v toki || echo "$HOME/.local/bin/toki")}"
@@ -149,8 +149,7 @@ if [[ $EUID -ne 0 ]]; then
       echo ""
       _yellow_bar "fetching llama-server" 55
       echo "Fetching llama-server for this machine ($TOKI model install-llama)…"
-      "$TOKI" model install-llama
-      if [[ $? -ne 0 ]]; then
+      if ! "$TOKI" model install-llama; then
         echo "error: toki model install-llama failed. Fix the error above, or" >&2
         echo "re-run with TOKI_SKIP_LLAMA=1 and retry later with:" >&2
         echo "  $TOKI model install-llama" >&2
@@ -399,14 +398,15 @@ if [[ ! -f /etc/toki-recur/toki.env ]]; then
     install -m 0600 -o root -g "$TOKI_GID" "$ENV_SRC" /etc/toki-recur/toki.env
 fi
 
-# If caller passed TOKI_AUTH_TOKEN, write it to the env file.
+# If caller passed TOKI_AUTH_TOKEN, write it to the env file. Rewrite the
+# line rather than sed-substituting it: a token containing |, & or \ would
+# corrupt a sed replacement, and BSD sed -i needs an argument macOS lacks.
 if [[ -n "${TOKI_AUTH_TOKEN:-}" ]]; then
-    if grep -q '^TOKI_AUTH_TOKEN=' /etc/toki-recur/toki.env; then
-        sed -i "s|^TOKI_AUTH_TOKEN=.*|TOKI_AUTH_TOKEN=$TOKI_AUTH_TOKEN|" /etc/toki-recur/toki.env
-    else
-        echo "TOKI_AUTH_TOKEN=$TOKI_AUTH_TOKEN" >> /etc/toki-recur/toki.env
-    fi
-    chmod 600 /etc/toki-recur/toki.env
+    tmp_env="$(mktemp /etc/toki-recur/toki.env.XXXXXX)"
+    grep -v '^TOKI_AUTH_TOKEN=' /etc/toki-recur/toki.env > "$tmp_env" || true
+    printf 'TOKI_AUTH_TOKEN=%s\n' "$TOKI_AUTH_TOKEN" >> "$tmp_env"
+    install -m 0600 -o root -g "$TOKI_GID" "$tmp_env" /etc/toki-recur/toki.env
+    rm -f "$tmp_env"
     echo "[+] TOKI_AUTH_TOKEN written to /etc/toki-recur/toki.env"
 fi
 

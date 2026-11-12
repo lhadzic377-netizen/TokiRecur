@@ -56,6 +56,19 @@ def compute_sha256(data: bytes) -> bytes:
     return hashlib.sha256(data).digest()
 
 
+def sha256_file(path: Path, *, chunk_size: int = 1 << 20) -> bytes:
+    """Stream ``path`` through SHA-256 in ``chunk_size`` blocks.
+
+    The KV ``.bin`` can be multiple gigabytes; reading it whole to hash
+    it would spike RSS by the full payload size. This keeps memory flat.
+    """
+    h = _SHA256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(chunk_size), b""):
+            h.update(chunk)
+    return h.digest()
+
+
 class BlobWriter:
     """Incremental writer for a ``.trkv`` sidecar.
 
@@ -83,6 +96,15 @@ class BlobWriter:
         self._f.write(data)
         self._hasher.update(data)
         self._bytes += len(data)
+
+    def update_digest(self, data: bytes) -> None:
+        """Feed ``data`` into the trailing digest WITHOUT embedding it.
+
+        Used when the payload lives in an external file (llama-server's
+        ``.bin``) and the sidecar records only its SHA-256, keeping the
+        ``.trkv`` small instead of duplicating a multi-GB KV blob.
+        """
+        self._hasher.update(data)
 
     def finalize(self) -> int:
         """Flush the trailing SHA-256 digest and close the file.

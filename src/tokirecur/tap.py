@@ -153,6 +153,13 @@ def _active_path() -> Path:
     A file over the per-file ceiling moves to ``<day>.1.jsonl`` and the
     fresh one becomes active, so no single file grows without bound and
     no turn is ever split across two files.
+
+    The roll name is *claimed* before the rename. The daemon and the
+    TUI both write the same day file, and the lock above is per
+    process: without the claim, both could find ``<day>.1.jsonl``
+    missing and both rename into it, and the second rename would
+    overwrite the just-rolled file with the fresh base - losing up to
+    64 MiB of recordings.
     """
     limit = _env_mb("TOKI_TAP_FILE_MB", DEFAULT_FILE_MB)
     base = _base_path()
@@ -163,10 +170,27 @@ def _active_path() -> Path:
             index = 1
             while True:
                 rolled = base.with_name(f"{base.stem}.{index}.jsonl")
-                if not rolled.exists():
+                # O_EXCL: the create fails if the name is taken, so
+                # exactly one process wins the roll.
+                try:
+                    fd = os.open(
+                        rolled, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600
+                    )
+                except FileExistsError:
+                    index += 1
+                    continue
+                os.close(fd)
+                try:
                     os.replace(base, rolled)
+                except OSError:
+                    # The claim is ours but the rename failed; drop the
+                    # placeholder so the next attempt can try again.
+                    try:
+                        rolled.unlink()
+                    except OSError:
+                        pass
                     return base
-                index += 1
+                return base
     except OSError:
         pass
     return base
@@ -231,7 +255,13 @@ def _write(record: dict[str, Any]) -> bool:
             path = _active_path()
             fd = os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
             try:
-                os.write(fd, payload)
+                # os.write may write less than it was given (a full
+                # disk, an interrupted write). A short write truncates
+                # the line, and a truncated JSONL line breaks every
+                # reader of the file.
+                written = 0
+                while written < len(payload):
+                    written += os.write(fd, payload[written:])
             finally:
                 os.close(fd)
         except OSError as e:

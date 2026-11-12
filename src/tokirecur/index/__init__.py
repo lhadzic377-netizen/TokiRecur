@@ -15,6 +15,7 @@ Both expose the same three methods used by the recycling engine:
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 import threading
 import time
@@ -24,6 +25,8 @@ from pathlib import Path
 import numpy as np
 
 from ..core.recycling import CacheEntry
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -75,13 +78,55 @@ class BruteForceIndex(Index):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
+        self._conn = None
+        self._embeddings: dict[str, np.ndarray] = {}
+        self._token_counts: dict[str, int] = {}
+        try:
+            self._open_and_load()
+        except sqlite3.OperationalError:
+            # Locked / disk-I/O / permissions — transient, not corruption.
+            # Quarantining here would throw away a healthy cache.
+            raise
+        except (sqlite3.DatabaseError, ValueError) as e:
+            # A non-DB file or truncated embedding blob (disk-full /
+            # interrupted write). The cache is regenerable, so quarantine
+            # the bad file and start fresh instead of crashing every
+            # command that opens it.
+            logger.warning(
+                "cache index %s is corrupt (%s); quarantining and rebuilding",
+                self.db_path, e,
+            )
+            self._quarantine_corrupt()
+            self._open_and_load()
+
+    def _open_and_load(self) -> None:
         self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=NORMAL")
         self._init_schema()
-        self._embeddings: dict[str, np.ndarray] = {}
-        self._token_counts: dict[str, int] = {}
+        self._embeddings = {}
+        self._token_counts = {}
         self._load_all()
+
+    def _quarantine_corrupt(self) -> None:
+        if self._conn is not None:
+            try:
+                self._conn.close()
+            except sqlite3.Error:
+                pass
+            self._conn = None
+        stamp = int(time.time())
+        for suffix in ("", "-wal", "-shm"):
+            src = Path(str(self.db_path) + suffix)
+            if not src.exists():
+                continue
+            try:
+                src.rename(src.with_name(f"{src.name}.corrupt-{stamp}"))
+            except OSError:
+                try:
+                    src.unlink()
+                except OSError:
+                    pass
 
     def close(self) -> None:
         """Checkpoint WAL and release the sqlite handle.

@@ -48,3 +48,28 @@ def test_text_without_a_think_block_is_untouched():
     answer, reasoning = split_thinking(text)
     assert answer == text
     assert reasoning == ""
+
+
+def test_raw_side_reads_token_counts_from_openai_usage(monkeypatch):
+    """Regression: the raw side posts /v1/chat/completions but used to
+    parse the native /completion fields (tokens_evaluated/tokens_predicted),
+    which are absent there — so prefill_tokens was always 0 and the diff's
+    'prefill tokens saved' headline was dead."""
+    import tokirecur.cli.completions as comp
+
+    class FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {
+                "choices": [{"message": {"content": "hello"}}],
+                "usage": {"prompt_tokens": 123, "completion_tokens": 7},
+            }
+
+    monkeypatch.setattr(comp, "_auth_headers", lambda: {})
+    monkeypatch.setattr(comp.httpx, "post", lambda *a, **k: FakeResp())
+    answer, m = comp.completion_once("http://raw", "hi", api="native")
+    assert answer == "hello"
+    assert m["prefill_tokens"] == 123
+    assert m["tokens_generated"] == 7

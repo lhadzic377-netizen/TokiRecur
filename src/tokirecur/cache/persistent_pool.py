@@ -162,6 +162,19 @@ class PersistentSlotPool:
         )
         return slot
 
+    def owns_slot(self, slot_id: int) -> bool:
+        """True when ``slot_id`` is currently owned by the pool.
+
+        ``_slots`` is keyed by cache_id (str), so membership must be tested
+        against the slots' ``slot_id`` — never ``slot_id in self._slots``.
+        """
+        return any(s.slot_id == slot_id for s in self._slots.values())
+
+    @property
+    def owned_slot_ids(self) -> set[int]:
+        """The set of slot ids the pool currently owns."""
+        return {s.slot_id for s in self._slots.values()}
+
     def stats(self) -> dict:
         return {
             "pooled_slots": len(self._slots),

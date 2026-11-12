@@ -111,3 +111,35 @@ def test_run_asks_for_the_stream_it_reads(registry, monkeypatch):
     repl.cmd_run(["hello"], repl.ReplConfig())
     assert sent["payload"]["stream"] is True, sent["payload"]
     assert "OK" in "".join(printed)
+
+
+class TestReplOutputIsNotMarkup:
+    """The model's answer is text, not rich markup.
+
+    It goes through console.print, which reads square brackets as
+    markup: "[i]" was eaten as an italic tag, and a stray "[/red]"
+    raised MarkupError and aborted the whole stream mid-answer.
+    """
+
+    def test_a_closing_tag_in_the_answer_does_not_abort_the_print(self):
+        import io
+
+        from rich.console import Console
+
+        console = Console(file=io.StringIO(), width=80)
+        console.print(
+            "here is a list[0] and a closing [/red] tag",
+            end="", markup=False, highlight=False,
+        )
+        out = console.file.getvalue()
+        assert "[/red]" in out
+        assert "[0]" in out
+
+    def test_an_error_message_with_markup_does_not_crash(self):
+        import io
+
+        from rich.console import Console
+
+        console = Console(file=io.StringIO(), width=80)
+        console.print("[red]error:[/red]", "boom [/red]", markup=False)
+        assert "boom" in console.file.getvalue()

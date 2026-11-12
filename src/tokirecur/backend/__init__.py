@@ -455,7 +455,12 @@ class LlamaServerBackend(LlamaBackend):
                 n_past=n_past,
                 vocab_size=info.get("vocab_size", 152064),
             )
-            w.write_payload(bin_path.read_bytes())
+            # Record only the digest of the .bin — never embed it. The
+            # KV blob can be multiple GB; copying it into the sidecar
+            # would double disk usage and spike RSS by the payload size.
+            with open(bin_path, "rb") as f:
+                for chunk in iter(lambda: f.read(1 << 20), b""):
+                    w.update_digest(chunk)
             w.finalize()
 
     def cache_load(self, slot_id: int, cache_id: str) -> dict[str, Any]:
@@ -486,17 +491,16 @@ class LlamaServerBackend(LlamaBackend):
         populated by older daemon versions)."""
         if self.cache_dir is None:
             return
-        from ..cache.blob import BlobReader, blob_path
+        from ..cache.blob import BlobReader, blob_path, sha256_file
         bin_path = self.cache_dir / f"{cache_id}.bin"
         trkv_path = blob_path(self.cache_dir, cache_id)
         if not (bin_path.exists() and trkv_path.exists()):
             return
         try:
             reader = BlobReader(trkv_path)
-            payload = reader.read_payload()
         except (ValueError, OSError):
             return
-        if reader.digest != BlobReader.compute_sha256(payload):
+        if reader.digest != sha256_file(bin_path):
             raise RuntimeError(
                 f".trkv sidecar digest mismatch for {cache_id}; "
                 f"refusing to feed corrupted KV to llama-server"

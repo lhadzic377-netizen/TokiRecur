@@ -539,10 +539,9 @@ def start_companion(companion: dict, env: dict) -> None:
         return
     client = companion.get("client") or ""
     log_dir = Path.home() / ".local/state/tokirecur"
-    log_dir.mkdir(parents=True, exist_ok=True)
     log_path = str(log_dir / f"{client}-companion.log")
     try:
-        with open(log_path, "ab") as log:
+        with _open_dsh_log(log_path) as log:
             proc = subprocess.Popen(
                 winproc.resolve_argv(argv), env=env, stdout=log,
                 stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
@@ -606,8 +605,7 @@ def _launch_detached(interface: str, client: str, argv: list[str],
                         title="launching in background", border_style="green", expand=False))
     log_dir = Path.home() / ".local/state/tokirecur"
     log_path = str(log_dir / f"{client}-{interface}.log")
-    log_dir.mkdir(parents=True, exist_ok=True)
-    with open(log_path, "ab") as log:
+    with _open_dsh_log(log_path) as log:
         proc = subprocess.Popen(
             winproc.resolve_argv(argv), env=env, stdout=log,
             stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
@@ -650,6 +648,23 @@ def _log_size(path: str) -> int:
         return Path(path).stat().st_size
     except OSError:
         return 0
+
+
+def _open_dsh_log(log_path: str):
+    """Open a dsh companion log owner-only (0600).
+
+    dsh prints its one-time-token URL to stdout, which is captured here;
+    a world-readable log would let any local user drive the web UI on
+    127.0.0.1. The state dir is created 0700 and the file forced to 0600
+    even if a previous run left it world-readable.
+    """
+    Path(log_path).parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd = os.open(log_path, os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+    except OSError:
+        pass
+    return os.fdopen(fd, "ab")
 
 
 def _existing_dsh_web_url(log_path: str) -> str | None:

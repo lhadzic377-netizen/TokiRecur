@@ -117,6 +117,12 @@ def _skip_value(fh, vtype: int, size: int) -> None:
         width = _ARRAY_FIXED.get(elem_type)
         if width is None:
             raise SplitInfoError(f"unsupported array element type {elem_type}")
+        # count is a u64: count*width can overflow the platform's seek
+        # offset (OverflowError). An array claiming to run past the end of
+        # the file is a corrupt header, so reject it before seeking.
+        remaining = size - fh.tell()
+        if count > remaining // width:
+            raise SplitInfoError("array extends past the end of the file")
         fh.seek(count * width, 1)
         return
     width = _ARRAY_FIXED.get(vtype)

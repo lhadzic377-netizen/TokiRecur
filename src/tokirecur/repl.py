@@ -383,10 +383,15 @@ def cmd_run(args: list[str], cfg: ReplConfig) -> None:
                     delta = choice.get("delta") or {}
                     piece = delta.get("content")
                     if piece:
-                        console.print(piece, end="")
+                        # The model's answer is text, not markup: a
+                        # stray "[/red]" in it raised MarkupError and
+                        # aborted the whole stream, and "[i]" was
+                        # eaten as an italic tag.
+                        console.print(piece, end="", markup=False,
+                                      highlight=False)
             console.print()
     except Exception as e:
-        console.print(f"[red]error:[/red] {e}")
+        console.print("[red]error:[/red]", e, markup=False)
         console.print(f"[dim]hint: {_why_it_failed(e, cfg.daemon_port)}[/dim]")
 
 
@@ -398,7 +403,7 @@ def cmd_stats(args: list[str], cfg: ReplConfig) -> None:
         r.raise_for_status()
         console.print(json.dumps(r.json(), indent=2))
     except Exception as e:
-        console.print(f"[red]error:[/red] {e}")
+        console.print("[red]error:[/red]", e, markup=False)
 
 
 def cmd_list(args: list[str], cfg: ReplConfig) -> None:
@@ -427,7 +432,7 @@ def cmd_list(args: list[str], cfg: ReplConfig) -> None:
             )
         console.print(t)
     except Exception as e:
-        console.print(f"[red]error:[/red] {e}")
+        console.print("[red]error:[/red]", e, markup=False)
 
 
 def cmd_show(args: list[str], cfg: ReplConfig) -> None:
@@ -445,7 +450,7 @@ def cmd_show(args: list[str], cfg: ReplConfig) -> None:
         r.raise_for_status()
         console.print_json(r.json())
     except Exception as e:
-        console.print(f"[red]error:[/red] {e}")
+        console.print("[red]error:[/red]", e, markup=False)
 
 
 def cmd_evict(args: list[str], cfg: ReplConfig) -> None:
@@ -673,7 +678,7 @@ def run() -> int:
         try:
             args = shlex.split(line)
         except ValueError as e:
-            console.print(f"[red]parse error:[/red] {e}")
+            console.print("[red]parse error:[/red]", e, markup=False)
             continue
 
         cmd, rest = args[0], args[1:]
@@ -687,7 +692,7 @@ def run() -> int:
             console.print("\n[yellow]interrupted[/yellow]")
             continue
         except Exception as e:  # noqa: BLE001
-            console.print(f"[red]error:[/red] {e}")
+            console.print("[red]error:[/red]", e, markup=False)
             continue
         if result is False:
             break

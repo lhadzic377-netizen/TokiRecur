@@ -174,9 +174,12 @@ rem    failure never leaves toki off PATH) ────────────�
 set "SCRIPTS=%VENV%\Scripts"
 echo %PATH% | findstr /i /c:"%SCRIPTS%" >nul
 if errorlevel 1 (
-  for /f "tokens=2*" %%a in ('reg query "HKCU\Environment" /v PATH 2^>nul') do set "USERPATH=%%b"
   echo [+] adding %SCRIPTS% to your user PATH
-  setx PATH "%SCRIPTS%;!USERPATH!" >nul
+  rem setx truncates PATH at 1024 chars and would silently destroy a long
+  rem user PATH; the .NET API has no such limit. Pass the dir through the
+  rem environment so no quoting of the path is needed.
+  set "TOKI_SCRIPTS=%SCRIPTS%"
+  powershell -NoProfile -Command "[Environment]::SetEnvironmentVariable('Path', $env:TOKI_SCRIPTS + ';' + [Environment]::GetEnvironmentVariable('Path','User'), 'User')"
 )
 
 rem ── 4. llama-server (non-fatal: warn and continue on failure) ───

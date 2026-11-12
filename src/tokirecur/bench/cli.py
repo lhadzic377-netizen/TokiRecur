@@ -2227,76 +2227,91 @@ def run_recycled(
     tmp_db = tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False)
     tmp_db.close()
     index = BruteForceIndex(tmp_db.name)
-    backend = LlamaServerBackend(base_url, cache_dir=cache_dir)
+    try:
+        backend = LlamaServerBackend(base_url, cache_dir=cache_dir)
 
-    engine = RecyclingEngine(
-        backend,
-        index,
-        similarity_threshold=similarity_threshold,
-    )
-    if max_context_tokens is not None:
-        engine._max_context_tokens = max_context_tokens
+        engine = RecyclingEngine(
+            backend,
+            index,
+            similarity_threshold=similarity_threshold,
+        )
+        if max_context_tokens is not None:
+            engine._max_context_tokens = max_context_tokens
 
-    sc = Scorecard(
-        mode="recycled",
-        workload=workload.name,
-        model="",
-        backend="llama-server (real save/restore)",
-        started_at=time.time(),
-        duration_sec=0.0,
-    )
-    predictions: dict[int, tuple[bool, int, float]] = {}
-    cats = workload.categories or [""] * len(workload.prompts)
-    started = time.time()
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[bold green]Recycled (cache enabled)  "),
-        BarColumn(),
-        TextColumn("{task.completed}/{task.total}"),
-        TimeElapsedColumn(),
-        console=console,
-    ) as progress:
-        task = progress.add_task("running", total=len(workload.prompts))
-        for i, prompt in enumerate(workload.prompts):
-            # Use llama-server's IN-MEMORY slot cache (no save/restore
-            # round-trip). The engine routes prompts to slots with the
-            # longest matching prefix so we get prefix reuse without
-            # precision loss. With max_slots=4, similar prompts cluster
-            # onto the same slot while unrelated prompts get their own.
-            result = engine.serve_native(
-                prompt,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                max_slots=4,
-                max_context_tokens=max_context_tokens,
-            )
-            m = Measure(
-                prompt_idx=i,
-                prompt_len_chars=len(prompt),
-                prompt_len_tokens=0,
-                prefill_tokens=result.prefilled_tokens,
-                tokens_generated=result.generated_tokens,
-                ttft_ms=result.ttft_ms,
-                prefill_ms=result.ttft_ms,
-                total_ms=result.total_ms,
-                prefill_tokens_per_sec=result.prefill_tokens_per_sec,
-                gen_tokens_per_sec=result.generated_tokens_per_sec,
-                cache_hit=result.hit,
-                reuse_depth=result.reuse_depth,
-                embedding_similarity=result.embedding_similarity,
-                output_text=result.output_text,
-                category=cats[i] if i < len(cats) else "",
-            )
-            # Patch in the token count from tokenize
+        sc = Scorecard(
+            mode="recycled",
+            workload=workload.name,
+            model="",
+            backend="llama-server (real save/restore)",
+            started_at=time.time(),
+            duration_sec=0.0,
+        )
+        predictions: dict[int, tuple[bool, int, float]] = {}
+        cats = workload.categories or [""] * len(workload.prompts)
+        started = time.time()
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[bold green]Recycled (cache enabled)  "),
+            BarColumn(),
+            TextColumn("{task.completed}/{task.total}"),
+            TimeElapsedColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task("running", total=len(workload.prompts))
+            for i, prompt in enumerate(workload.prompts):
+                # Use llama-server's IN-MEMORY slot cache (no save/restore
+                # round-trip). The engine routes prompts to slots with the
+                # longest matching prefix so we get prefix reuse without
+                # precision loss. With max_slots=4, similar prompts cluster
+                # onto the same slot while unrelated prompts get their own.
+                result = engine.serve_native(
+                    prompt,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    max_slots=4,
+                    max_context_tokens=max_context_tokens,
+                )
+                m = Measure(
+                    prompt_idx=i,
+                    prompt_len_chars=len(prompt),
+                    prompt_len_tokens=0,
+                    prefill_tokens=result.prefilled_tokens,
+                    tokens_generated=result.generated_tokens,
+                    ttft_ms=result.ttft_ms,
+                    prefill_ms=result.ttft_ms,
+                    total_ms=result.total_ms,
+                    prefill_tokens_per_sec=result.prefill_tokens_per_sec,
+                    gen_tokens_per_sec=result.generated_tokens_per_sec,
+                    cache_hit=result.hit,
+                    reuse_depth=result.reuse_depth,
+                    embedding_similarity=result.embedding_similarity,
+                    output_text=result.output_text,
+                    category=cats[i] if i < len(cats) else "",
+                )
+                # Patch in the token count from tokenize
+                try:
+                    m.prompt_len_tokens = len(backend.tokenize(prompt))
+                except Exception:
+                    pass
+                sc.measures.append(m)
+                predictions[i] = (result.hit, result.reuse_depth, result.embedding_similarity)
+                progress.advance(task)
+        sc.duration_sec = time.time() - started
+        return sc, predictions
+    finally:
+        # The temp index is regenerable scratch — close it and remove the
+        # DB (plus SQLite's -wal/-shm sidecars) so repeated bench runs don't
+        # accumulate files in /tmp.
+        import os
+        try:
+            index.close()
+        except Exception:
+            pass
+        for suffix in ("", "-wal", "-shm"):
             try:
-                m.prompt_len_tokens = len(backend.tokenize(prompt))
-            except Exception:
+                os.unlink(tmp_db.name + suffix)
+            except OSError:
                 pass
-            sc.measures.append(m)
-            predictions[i] = (result.hit, result.reuse_depth, result.embedding_similarity)
-            progress.advance(task)
-    sc.duration_sec = time.time() - started
-    return sc, predictions
 
 
 def output_equivalence(baseline: Scorecard, recycled: Scorecard) -> float:
@@ -2355,6 +2370,7 @@ def precision_retention(base_url: str, max_tokens: int) -> dict:
     for idx, prompt in enumerate(test_prompts):
         with httpx.Client(timeout=120.0) as client:
             base_runs = []
+            base_failed = False
             for _ in range(3):
                 body = _retry_post(client, base_url, {
                     "prompt": prompt,
@@ -2363,11 +2379,17 @@ def precision_retention(base_url: str, max_tokens: int) -> dict:
                     "slot_id": 0,
                     "cache_prompt": False,
                 })
+                # _retry_post returns {} on persistent failure. Without
+                # this guard three empty strings look "identical" and a
+                # dead server scores a perfect 100% precision.
+                if "content" not in body:
+                    base_failed = True
                 base_runs.append(body.get("content", ""))
             # Recycled: 3 runs on a slot unique to THIS prompt so cross-prompt
             # slot residue cannot pollute the cache test.
             base_slot = 1 + idx
             rec_runs = []
+            rec_failed = False
             for _ in range(3):
                 body = _retry_post(client, base_url, {
                     "prompt": prompt,
@@ -2376,18 +2398,22 @@ def precision_retention(base_url: str, max_tokens: int) -> dict:
                     "slot_id": base_slot,
                     "cache_prompt": True,
                 })
+                if "content" not in body:
+                    rec_failed = True
                 rec_runs.append(body.get("content", ""))
 
         baseline_total += 1
-        base_match = len(set(base_runs)) == 1
+        base_match = not base_failed and len(set(base_runs)) == 1
         if base_match:
             baseline_identical += 1
         recycled_total += 1
-        rec_match = len(set(rec_runs)) == 1
+        rec_match = not rec_failed and len(set(rec_runs)) == 1
         if rec_match:
             recycled_identical += 1
         cross_total += 1
-        cross_match = base_runs[0] == rec_runs[0]
+        cross_match = (
+            not base_failed and not rec_failed and base_runs[0] == rec_runs[0]
+        )
         if cross_match:
             cross_identical += 1
         per_prompt_results.append({
@@ -2449,6 +2475,8 @@ def load_workload(path: Path) -> Workload:
     """
     import json as _json
     data = _json.loads(Path(path).read_text())
+    if not isinstance(data, dict):
+        raise ValueError(f"workload {path}: top-level JSON must be an object")
     name = data.get("name") or path.stem
     description = data.get("description", "")
     prompts = data.get("prompts", [])
@@ -3047,7 +3075,14 @@ def main(argv: list[str] | None = None) -> int:
     server_proc = maybe_start_server(args)
     try:
         if args.workload_file:
-            workload = load_workload(args.workload_file)
+            try:
+                workload = load_workload(args.workload_file)
+            except (ValueError, OSError) as e:
+                # JSONDecodeError subclasses ValueError; a bad file must
+                # be a clean message + exit 2, not a raw traceback. The
+                # surrounding finally still tears the server down.
+                console.print(f"[red]invalid workload file: {e}[/red]")
+                return 2
         else:
             workload = WORKLOADS[args.workload]()
         console.print()

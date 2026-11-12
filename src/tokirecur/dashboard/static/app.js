@@ -34,18 +34,38 @@ function renderRow(rep) {
   const ttftColor = colorForDelta(rep.ttft_improvement_pct);
   const tputColor = colorForDelta(rep.throughput_gain_pct);
   const speedupColor = rep.speedup > 1.05 ? "good" : rep.speedup < 0.95 ? "bad" : "neutral";
-  tr.innerHTML = `
-    <td>${fmtDate(rep.timestamp)}</td>
-    <td>${rep.model}</td>
-    <td>${rep.workload}</td>
-    <td>${rep.prompts}</td>
-    <td><span class="${gradeClass(rep.grade)}">${rep.composite.toFixed(1)} (${rep.grade})</span></td>
-    <td class="${ttftColor}">${fmtPct(rep.ttft_improvement_pct)}</td>
-    <td>${rep.hit_rate_pct.toFixed(0)}%</td>
-    <td class="${tputColor}">${fmtPct(rep.throughput_gain_pct)}</td>
-    <td class="${speedupColor}">${rep.speedup.toFixed(2)}x</td>
-    <td>${rep.duration_baseline_sec.toFixed(0)}s / ${rep.duration_recycled_sec.toFixed(0)}s</td>
-  `;
+
+  // Every value here comes from a report JSON file: the model is a
+  // GGUF file name, the workload is an arbitrary string from a shared
+  // workload file, and a report can be dropped into the reports
+  // directory from anywhere. Building the row with innerHTML let any
+  // of them run script in the dashboard's origin, so the cells are
+  // text and the markup is ours.
+  const cell = (text, className) => {
+    const td = document.createElement("td");
+    td.textContent = text;
+    if (className) td.className = className;
+    return td;
+  };
+
+  tr.appendChild(cell(fmtDate(rep.timestamp)));
+  tr.appendChild(cell(String(rep.model)));
+  tr.appendChild(cell(String(rep.workload)));
+  tr.appendChild(cell(String(rep.prompts)));
+
+  const gradeCell = document.createElement("td");
+  const gradeSpan = document.createElement("span");
+  const gradeCls = gradeClass(rep.grade);
+  if (gradeCls) gradeSpan.className = gradeCls;
+  gradeSpan.textContent = `${rep.composite.toFixed(1)} (${rep.grade})`;
+  gradeCell.appendChild(gradeSpan);
+  tr.appendChild(gradeCell);
+
+  tr.appendChild(cell(fmtPct(rep.ttft_improvement_pct), ttftColor));
+  tr.appendChild(cell(`${rep.hit_rate_pct.toFixed(0)}%`));
+  tr.appendChild(cell(fmtPct(rep.throughput_gain_pct), tputColor));
+  tr.appendChild(cell(`${rep.speedup.toFixed(2)}x`, speedupColor));
+  tr.appendChild(cell(`${rep.duration_baseline_sec.toFixed(0)}s / ${rep.duration_recycled_sec.toFixed(0)}s`));
   return tr;
 }
 
@@ -53,14 +73,20 @@ function renderSummary(reports) {
   document.getElementById("stat-count").textContent = reports.length;
   if (reports.length === 0) return;
 
-  const best = reports.reduce((a, b) => a.composite > b.composite ? a : b);
-  document.getElementById("stat-best").textContent =
-    `${best.composite.toFixed(1)} (${best.model})`;
+  // One malformed report must not blank the whole dashboard: the
+  // arithmetic below used to throw on the first null and the table
+  // never rendered at all.
+  const num = (v) => (typeof v === "number" && isFinite(v) ? v : 0);
+  const composite = (r) => num(r.composite);
 
-  const meanTtft = reports.reduce((s, r) => s + (r.ttft_improvement_pct || 0), 0) / reports.length;
+  const best = reports.reduce((a, b) => composite(a) > composite(b) ? a : b);
+  document.getElementById("stat-best").textContent =
+    `${composite(best).toFixed(1)} (${best.model})`;
+
+  const meanTtft = reports.reduce((s, r) => s + num(r.ttft_improvement_pct), 0) / reports.length;
   document.getElementById("stat-ttft").textContent = fmtPct(meanTtft);
 
-  const meanHit = reports.reduce((s, r) => s + (r.hit_rate_pct || 0), 0) / reports.length;
+  const meanHit = reports.reduce((s, r) => s + num(r.hit_rate_pct), 0) / reports.length;
   document.getElementById("stat-hit").textContent = `${meanHit.toFixed(0)}%`;
 }
 
@@ -76,7 +102,13 @@ async function main() {
   }
   empty.style.display = "none";
   for (const rep of reports) {
-    tbody.appendChild(renderRow(rep));
+    // One report that cannot be rendered must not take the table with
+    // it: the rest are still worth showing.
+    try {
+      tbody.appendChild(renderRow(rep));
+    } catch (e) {
+      console.error("skipping report", rep && rep.file, e);
+    }
   }
 }
 

@@ -102,6 +102,12 @@ def _read_bytes(fh, fmt):
 
 def _read_string(fh) -> str:
     length = _read_bytes(fh, "<Q")
+    # The length is an attacker-controlled u64. Without a cap a corrupt or
+    # hostile header asks read() for exabytes and raises MemoryError, which
+    # the callers below do not catch. No real metadata string approaches
+    # 1 MiB (the same bound ggufsplit uses).
+    if length > (1 << 20):
+        raise struct.error("string length out of range")
     raw = fh.read(length)
     if len(raw) != length:
         raise struct.error("truncated string")
@@ -310,7 +316,8 @@ def _read_gguf_meta(path: Path | str) -> GgufMeta:
                     ),
                 ),
             )
-    except (OSError, struct.error, UnicodeDecodeError, ValueError):
+    except (OSError, struct.error, UnicodeDecodeError, ValueError,
+            MemoryError, OverflowError):
         return GgufMeta()
 
 
@@ -498,7 +505,8 @@ def _read_gguf_tensor_sizes(path: Path | str) -> dict[str, int]:
                 end = placed[i + 1][1] if i + 1 < len(placed) else file_end
                 if end > offset:
                     sizes[name] = end - offset
-    except (OSError, struct.error, UnicodeDecodeError, ValueError):
+    except (OSError, struct.error, UnicodeDecodeError, ValueError,
+            MemoryError, OverflowError):
         return sizes
     return sizes
 
@@ -527,7 +535,8 @@ def _read_gguf_tensors(path: Path | str) -> list[str]:
                 _read_bytes(fh, "<I")   # ggml type
                 _read_bytes(fh, "<Q")   # offset
                 names.append(name)
-    except (OSError, struct.error, UnicodeDecodeError, ValueError):
+    except (OSError, struct.error, UnicodeDecodeError, ValueError,
+            MemoryError, OverflowError):
         return names
     return names
 

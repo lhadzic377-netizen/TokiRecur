@@ -948,16 +948,35 @@ def _amd_rocm_vram_gb() -> float:
         return 0.0
     if r.returncode != 0:
         return 0.0
-    for line in r.stdout.splitlines():
+    lines = r.stdout.splitlines()
+    # Real rocm-smi emits a CSV header row ("device,VRAM Total Memory
+    # (B),VRAM Total Used Memory (B)") then one data row per card
+    # ("card0,536870912,..."). The number is on the data row and the label
+    # on the header, so a "label and number on the same line" scan never
+    # matches it and silently reports 0 GB — which demotes a usable GPU to
+    # a CPU build. Locate the total-memory column from the header first.
+    if lines:
+        first = [c.strip() for c in lines[0].split(",")]
+        col = next(
+            (i for i, c in enumerate(first)
+             if "vram" in c.lower() and "total" in c.lower()
+             and "used" not in c.lower()),
+            None,
+        )
+        if col is not None and not first[col].isdigit():
+            for row in lines[1:]:
+                cells = row.split(",")
+                if len(cells) > col and cells[col].strip().isdigit():
+                    return int(cells[col].strip()) / 1024**3
+    # Older/alternate builds put the label and value on one line, comma-
+    # or colon-separated ("GPU[0], VRAM Total Memory (B): 8589934592").
+    for line in lines:
         if "VRAM" not in line or "Total" not in line:
             continue
         for tok in line.replace(":", ",").split(","):
             tok = tok.strip()
             if tok.isdigit():
-                try:
-                    return int(tok) / 1024**3
-                except ValueError:
-                    return 0.0
+                return int(tok) / 1024**3
     return 0.0
 
 
@@ -1203,6 +1222,8 @@ def load_profile() -> HardwareProfile | None:
         data = json.loads(p.read_text())
     except (OSError, json.JSONDecodeError):
         return None
+    if not isinstance(data, dict):
+        return None
     return _from_dict(data)
 
 
@@ -1243,12 +1264,31 @@ def _from_dict(data: dict) -> HardwareProfile:
         core_max_freqs_mhz=cpu.get("core_max_freqs_mhz", []),
         simd=cpu.get("simd", []),
     )
-    gpus = [
-        GPUProfile(**g) for g in data.get("gpus", [])
-    ]
-    benches = {
-        k: BackendScore(**v) for k, v in data.get("benchmarks", {}).items()
-    }
+    gpus = []
+    for g in data.get("gpus") or []:
+        if not isinstance(g, dict):
+            continue
+        gpus.append(GPUProfile(
+            vendor=g.get("vendor", "unknown"),
+            name=g.get("name", "unknown"),
+            vram_gb=g.get("vram_gb", 0.0),
+            driver=g.get("driver"),
+            vulkan_score=g.get("vulkan_score", 0.0),
+            shared_ram=g.get("shared_ram", False),
+            use_for_llm=g.get("use_for_llm", True),
+            reason=g.get("reason", ""),
+        ))
+    benches = {}
+    for k, v in (data.get("benchmarks") or {}).items():
+        if not isinstance(v, dict):
+            continue
+        benches[k] = BackendScore(
+            name=v.get("name", k),
+            prompt_ms=v.get("prompt_ms", 0.0),
+            decode_tps=v.get("decode_tps", 0.0),
+            threads=v.get("threads", 0),
+            simd=v.get("simd"),
+        )
     return HardwareProfile(
         schema_version=data.get("schema_version", PROFILE_VERSION),
         profiled_at=data.get("profiled_at", ""),

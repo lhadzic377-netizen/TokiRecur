@@ -414,3 +414,67 @@ class TestPersistentPoolWiring:
             )
 
         assert engine._spill_count == 0
+
+
+class TestReservedSlotProtection:
+    """Pool ownership must actually exempt a slot from spill/round-robin.
+
+    Regression: ownership used to be tested as ``slot_id in pool._slots``,
+    but ``_slots`` is keyed by cache_id (str), so an int slot_id never
+    matched and the whole reservation mechanism silently did nothing.
+    """
+
+    def _pooled_engine(self):
+        backend = FakeBackend()
+        engine = RecyclingEngine(backend, FakeIndex())
+        engine.persistent_pool.min_reuse_for_pooling = 2
+        engine.persistent_pool._allocate_slot = lambda: 0
+        engine.persistent_pool._restore_to_slot = lambda *a: {}
+        for _ in range(3):
+            engine.serve_native("hot prompt", max_tokens=4)
+        assert len(engine.persistent_pool._slots) == 1
+        return engine
+
+    def _pool_slot(self, engine):
+        return next(iter(engine.persistent_pool._slots.values())).slot_id
+
+    def test_owns_slot_and_is_slot_reserved(self):
+        engine = self._pooled_engine()
+        slot = self._pool_slot(engine)
+        assert engine.persistent_pool.owns_slot(slot) is True
+        assert engine.persistent_pool.owns_slot(slot + 1) is False
+        assert engine._is_slot_reserved(slot) is True
+        assert engine._is_slot_reserved(slot + 1) is False
+
+    def test_slot_state_reports_reserved_by_slot_id(self):
+        engine = self._pooled_engine()
+        slot = self._pool_slot(engine)
+        state = engine.slot_state()
+        assert slot in state["reserved_slots"]
+        row = next(s for s in state["slots"] if s["slot_id"] == slot)
+        assert row["reserved"] is True
+
+    def test_pool_owned_slot_survives_real_spill_pressure(self):
+        engine = self._pooled_engine()
+        engine._max_context_tokens = 20
+        slot = self._pool_slot(engine)
+        # Pin a session to the pooled slot and push it well over budget.
+        engine._session_to_slot["s1"] = slot
+        engine._slot_context_tokens[slot] = 100
+        long_prompt = " ".join(f"w{i}" for i in range(40))
+        engine.serve_native(long_prompt, max_tokens=4, session_id="s1")
+        assert engine._spill_count == 0
+        assert engine.backend.clear_count.get(slot, 0) == 0
+
+    def test_non_pool_slot_still_spills(self):
+        engine = self._pooled_engine()
+        engine._max_context_tokens = 20
+        # A non-pooled slot under the same pressure must still spill,
+        # proving the exemption is selective rather than disabling spills.
+        engine._session_to_slot["s2"] = 1
+        engine._slot_context_tokens[1] = 100
+        engine._slot_history[1] = [1, 2, 3]
+        long_prompt = " ".join(f"w{i}" for i in range(40))
+        engine.serve_native(long_prompt, max_tokens=4, session_id="s2", max_slots=4)
+        assert engine._spill_count == 1
+        assert engine.backend.clear_count.get(1, 0) == 1

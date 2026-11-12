@@ -60,6 +60,22 @@ class TestLoadWorkload:
         with pytest.raises(ValueError, match="must be a list"):
             load_workload(path)
 
+    def test_non_dict_top_level_raises_valueerror(self, tmp_path):
+        """A top-level list/scalar used to hit AttributeError on data.get;
+        it must be a clean ValueError the CLI boundary can catch."""
+        path = tmp_path / "bad.json"
+        path.write_text(json.dumps(["not", "an", "object"]))
+        with pytest.raises(ValueError, match="must be an object"):
+            load_workload(path)
+
+    def test_malformed_json_raises_valueerror(self, tmp_path):
+        """JSONDecodeError subclasses ValueError, so the CLI's
+        except (ValueError, OSError) turns it into exit 2, not a traceback."""
+        path = tmp_path / "bad.json"
+        path.write_text("{not valid json")
+        with pytest.raises(ValueError):
+            load_workload(path)
+
 
 class TestResolveBenchTarget:
     def test_path_passthrough(self, tmp_path):

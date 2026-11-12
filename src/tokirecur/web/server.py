@@ -109,6 +109,23 @@ def _token_headers(token: str | None) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
+def _has_token(conn: Request | WebSocket, expected: str | None) -> bool:
+    """Does this connection carry the daemon token?
+
+    Only used when the UI is bound to something other than loopback:
+    there the UI would otherwise hand the daemon's credential to anyone
+    who can reach it.
+    """
+    if not expected:
+        return True
+    header = conn.headers.get("authorization") or ""
+    if header.startswith("Bearer "):
+        return header[7:].strip() == expected
+    # The browser UI cannot set a header on a WS handshake, so the
+    # query parameter is the other way in.
+    return (conn.query_params.get("token") or "") == expected
+
+
 # ── Web UI access ────────────────────────────────────────────────────
 #
 # The web UI is always open — no login page, no session cookie, no
@@ -158,16 +175,62 @@ def _is_same_origin(conn: Request | WebSocket) -> bool:
         return False
 
 
+#: Host names the UI answers to. A request whose Host is not one of
+#: these is not for us, however it arrived.
+LOCAL_HOSTS = frozenset({
+    "localhost",
+    "127.0.0.1",
+    "::1",
+    "[::1]",
+    "0.0.0.0",
+})
+
+
+def _host_allowed(host: str | None, extra: frozenset[str] | set[str]) -> bool:
+    """Is this Host header one we serve?
+
+    Comparing Origin against Host is not enough: under DNS rebinding
+    both are attacker-controlled (evil.com re-resolved to 127.0.0.1), so
+    the check passes and the attacker's page gets to use the UI - which
+    attaches the daemon's own token to every proxied call. The Host
+    header is the one thing the attacker cannot make match us, because
+    the browser sends the name it resolved.
+    """
+    if not host:
+        return False
+    # Strip the port. An IPv6 literal keeps its brackets.
+    name = host.strip()
+    if name.startswith("["):
+        closing = name.find("]")
+        if closing != -1:
+            name = name[:closing + 1]
+    elif ":" in name:
+        name = name.split(":", 1)[0]
+    return name.lower() in {h.lower() for h in LOCAL_HOSTS} | {
+        h.lower() for h in extra
+    }
+
+
 def create_web_app(
     *,
     raw_url: str = DEFAULT_RAW_URL,
     daemon_url: str = DEFAULT_DAEMON_URL,
+    allowed_hosts: frozenset[str] | set[str] | None = None,
+    require_token: bool = False,
 ) -> FastAPI:
-    """Build the FastAPI app with the given default backend URLs."""
+    """Build the FastAPI app with the given default backend URLs.
+
+    ``allowed_hosts`` are extra Host names the UI answers to (a LAN
+    address, a name the machine is reachable under). ``require_token``
+    makes the UI itself ask for the daemon token: the UI is open by
+    default, which is fine on loopback but turns the server into an
+    open, token-lending proxy for anyone who can reach it.
+    """
     app = FastAPI(title="Toki Recur", version="0.1.0")
     app.state.raw_url = raw_url
     app.state.daemon_url = daemon_url
     web_token = _configured_token()
+    extra_hosts = frozenset(allowed_hosts or ())
 
     @app.middleware("http")
     async def security_and_no_store(request: Request, call_next):
@@ -178,6 +241,16 @@ def create_web_app(
         response is therefore served no-store so a reload always gets
         one consistent, current copy of the UI.
         """
+        if not _host_allowed(request.headers.get("host"), extra_hosts):
+            return JSONResponse(
+                {"detail": "host is not allowed"},
+                status_code=403,
+            )
+        if require_token and not _has_token(request, web_token):
+            return JSONResponse(
+                {"detail": "token required"},
+                status_code=401,
+            )
         if not _is_same_origin(request):
             return JSONResponse(
                 {"detail": "cross-origin requests are not allowed"},
@@ -365,6 +438,12 @@ def create_web_app(
         # The UI is always open: the handshake needs no session cookie.
         # The server authenticates daemon calls with its own configured
         # credential (`auth_token = web_token or payload token`).
+        if not _host_allowed(websocket.headers.get("host"), extra_hosts):
+            await websocket.close(code=1008)
+            return
+        if require_token and not _has_token(websocket, web_token):
+            await websocket.close(code=1008)
+            return
         if not _is_same_origin(websocket):
             await websocket.close(code=1008)
             return
@@ -430,10 +509,19 @@ def create_web_app_from_env() -> FastAPI:
     Reads configuration from environment variables:
       TOKI_WEB_RAW_URL     default http://127.0.0.1:8088
       TOKI_WEB_DAEMON_URL  default http://127.0.0.1:8787
+      TOKI_WEB_ALLOWED_HOSTS  comma-separated extra Host names
+      TOKI_WEB_REQUIRE_TOKEN  "1" to ask the UI for the daemon token
     """
+    hosts = {
+        h.strip()
+        for h in (os.environ.get("TOKI_WEB_ALLOWED_HOSTS") or "").split(",")
+        if h.strip()
+    }
     return create_web_app(
         raw_url=os.environ.get("TOKI_WEB_RAW_URL", DEFAULT_RAW_URL),
         daemon_url=os.environ.get("TOKI_WEB_DAEMON_URL", DEFAULT_DAEMON_URL),
+        allowed_hosts=hosts,
+        require_token=os.environ.get("TOKI_WEB_REQUIRE_TOKEN") == "1",
     )
 
 

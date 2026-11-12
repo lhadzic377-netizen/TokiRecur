@@ -434,11 +434,7 @@ class LauncherApp(App[dict | None]):
         # never the "reg:X · live:Y" display string. The user types a
         # value, not a sentence; feeding the display string back makes
         # update_spec_field's int() parser reject it as invalid.
-        edit_value = (
-            str(getattr(spec, field, ""))
-            if spec is not None
-            else value
-        )
+        edit_value = _edit_value(spec, field, value)
         if choices is not None:
             screen = SettingsChoiceScreen(name, field, edit_value, choices)
             self.push_screen(screen, self._on_choice_dismissed)
@@ -458,11 +454,7 @@ class LauncherApp(App[dict | None]):
                 return
             name, field, value = current
             spec = next((s for s in self.specs if s.name == name), None)
-            edit_value = (
-                str(getattr(spec, field, ""))
-                if spec is not None
-                else value
-            )
+            edit_value = _edit_value(spec, field, value)
             self.push_screen(
                 SettingsEditScreen(name, field, edit_value), self._on_edit_dismissed
             )
@@ -541,26 +533,48 @@ class LauncherApp(App[dict | None]):
             self.push_screen(
                 ConfirmRestartScreen(title, body),
                 lambda ok: (
-                    self._commit_edit(name, field, new_value, apply=True)
+                    self.run_worker(
+                        self._commit_edit(name, field, new_value, apply=True),
+                        name=name,
+                        exclusive=False,
+                    )
                     if ok
                     else self.notify("edit cancelled", timeout=2)
                 ),
             )
             return
         # Sync-only and no-op fields go straight to the commit step.
-        self._commit_edit(name, field, new_value, apply=field in _SYNC_ONLY_FIELDS)
+        self.run_worker(
+            self._commit_edit(
+                name, field, new_value, apply=field in _SYNC_ONLY_FIELDS
+            ),
+            name=name,
+            exclusive=False,
+        )
 
-    def _commit_edit(self, name: str, field: str, new_value: str, apply: bool) -> None:
+    async def _commit_edit(self, name: str, field: str, new_value: str, apply: bool) -> None:
         """Write the registry, optionally apply the downstream effect,
-        and surface what happened to the user."""
+        and surface what happened to the user.
+
+        This runs in a worker: for a restart-required field the write
+        stops and starts llama-server, which waits up to a minute for
+        the server to come back. On the event loop that froze the whole
+        launcher - no rendering, no keys - for the duration.
+        """
         from .. import ctl as ctl_mod
         # Mark restart-required fields as in-flight so the row can show
         # "⟳ restarting" until the next poll sees the live value catch
         # up. Sync-only and no-op fields don't need a marker.
         if field in _RESTART_REQUIRED_FIELDS:
             self._restarting[(name, field)] = time.monotonic()
+        shown = _display_choice(
+            next((s for s in self.specs if s.name == name), None),
+            field, new_value,
+        )
         try:
-            ctl_mod.update_spec_field(name, field, new_value, apply=apply)
+            await asyncio.to_thread(
+                ctl_mod.update_spec_field, name, field, new_value, apply=apply
+            )
         except (ValueError, KeyError) as e:
             self._restarting.pop((name, field), None)
             self.notify(str(e), timeout=4, severity="error")
@@ -575,7 +589,7 @@ class LauncherApp(App[dict | None]):
             invalidate_settings_rows()
             self._refresh += 1
             self.notify(
-                f"{name}.{field} = {new_value}  (saved, but restart failed: {e})",
+                f"{name}.{field} = {shown}  (saved, but restart failed: {e})",
                 timeout=6, severity="warning",
             )
             return
@@ -585,17 +599,17 @@ class LauncherApp(App[dict | None]):
         invalidate_settings_rows()
         if field in _RESTART_REQUIRED_FIELDS:
             self.notify(
-                f"{name}.{field} = {new_value}  ·  restarted, configs synced",
+                f"{name}.{field} = {shown}  ·  restarted, configs synced",
                 timeout=3,
             )
         elif field in _SYNC_ONLY_FIELDS:
             self.notify(
-                f"{name}.{field} = {new_value}  ·  configs synced",
+                f"{name}.{field} = {shown}  ·  configs synced",
                 timeout=3,
             )
         else:
             self.notify(
-                f"{name}.{field} = {new_value}", timeout=3,
+                f"{name}.{field} = {shown}", timeout=3,
             )
         self._refresh += 1
 
@@ -881,9 +895,14 @@ class LauncherApp(App[dict | None]):
         # for exactly this reason. A list that runs off the bottom takes
         # the highlight with it: the person arrows down, the cursor leaves
         # the screen, and there is nothing left to see or aim at.
-        visible = max(3, min(len(variants), _visible_rows(self, 5)))
+        #
+        # The window is clamped to the list: a registry of one or two
+        # models is a normal state (after `toki model rm`, or a custom
+        # registry), and a 3-row window over 2 items walked off the end
+        # of the list and took the whole launcher down with it.
+        visible = min(len(variants), max(3, _visible_rows(self, 5)))
         start = max(0, min(self.model_idx - visible // 2, len(variants) - visible))
-        end = start + visible
+        end = min(len(variants), start + visible)
         if start:
             out.append(Text(self._GUT + "↑ more", style="dim"))
         for i in range(start, end):

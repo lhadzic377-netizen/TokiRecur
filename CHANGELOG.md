@@ -45,6 +45,83 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   passes `qwen --model tokirecur/<model>` on 1.0, keeping the endpoint
   flags for the releases that still accept them. The pre-1.0 section is
   still written, so a downgrade keeps a live route.
+- **The model picker no longer crashes on a small registry.** With one
+  or two models registered — a normal state after `toki model rm`, or
+  with a custom registry — the picker windowed three rows over a
+  two-item list, walked off the end, and took the whole launcher down
+  with `IndexError`. The window is now clamped to the list, the way the
+  settings pane's already was.
+- **A settings edit no longer freezes the launcher.** Changing a
+  restart-required field stopped and started llama-server, which waits
+  up to a minute for the server to come back — and it ran on the event
+  loop, so the launcher stopped rendering and stopped answering keys
+  for the whole restart. The write now runs in a worker.
+- **A failed turn no longer locks the input.** The streaming loop was
+  guarded, but the finalize path was not: an error writing the history
+  left the input disabled for good, and no key reset it.
+- **The web UI answers only the hosts it serves.** Comparing `Origin`
+  against `Host` is not a defence on its own — under DNS rebinding
+  both are the attacker's, so the check passed and the attacker's page
+  got to chat on the victim's GPU and read the cache state through a
+  proxy that attaches the daemon's own token. The `Host` header is now
+  checked against the names we serve.
+- **A non-loopback web bind asks for the token.** The UI is open by
+  design and authenticates its own proxied calls with the daemon's
+  credential, which is fine on loopback and an open, token-lending
+  proxy anywhere else. `toki web --host 0.0.0.0` now requires the
+  token and tells the user how to pass it.
+- **`model remove --purge` can no longer delete the models tree.** The
+  purge target came from the raw registry string, so an entry with a
+  bare filename resolved to the current directory — running the command
+  from `~/models` deleted every model's weights. The target is now the
+  resolved weights directory, and it has to be a per-model subdirectory.
+- **A pulled split model is registered under its own name.** The loop
+  over the linked parts rebound the model name, so the entry was saved
+  under a part's filename, `--name` was silently dropped, and pulling
+  the same repository again created a duplicate.
+- **A corrupt model file cannot crash the fit planner.** The GGUF
+  header parser read a length straight from the file — a hostile header
+  asked for exabytes and raised `MemoryError`, which no except clause
+  caught. The length is capped now, and the memory errors are handled.
+- **The reserved slots are reserved again.** The persistent pool's
+  slots are keyed by cache id, but the check looked an int slot id up in
+  that string-keyed map, so it was never true and the pool's hot-prefix
+  slots could be spilled over.
+- **An AMD GPU is not demoted to the CPU over a CSV parse.** The VRAM
+  reader required the label and the number on one line, and the real
+  `rocm-smi --csv` puts them in a header and a data row, so the GPU
+  came back with no VRAM and failed the 4 GB gate.
+- **A broken cache index no longer crashes every command.** A corrupt
+  SQLite file took `toki stats` and the daemon down with it; the index
+  now quarantines it and rebuilds, the way a corrupt registry already
+  did.
+- **A GitHub token no longer sits in the process list.** The curl
+  download path passed the bearer token in argv, where every local user
+  could read it for the length of the download. It travels in a 0600
+  config file instead.
+- **The dsh web token no longer lands in a world-readable log.** The
+  log holds a one-time token that opens the web UI, and it was created
+  0644 under the usual umask.
+- **A tarball is no longer extracted blindly.** On the stock LTS
+  Pythons the `filter=` argument does not exist, and the fallback
+  extracted without it — the path-traversal class of bug. Every member
+  is checked now.
+- **The dashboard renders report fields as text.** The model name, the
+  workload name and the grade came from report JSON and were written
+  into the row as HTML, so a model file named `<img onerror=...>` ran
+  script in the dashboard's origin. The cells are built as text now,
+  and the dashboard sends a content-security policy.
+- **One bad report no longer blanks the dashboard.** A null where a
+  number was expected threw in the first arithmetic call, and nothing
+  rendered at all.
+- **A model's answer is no longer read as markup.** The REPL printed
+  the answer through the rich console, which ate `[i]` as an italic
+  tag and raised on a stray `[/red]`, aborting the stream mid-answer.
+- **The tap no longer loses a rolled file.** The daemon and the TUI
+  write the same day file and the lock is per process, so both could
+  roll into the same name and the second rename overwrote the first
+  with the fresh base. The name is claimed before the rename, and a
+  short write is now completed instead of truncating the line.
 - **A split GGUF published under another name is fetched and linked.**
   DeepSeek-V4.1-Flash-1017-GSQ-RCO-Coder ships five parts named
   `-of-00006` and puts the sixth — the 110 GB Engram table — in the

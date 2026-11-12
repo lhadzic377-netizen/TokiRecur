@@ -689,13 +689,13 @@ def test_commit_edit_marks_restarting_field(monkeypatch):
             monkeypatch.setattr(ctl, "update_spec_field", fake_update)
 
             # Restart-required field.
-            app._commit_edit("9b", "ctx_size", "4096", apply=True)
+            await app._commit_edit("9b", "ctx_size", "4096", apply=True)
             assert ("9b", "ctx_size") in app._restarting
             assert _RESTART_REQUIRED_FIELDS and "ctx_size" in _RESTART_REQUIRED_FIELDS
 
             # Sync-only field must NOT register a marker.
             app._restarting.clear()
-            app._commit_edit("9b", "max_tokens", "256", apply=False)
+            await app._commit_edit("9b", "max_tokens", "256", apply=False)
             assert not app._restarting
             assert _SYNC_ONLY_FIELDS and "max_tokens" in _SYNC_ONLY_FIELDS
 

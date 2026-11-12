@@ -111,7 +111,10 @@ class TestWebSocketOrigin:
         assert _is_same_origin(_Conn()) is True
 
     def test_ws_rejects_cross_origin(self):
-        app = create_web_app(raw_url="http://raw:8088", daemon_url="http://daemon:8787")
+        app = create_web_app(
+            raw_url="http://raw:8088", daemon_url="http://daemon:8787",
+            allowed_hosts={"testserver"},
+        )
         with TestClient(app) as client:
             with pytest.raises(WebSocketDisconnect):
                 with client.websocket_connect(
@@ -120,7 +123,12 @@ class TestWebSocketOrigin:
                     pass
 
     def test_ws_accepts_same_origin(self):
-        app = create_web_app(raw_url="http://raw:8088", daemon_url="http://daemon:8787")
+        # The Host header has to be one we serve, so the test names a
+        # loopback host (the test client always sends "testserver").
+        app = create_web_app(
+            raw_url="http://raw:8088", daemon_url="http://daemon:8787",
+            allowed_hosts={"testserver"},
+        )
         with TestClient(app) as client:
             with client.websocket_connect(
                 "/ws/chat", headers={"origin": "http://testserver"}

@@ -155,13 +155,18 @@ def completion_once(
         body = r.json()
         elapsed_ms = (time.perf_counter() - started) * 1000.0
         message = (body.get("choices") or [{}])[0].get("message", {}) or {}
+        usage = body.get("usage") or {}
         answer, reasoning = split_thinking(message.get("content", "") or "")
         return answer, {
             "reasoning": reasoning or (message.get("reasoning_content") or ""),
             "ttft_ms": float((body.get("timings") or {}).get("prompt_ms", 0.0)),
             "total_ms": elapsed_ms,
-            "prefill_tokens": int(body.get("tokens_evaluated", 0)),
-            "tokens_generated": int(body.get("tokens_predicted", 0)),
+            # This side posts /v1/chat/completions too, so the counts live
+            # in `usage` — the native /completion fields (tokens_evaluated /
+            # tokens_predicted) are absent and parsed as a flat 0, which
+            # made "prefill tokens saved" always 0.
+            "prefill_tokens": int(usage.get("prompt_tokens", 0)),
+            "tokens_generated": int(usage.get("completion_tokens", 0)),
         }
     except httpx.HTTPError as e:
         return "", {"error": str(e), "total_ms": (time.perf_counter() - started) * 1000.0}

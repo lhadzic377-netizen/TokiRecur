@@ -364,7 +364,20 @@ class TokiApp(App):
             return
         self.busy = True
         self.input.disabled = True
+        # The whole turn runs under a finally: the history write, the
+        # widget calls and the daemon call can each fail (a full disk, a
+        # read-only state dir, a dropped connection), and any of them
+        # must not leave the input disabled. The TUI would refuse every
+        # later prompt until it was restarted.
+        try:
+            await self._run_chat(prompt, mode=mode)
+        finally:
+            self.busy = False
+            self.input.disabled = False
+            self.input.focus()
 
+    async def _run_chat(self, prompt: str, *, mode: str) -> None:
+        """Run one turn: render, stream, finalize, record."""
         # Render user message.
         self.chat.write_user(prompt)
         # The history the API gets is the history *before* this prompt:
@@ -432,6 +445,11 @@ class TokiApp(App):
         # Finalize assistant line. The widget interprets the badge based
         # on the (hit, soft_hit, mode) tuple: in raw mode both are False
         # and the widget should render the "↯ raw" badge instead.
+        #
+        # The finalize path does file I/O (the history write below) and
+        # widget calls that can raise on a full disk or a read-only
+        # state dir. That must not leave the input disabled: the TUI
+        # would refuse every further prompt until it was restarted.
         self.chat.end_assistant(
             mode=mode,
             hit=hit,
@@ -473,16 +491,22 @@ class TokiApp(App):
             # context (the JSONL file is only read once at startup).
             self._history.append({"role": "assistant", "content": accumulated})
 
-        self.busy = False
-        self.input.disabled = False
-        self.input.focus()
-
     async def _do_compare(self, prompt: str) -> None:
         if self.busy:
             return
         self.busy = True
         self.input.disabled = True
+        # Same reason as _do_chat: any failure below must re-enable the
+        # input rather than leave the TUI wedged.
+        try:
+            await self._run_compare(prompt)
+        finally:
+            self.busy = False
+            self.input.disabled = False
+            self.input.focus()
 
+    async def _run_compare(self, prompt: str) -> None:
+        """Run one raw-vs-cached comparison and record it."""
         self.chat.write_user(prompt + "  [compare]")
         api_history = self._history_for_api()
         history.append("user", prompt)
@@ -525,6 +549,10 @@ class TokiApp(App):
             self.chat.write_system(f"cached failed: {e}", style="red")
 
         # Compute diff + speedup.
+        #
+        # The finalize path writes to the history file and calls widgets;
+        # either can raise on a full disk. The input must come back
+        # either way, or the TUI refuses every later prompt.
         identical = raw_text == cached_text
         if identical:
             diff_chars = 0
@@ -562,10 +590,6 @@ class TokiApp(App):
         if raw_text:
             history.append("assistant", raw_text, mode="compare")
             self._history.append({"role": "assistant", "content": raw_text})
-
-        self.busy = False
-        self.input.disabled = False
-        self.input.focus()
 
     # ── Helpers ───────────────────────────────────────────────────────
 

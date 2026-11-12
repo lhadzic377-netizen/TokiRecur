@@ -636,3 +636,77 @@ def _line_text(line) -> str:
     if isinstance(line, Text):
         return line.plain
     return str(line)
+
+
+class TestSidebarSlotSessionLabel:
+    """The sidebar's per-slot session label.
+
+    The daemon sends ``sessions`` as session_id -> slot_id, so the
+    sidebar has to scan it for the slot it is drawing. Indexing that
+    map by the slot id never matched, and the label was silently
+    never shown.
+    """
+
+    def _render(self, session_to_slot, slots):
+        from tokirecur.tui.widgets import Sidebar
+
+        panel = Sidebar()
+        panel.session_to_slot = session_to_slot
+        panel.slots = slots
+        rendered = panel.render()
+        # A Rich Panel wraps the Text; the text is what carries the rows.
+        body = rendered.renderable
+        return body.plain if hasattr(body, "plain") else str(body)
+
+    def test_slot_shows_its_session_id(self):
+        text = self._render(
+            {"sess-abcdef123": 0},
+            [{"slot_id": 0, "context_tokens": 10, "max_context_tokens": 100}],
+        )
+        assert "sess-" in text
+        assert "sess-"[:5] in text
+
+    def test_slot_without_a_session_shows_no_label(self):
+        text = self._render(
+            {"sess-abcdef123": 0},
+            [{"slot_id": 1, "context_tokens": 10, "max_context_tokens": 100}],
+        )
+        assert "sess-" not in text
+
+
+class TestChatInputAlwaysUnlocks:
+    """A failed turn must not leave the input disabled.
+
+    The streaming loop was guarded, but the finalize path (the history
+    write, the widget calls) was not. An OSError there - a full disk, a
+    read-only state dir - left the TUI refusing every later prompt
+    until it was restarted.
+    """
+
+    def _app(self):
+        from tokirecur.tui.app import TokiApp
+
+        return TokiApp()
+
+    def test_history_failure_does_not_lock_the_input(self, monkeypatch):
+        import asyncio
+
+        from tokirecur.tui import app as app_mod
+
+        async def run_app():
+            def boom(*a, **kw):
+                raise OSError("no space left on device")
+
+            monkeypatch.setattr(app_mod.history, "append", boom)
+            async with self._app().run_test(size=(100, 34)) as pilot:
+                await pilot.pause()
+                app = pilot.app
+                app._history.clear()
+                try:
+                    await app._do_chat("hello", mode="cached")
+                except OSError:
+                    pass
+                assert app.busy is False
+                assert app.input.disabled is False
+
+        asyncio.run(run_app())

@@ -1043,6 +1043,20 @@ def test_pull_model_registers_entry(env, hf):
     assert hf["downloads"][0][1] == ["*model-Q4_K_M.gguf"]
 
 
+def test_pull_split_link_does_not_shadow_model_name(env, hf, monkeypatch):
+    """Regression: the linked-parts report loop used ``for name in linked``,
+    rebinding the model slug to a split-part filename. The entry was then
+    registered under e.g. 'model-00006-of-00006.gguf' instead of --name."""
+    monkeypatch.setattr(
+        ctl, "_resolve_split_gaps",
+        lambda *a, **k: ["model-00006-of-00006.gguf"],
+    )
+    spec = ctl.pull_model("acme/Split-GGUF", "splitmodel", ctx_size=4096)
+    assert spec.name == "splitmodel"
+    assert ctl.get_model("splitmodel").name == "splitmodel"
+    assert "00006" not in spec.name
+
+
 def test_pull_model_auto_ctx_caps_at_model_max(env, hf, monkeypatch):
     """A pull without --ctx auto-sizes: a 350M-class model whose max
     context is 8k must never be registered at the old flat 200k."""
@@ -2540,6 +2554,59 @@ def test_remove_model_purge_keeps_weights_outside_models_dir(seeded_env, hf, mon
     assert summary["purged_state"] is True
     assert outside.exists()         # weights preserved
     assert not state_dir.exists()   # state still cleaned
+
+
+def test_remove_model_purge_bare_filename_does_not_nuke_cwd(env, monkeypatch, tmp_path):
+    """Regression: a portable entry stores a bare filename, so the old
+    Path(spec.gguf).parent.resolve() was the CWD. Running purge from
+    ~/models rmtree'd the whole models tree (every model). Only the
+    per-model subdir may be removed."""
+    monkeypatch.setattr(ctl, "stop_model", lambda spec, force=False: None)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    models = tmp_path / "models"
+    (models / "target").mkdir(parents=True)
+    (models / "target" / "weights.gguf").write_text("stub")
+    (models / "sibling").mkdir()
+    (models / "sibling" / "keep.gguf").write_text("keep")
+    ctl.DEFAULT_REGISTRY.write_text(yaml.safe_dump({"models": [
+        {"name": "target", "gguf": "weights.gguf", "llama_port": 1,
+         "daemon_port": 2, "ctx_size": 100, "max_tokens": 90,
+         "model_id": "target"},
+    ]}))
+    ctl.invalidate_registry_cache()
+    monkeypatch.chdir(models)  # CWD == ~/models: the old bug deleted this
+
+    summary = ctl.remove_model("target", purge=True)
+
+    assert summary["purged_weights"] is True
+    assert models.exists()                            # root survived
+    assert (models / "sibling" / "keep.gguf").exists()  # sibling survived
+    assert not (models / "target").exists()           # target removed
+
+
+def test_remove_model_purge_absolute_in_root_refuses(env, monkeypatch, tmp_path):
+    """An absolute gguf placed directly in ~/models resolves to the models
+    root; purge must refuse rather than rmtree the root."""
+    monkeypatch.setattr(ctl, "stop_model", lambda spec, force=False: None)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    models = tmp_path / "models"
+    models.mkdir(parents=True)
+    (models / "root.gguf").write_text("stub")
+    (models / "other").mkdir()
+    (models / "other" / "keep.gguf").write_text("keep")
+    ctl.DEFAULT_REGISTRY.write_text(yaml.safe_dump({"models": [
+        {"name": "rootmodel", "gguf": str(models / "root.gguf"),
+         "llama_port": 1, "daemon_port": 2, "ctx_size": 100,
+         "max_tokens": 90, "model_id": "rootmodel"},
+    ]}))
+    ctl.invalidate_registry_cache()
+
+    summary = ctl.remove_model("rootmodel", purge=True)
+
+    assert summary["purged_weights"] is False
+    assert models.exists()
+    assert (models / "root.gguf").exists()
+    assert (models / "other" / "keep.gguf").exists()
 
 
 def test_remove_model_clears_active_marker(seeded_env, hf, monkeypatch):

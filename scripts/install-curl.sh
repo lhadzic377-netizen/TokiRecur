@@ -25,18 +25,21 @@ else
     SPEC="tokirecur[${EXTRAS}]"
 fi
 
-INSTALLER="pipx"
+PIPX=(pipx)
 if ! command -v pipx >/dev/null 2>&1; then
   echo "pipx not found — installing it to the user site first…"
   python3 -m pip install --user pipx
+  # The user-site bin dir is often not on PATH in this same shell, so
+  # invoke pipx as a module instead of relying on the fresh shim.
+  PIPX=(python3 -m pipx)
 fi
 
 if [[ -z "$TOKEN" ]]; then
   echo "Installing tokirecur from ${REPO} (public)…"
-  pipx install "${SPEC} @ git+https://github.com/${REPO}.git"
+  "${PIPX[@]}" install "${SPEC} @ git+https://github.com/${REPO}.git"
 else
   echo "Installing tokirecur from ${REPO} using the token in TOKI_REPO_TOKEN…"
-  pipx install "${SPEC} @ git+https://x-access-token:${TOKEN}@github.com/${REPO}.git"
+  "${PIPX[@]}" install "${SPEC} @ git+https://x-access-token:${TOKEN}@github.com/${REPO}.git"
 fi
 
 echo ""

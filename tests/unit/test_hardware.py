@@ -221,6 +221,41 @@ def test_amd_rocm_vram_gb_parses_csv(monkeypatch):
     assert abs(vram - 16.0) < 0.01
 
 
+def test_amd_rocm_vram_gb_parses_real_header_and_data_rows(monkeypatch):
+    """Real rocm-smi puts the label on a header row and the number on a
+    separate data row. Regression: the old same-line scan reported 0 GB
+    here, which demoted a usable AMD GPU to a CPU build."""
+    monkeypatch.setattr(hardware.sys, "platform", "linux")
+
+    class R:
+        returncode = 0
+        stdout = (
+            "device,VRAM Total Memory (B),VRAM Total Used Memory (B)\n"
+            "card0,17179869184,370290688\n"
+        )
+    monkeypatch.setattr(hardware.subprocess, "run",
+                        lambda *a, **kw: R())
+    vram = hardware._amd_rocm_vram_gb()
+    assert abs(vram - 16.0) < 0.01
+
+
+def test_amd_rocm_vram_gb_ignores_used_column(monkeypatch):
+    """The total-memory column must be read, not the 'Used' column that
+    follows it."""
+    monkeypatch.setattr(hardware.sys, "platform", "linux")
+
+    class R:
+        returncode = 0
+        stdout = (
+            "device,VRAM Total Used Memory (B),VRAM Total Memory (B)\n"
+            "card0,1073741824,8589934592\n"
+        )
+    monkeypatch.setattr(hardware.subprocess, "run",
+                        lambda *a, **kw: R())
+    vram = hardware._amd_rocm_vram_gb()
+    assert abs(vram - 8.0) < 0.01
+
+
 def test_amd_rocm_vram_gb_handles_colon_separator(monkeypatch):
     """_amd_rocm_vram_gb also handles the 'key: value' output format
     some ROCm versions emit."""

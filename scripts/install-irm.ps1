@@ -20,21 +20,31 @@ $token = $env:TOKI_REPO_TOKEN
 $extras = if ($env:TOKI_EXTRAS) { $env:TOKI_EXTRAS } else { "embeddings" }
 $spec = if ($extras) { "tokirecur[$extras]" } else { "tokirecur" }
 
+$pipxExe = "pipx"
+$pipxArgs = @()
 if (-not (Get-Command pipx -ErrorAction SilentlyContinue)) {
     Write-Host "pipx not found — installing it to the user site first…"
+    $py = "python"
     python -m pip install --user pipx
     if ($LASTEXITCODE -ne 0) {
+        $py = "py"
         py -m pip install --user pipx
     }
+    if ($LASTEXITCODE -ne 0) { throw "could not install pipx" }
+    # The user-site Scripts dir is often not on PATH in this same session,
+    # so invoke pipx as a module instead of relying on the fresh shim.
+    $pipxExe = $py
+    $pipxArgs = @("-m", "pipx")
 }
 
 if ([string]::IsNullOrEmpty($token)) {
     Write-Host "Installing tokirecur from $repo (public)…"
-    pipx install "$spec @ git+https://github.com/$repo.git"
+    & $pipxExe @pipxArgs install "$spec @ git+https://github.com/$repo.git"
 } else {
     Write-Host "Installing tokirecur from $repo using the token in TOKI_REPO_TOKEN…"
-    pipx install "$spec @ git+https://x-access-token:$token@github.com/$repo.git"
+    & $pipxExe @pipxArgs install "$spec @ git+https://x-access-token:$token@github.com/$repo.git"
 }
+if ($LASTEXITCODE -ne 0) { throw "pipx install failed. See the messages above." }
 
 Write-Host ""
 Write-Host "Done. Next steps:"
