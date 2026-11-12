@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.15] - 2026-11-13
+
 ### Added
 - **Adapters are selectable modes of their base model.** An adapter is
   a second GGUF tied to one target: a DSpine/DFlash2 draft reads the
