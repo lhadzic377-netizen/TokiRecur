@@ -4177,3 +4177,24 @@ def test_textual_launcher_marks_vision_models(env, tmp_path):
     assert "projector missing" in focused
     assert str(tmp_path / "gone.gguf") in focused
     assert art.AMBER  # badge colour is wired up
+
+
+def test_sync_cli_configs_never_touches_the_real_home(env, with_pulled_model):
+    """A sync runs every writer, so none of them may write into the
+    developer's own configs.
+
+    The writers resolve their paths from the environment. One writer
+    left pointing at the real home is enough for the suite to overwrite
+    ~/.config/opencode/opencode.json with a fixture model - over the
+    endpoint the person's own model is served on.
+    """
+    real = Path.home() / ".config" / "opencode" / "opencode.json"
+    before = real.stat().st_mtime_ns if real.exists() else None
+
+    ctl.sync_cli_configs(with_pulled_model["9b"])
+
+    after = real.stat().st_mtime_ns if real.exists() else None
+    assert after == before
+    for name in ("OPENCODE_CONFIG", "OPENCLAW_CONFIG", "CODEX_HOME",
+                 "CLINE_TOKIRECUR_CONFIG"):
+        assert str(env) in os.environ[name], name

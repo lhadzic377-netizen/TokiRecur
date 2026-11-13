@@ -137,6 +137,12 @@ def test_model_bound_new_clients_require_a_model(key):
 
 def test_new_client_launch_plans_pin_the_selected_model(monkeypatch):
     monkeypatch.setattr("tokirecur.selector.client_mode", lambda _: "managed")
+    # The plan is built against the *default* home path, so the cline
+    # config env var has to be out of the way - and the writers must not
+    # run, or the plan would rewrite the developer's real client configs.
+    monkeypatch.delenv("CLINE_TOKIRECUR_CONFIG", raising=False)
+    monkeypatch.setattr("tokirecur.selector._refresh_client_config",
+                        lambda *a, **k: None)
     spec = _spec()
     expected = {
         "droid": ["droid"],

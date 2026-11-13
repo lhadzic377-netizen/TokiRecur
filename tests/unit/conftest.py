@@ -58,9 +58,11 @@ def isolated_registry(tmp_path, monkeypatch):
 # Env var -> path under the test's tmp dir. Keep in sync with the
 # `*_config_path` helpers in tokirecur.ctl.
 #
-# CLINE_TOKIRECUR_CONFIG and CODEX_HOME are deliberately absent: the cline
-# and codex launch-plan tests assert the *default* home-based path, so they
-# need these unset. Their own fixtures redirect them when they write.
+# Every writer's path is redirected here. A writer left out of this list
+# writes into the developer's real home: `sync_cli_configs` runs all
+# fifteen, so one missing name is enough to have the suite rewrite
+# ~/.config/opencode/opencode.json with a fixture model over the
+# endpoint the person's own model is served on.
 _CLIENT_CONFIG_VARS = (
     "MIMOCODE_CONFIG",
     "QWEN_CONFIG",
@@ -74,6 +76,11 @@ _CLIENT_CONFIG_VARS = (
     "OMP_CONFIG_DIR",
     "TOKI_CLAUDE_SETTINGS",
     "TOKI_CLAUDE_CONFIG",
+    "OPENCODE_CONFIG",
+    "OPENCLAW_CONFIG",
+    "OPENCLAW_WORKSPACE_DIR",
+    "CLINE_TOKIRECUR_CONFIG",
+    "CODEX_HOME",
 )
 
 
