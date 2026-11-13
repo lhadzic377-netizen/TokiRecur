@@ -453,6 +453,47 @@ def test_right_opens_model_pane_and_enter_pins():
     assert app.focus_pane == "launchers"
 
 
+def test_pinning_refreshes_the_client_configs(monkeypatch):
+    """A pin changes the active model, so the clients must follow.
+
+    The model-capable clients read the active model out of their own
+    config files. A pin that only moves the marker leaves them pointing
+    at the previous model's endpoint - a port that is no longer served,
+    which is the "Reconnecting" class of failure.
+    """
+    synced = []
+
+    def fake_sync(spec):
+        synced.append(spec.name)
+
+    monkeypatch.setattr(ctl, "sync_cli_configs", fake_sync)
+    # The seeded registry points at files that are not on this machine,
+    # and a pin whose weights are gone is refused before it is written.
+    monkeypatch.setattr(
+        launcher_mod.LauncherApp, "_missing_file_reason", lambda self, name: None
+    )
+
+    async def run_app():
+        app = LauncherApp()
+        async with app.run_test(size=(100, 34)) as pilot:
+            await pilot.pause()
+            await pilot.press("right")
+            await pilot.pause()
+            await pilot.press("up")
+            await pilot.press("enter")
+            await pilot.pause()
+            # The refresh runs in a worker; give it a moment to land.
+            for _ in range(50):
+                await pilot.pause()
+                if synced:
+                    break
+        return app
+
+    app = asyncio.run(run_app())
+    assert app.pinned is not None
+    assert app.pinned in synced
+
+
 # ── Settings dropdowns ─────────────────────────────────────────────────
 
 

@@ -689,7 +689,44 @@ class LauncherApp(App[dict | None]):
                 write_active_effort(self.pinned_effort)
             except Exception as e:
                 self.notify(f"pin failed (not persisted): {e}", timeout=6, severity="warning")
+            else:
+                # Pinning changes the active model, and the model-capable
+                # clients read it out of their own config files. Without
+                # this, a client started outside toki keeps talking to the
+                # model that was active before the pin - over a port that
+                # is no longer served, which is the "Reconnecting" class.
+                pinned_name = self.pinned or name
+                self.run_worker(
+                    lambda: self._refresh_client_configs(pinned_name),
+                    name="refresh-client-configs",
+                    exclusive=False,
+                    thread=True,
+                )
         self._refresh += 1
+
+    def _refresh_client_configs(self, name: str) -> None:
+        """Point the model-capable clients at the newly pinned model.
+
+        Runs off the event loop: the sync probes every registered
+        model's endpoint, and the launcher must keep answering keys
+        while it does.
+        """
+        from ..ctl import get_model, sync_cli_configs
+
+        try:
+            spec = get_model(name)
+        except (KeyError, RuntimeError, OSError):
+            return
+        try:
+            sync_cli_configs(spec)
+        except Exception as e:
+            try:
+                self.call_from_thread(
+                    self.notify, f"client configs not refreshed: {e}",
+                    6, "warning",
+                )
+            except Exception:
+                pass
 
     def _missing_file_reason(self, name: str | None) -> str | None:
         """Why this model cannot be used, or ``None`` when it can.

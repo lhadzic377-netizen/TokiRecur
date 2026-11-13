@@ -32,6 +32,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   model row shows the active mode's badge.
 
 ### Fixed
+- **Pinning a model no longer leaves the clients on the old one.** The
+  launcher's model picker moved the active marker and stopped there,
+  while the model-capable clients read the active model out of their own
+  config files. A client started outside toki - from a shell, not from
+  the launcher - kept talking to the model that was active before the
+  pin, over a port that was no longer served: "Reconnecting", or a
+  silent fall back to another provider. A pin now refreshes every
+  client config, off the event loop so the launcher keeps answering
+  keys.
 - **Two harnesses no longer keep talking to a model that is gone.** OMP
   keeps the providers in `models.yml` and the model each role uses in
   `config.yml`, so writing only the provider left the role pointing at
