@@ -59,8 +59,8 @@ def isolated_registry(tmp_path, monkeypatch):
 # `*_config_path` helpers in tokirecur.ctl.
 #
 # Every writer's path is redirected here. A writer left out of this list
-# writes into the developer's real home: `sync_cli_configs` runs all
-# fifteen, so one missing name is enough to have the suite rewrite
+# writes into the developer's real home: `sync_cli_configs` runs all of
+# them, so one missing name is enough to have the suite rewrite
 # ~/.config/opencode/opencode.json with a fixture model over the
 # endpoint the person's own model is served on.
 _CLIENT_CONFIG_VARS = (
@@ -81,6 +81,8 @@ _CLIENT_CONFIG_VARS = (
     "OPENCLAW_WORKSPACE_DIR",
     "CLINE_TOKIRECUR_CONFIG",
     "CODEX_HOME",
+    "MINIMAX_DATA_DIR",
+    "MAVIS_DATA_DIR",
 )
 
 

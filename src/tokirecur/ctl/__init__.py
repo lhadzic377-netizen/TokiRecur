@@ -5378,6 +5378,35 @@ def _grok_config_path() -> Path:
     return (Path(home).expanduser() if home else Path.home() / ".grok") / "config.toml"
 
 
+#: Provider id used for the local route inside MiniMax Code's config.
+MINIMAX_PROVIDER_ID = "tokirecur"
+
+
+def _minimax_config_path() -> Path:
+    """MiniMax Code's runtime config.
+
+    ``mcode`` reads ``$MINIMAX_DATA_DIR/config.yaml`` and falls back to
+    ``~/.minimax/config.yaml``. The older name for the same directory is
+    still honoured, because that is what the CLI itself reads.
+    """
+    root = (
+        os.environ.get("MINIMAX_DATA_DIR")
+        or os.environ.get("MAVIS_DATA_DIR")
+    )
+    base = Path(root).expanduser() if root else Path.home() / ".minimax"
+    return base / "config.yaml"
+
+
+def _minimax_model_ref(spec: ModelSpec) -> str:
+    """The provider-qualified model name MiniMax Code expects.
+
+    A BYOK provider lives under ``custom_provider`` and is addressed as
+    ``custom_provider:<id>/<model>``; a bare id resolves against the
+    signed-in MiniMax account instead.
+    """
+    return f"custom_provider:{MINIMAX_PROVIDER_ID}/{spec.model_id}"
+
+
 def _kilo_config_path() -> Path:
     explicit = os.environ.get("KILO_CONFIG")
     if explicit:
@@ -5860,6 +5889,77 @@ def write_grok_config(
     }
     models["default"] = alias
     _write_private_config(cfg_path, tomli_w.dumps(cfg))
+    return cfg_path
+
+
+def write_minimax_config(
+    spec: ModelSpec, specs: list[ModelSpec] | None = None,
+    path: Path | None = None, mode: str | None = None,
+) -> Path:
+    """Write MiniMax Code's custom OpenAI-compatible provider.
+
+    MiniMax Code (``mcode``) keeps everything in one YAML file: the
+    built-in MiniMax provider under ``provider``, BYOK routes under
+    ``custom_provider``, and ``defaultModel`` for the session. Only the
+    ``tokirecur`` provider and the default model are ours to write - the
+    user's own MiniMax key, context window and preferences stay exactly
+    as they are.
+
+    The provider id is ``tokirecur`` and the session model is
+    ``custom_provider:tokirecur/<model>``: a bare model id resolves
+    against the signed-in MiniMax account instead of the local route.
+    """
+    cfg_path = path or _minimax_config_path()
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg: dict[str, Any] = {}
+    if cfg_path.exists():
+        try:
+            loaded = yaml.safe_load(cfg_path.read_text())
+        except (OSError, yaml.YAMLError):
+            loaded = None
+        if isinstance(loaded, dict):
+            cfg = loaded
+
+    custom = cfg.get("custom_provider")
+    if not isinstance(custom, dict):
+        custom = {}
+        cfg["custom_provider"] = custom
+
+    all_specs = specs if specs is not None else load_registry()
+    mode = _resolve_mode("minimax", mode)
+    advertised = _advertised_specs(all_specs, spec, mode)
+    models: dict[str, Any] = {}
+    for s in advertised:
+        models[s.model_id] = {
+            "name": f"Toki Recur ({s.label})",
+            "limit": {
+                "context": _effective_ctx(s),
+                "output": _client_output_limit(s),
+            },
+            "reasoning": _client_reasoning(s),
+            "thinking_config": {"mode": "switchable", "default_value": "true"},
+        }
+
+    # The token is read literally by the client, so it is written
+    # literally - into a file that stays owner-only.
+    custom[MINIMAX_PROVIDER_ID] = {
+        "name": "Toki Recur",
+        "kind": "custom",
+        "enabled": True,
+        "api": "openai-completions",
+        "options": {
+            "apiKey": _configured_auth_token() or auth_token(),
+            "baseURL": _client_endpoint(spec, mode),
+            "authMode": "api-key",
+        },
+        "models": models,
+    }
+    cfg["defaultModel"] = _minimax_model_ref(spec)
+
+    _backup(cfg_path, mode=0o600)
+    _atomic_write_text(
+        cfg_path, yaml.safe_dump(cfg, sort_keys=False), mode=0o600,
+    )
     return cfg_path
 
 
@@ -6850,6 +6950,7 @@ def sync_cli_configs(spec: ModelSpec, mode: str | None = None) -> dict[str, Path
         ("pi", write_pi_config),
         ("kimi", write_kimi_config),
         ("omp", write_omp_config),
+        ("minimax", write_minimax_config),
     ):
         try:
             tool_mode = _resolve_mode(tool, mode)

@@ -518,7 +518,7 @@ def test_sync_cli_configs_writes_all(env, with_pulled_model, monkeypatch):
     spec = with_pulled_model["laguna"]
     monkeypatch.setenv("CODEX_HOME", str(env / "codex-home"))
     paths = ctl.sync_cli_configs(spec)
-    assert len(paths) == 15
+    assert len(paths) == 16
     for p in paths.values():
         assert Path(p).exists()
         if os.name == "posix":
@@ -545,6 +545,10 @@ def test_sync_cli_configs_writes_all(env, with_pulled_model, monkeypatch):
     with paths["codex"].open("rb") as fh:
         codex = toml_load(fh)
     assert f"tokirecur-{pulled_name}" in codex["model_providers"]
+    mcode = yaml.safe_load(paths["minimax"].read_text())
+    assert mcode["custom_provider"]["tokirecur"]["api"] == "openai-completions"
+    assert pulled_model_id in mcode["custom_provider"]["tokirecur"]["models"]
+    assert mcode["defaultModel"] == f"custom_provider:tokirecur/{spec.model_id}"
 
 
 def test_new_client_config_writers_bind_active_model(env, with_pulled_model, monkeypatch):
@@ -4190,11 +4194,75 @@ def test_sync_cli_configs_never_touches_the_real_home(env, with_pulled_model):
     """
     real = Path.home() / ".config" / "opencode" / "opencode.json"
     before = real.stat().st_mtime_ns if real.exists() else None
+    minimax = Path.home() / ".minimax" / "config.yaml"
+    before_m = minimax.stat().st_mtime_ns if minimax.exists() else None
 
     ctl.sync_cli_configs(with_pulled_model["9b"])
 
     after = real.stat().st_mtime_ns if real.exists() else None
     assert after == before
+    after_m = minimax.stat().st_mtime_ns if minimax.exists() else None
+    assert after_m == before_m
     for name in ("OPENCODE_CONFIG", "OPENCLAW_CONFIG", "CODEX_HOME",
-                 "CLINE_TOKIRECUR_CONFIG"):
+                 "CLINE_TOKIRECUR_CONFIG", "MINIMAX_DATA_DIR"):
         assert str(env) in os.environ[name], name
+
+
+def test_minimax_writer_points_the_client_at_the_active_model(
+    env, with_pulled_model,
+):
+    """MiniMax Code reads its providers from ``config.yaml``.
+
+    The user's own MiniMax provider, key and preferences stay exactly
+    as they are: only the ``tokirecur`` provider and the default model
+    are ours to write.
+    """
+    spec = with_pulled_model["9b"]
+    path = env / "minimax" / "config.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump({
+        "provider": {"minimax": {"name": "MiniMax"}},
+        "defaultModel": "minimax/MiniMax-M3",
+        "defaultModelContextWindow": 1000000,
+    }))
+
+    out = ctl.write_minimax_config(spec, [spec], path=path)
+    cfg = yaml.safe_load(out.read_text())
+
+    assert cfg["provider"]["minimax"]["name"] == "MiniMax"
+    assert cfg["defaultModelContextWindow"] == 1000000
+
+    route = cfg["custom_provider"]["tokirecur"]
+    assert route["api"] == "openai-completions"
+    assert route["enabled"] is True
+    assert route["options"]["baseURL"] == f"{spec.daemon_url}/v1"
+    assert route["options"]["apiKey"]
+    assert spec.model_id in route["models"]
+    entry = route["models"][spec.model_id]
+    assert entry["limit"]["context"] == ctl._effective_ctx(spec)
+    assert entry["limit"]["output"] == ctl._client_output_limit(spec)
+
+    # The session model is provider-qualified: a bare id resolves
+    # against the signed-in MiniMax account instead of the local route.
+    assert cfg["defaultModel"] == f"custom_provider:tokirecur/{spec.model_id}"
+
+    # The token lives in this file, so the file stays owner-only.
+    assert out.stat().st_mode & 0o077 == 0
+
+
+def test_minimax_writer_drops_the_previous_model(
+    env, with_pulled_model,
+):
+    """A model switch must not leave the old model in the provider."""
+    first = with_pulled_model["9b"]
+    second = with_pulled_model["35b"]
+    path = env / "minimax" / "config.yaml"
+
+    ctl.write_minimax_config(first, [first, second], path=path)
+    ctl.write_minimax_config(second, [first, second], path=path)
+
+    cfg = yaml.safe_load(path.read_text())
+    models = cfg["custom_provider"]["tokirecur"]["models"]
+    assert second.model_id in models
+    assert first.model_id not in models
+    assert cfg["defaultModel"] == f"custom_provider:tokirecur/{second.model_id}"

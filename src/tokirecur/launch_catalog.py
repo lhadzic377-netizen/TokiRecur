@@ -82,6 +82,14 @@ LAUNCH_APPS: tuple[LaunchApp, ...] = (
         command="mimo",
     ),
     LaunchApp(
+        "minimax",
+        "Launch MiniMax Code",
+        "MiniMax's terminal coding agent",
+        "chat",
+        "minimax",
+        command="mcode",
+    ),
+    LaunchApp(
         "qwen", "Launch Qwen Code", "Qwen's terminal coding agent", "chat", "qwen",
         command="qwen",
     ),

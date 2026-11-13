@@ -1471,6 +1471,7 @@ def use(name: str, keep_others: bool, wait: bool, sync_only: bool,
         for tool in (
             "opencode", "mimo", "openclaw", "hermes", "codex", "qwen",
             "droid", "cline", "dsh", "grok", "kilo", "pi", "copilot", "kimi", "omp",
+            "minimax",
         ):
             write_client_mode(tool, mode)
     try:
@@ -1556,6 +1557,7 @@ def use(name: str, keep_others: bool, wait: bool, sync_only: bool,
 @click.argument("client", type=click.Choice([
     "opencode", "mimo", "openclaw", "hermes", "codex", "qwen", "droid",
     "cline", "dsh", "grok", "kilo", "pi", "copilot", "kimi", "omp",
+    "minimax",
 ]))
 @click.argument("mode", type=click.Choice(["raw", "managed"]))
 def model_mode(client: str, mode: str) -> None:

@@ -443,3 +443,47 @@ class TestResponsesStream:
         assert failed[0]["error"]["code"] == "server_error"
         assert events[-1] == ("response.failed", failed[0])
         assert "[DONE]" not in r.text
+
+
+class TestInputTokens:
+    """The prompt-size probe clients send before a turn.
+
+    MiniMax Code asks for it on every request; without the route the
+    client gets a 404, retries, and never shows the number.
+    """
+
+    def test_counts_a_plain_prompt(self):
+        backend = FakeBackend()
+        with TestClient(_make_daemon(backend)) as client:
+            r = client.post("/v1/responses/input_tokens", json={
+                "model": "m", "input": "one two three",
+            })
+        assert r.status_code == 200
+        assert r.json()["input_tokens"] == 3
+
+    def test_counts_items_without_a_type(self):
+        """MiniMax Code sends ``{"role": ..., "content": ...}``.
+
+        The Responses API requires a ``type`` on every item, so a
+        client that leaves it out would get a validation error.
+        """
+        backend = FakeBackend()
+        with TestClient(_make_daemon(backend)) as client:
+            r = client.post("/v1/responses/input_tokens", json={
+                "model": "m",
+                "input": [{"role": "developer", "content": "be terse"}],
+            })
+        assert r.status_code == 200
+        assert r.json()["input_tokens"] == 2
+
+    def test_counts_message_items_with_content_parts(self):
+        backend = FakeBackend()
+        with TestClient(_make_daemon(backend)) as client:
+            r = client.post("/v1/responses/input_tokens", json={
+                "model": "m",
+                "input": [{"type": "message", "role": "user",
+                           "content": [{"type": "input_text",
+                                        "text": "hello there"}]}],
+            })
+        assert r.status_code == 200
+        assert r.json()["input_tokens"] == 2

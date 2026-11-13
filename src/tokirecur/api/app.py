@@ -627,9 +627,12 @@ class ResponsesItem(BaseModel):
     """One entry of the Responses API ``input`` array. The fields are
     intentionally loose: the OpenAI SDKs evolve item shapes faster than
     this shim, and unknown/extra fields should pass through untouched.
+
+    ``type`` is optional because clients that count tokens (MiniMax
+    Code) send ``{"role": ..., "content": ...}`` with no type at all.
     """
 
-    type: str
+    type: str | None = None
     role: str | None = None
     content: Any = None  # str | list of input_text/input_image parts
     call_id: str | None = None
@@ -641,6 +644,16 @@ class ResponsesItem(BaseModel):
 class ResponsesReasoning(BaseModel):
     effort: str = "auto"
 
+
+class ResponsesInputTokensRequest(BaseModel):
+    """The body of ``POST /v1/responses/input_tokens``.
+
+    Only the fields that carry the prompt are read; the rest of a
+    Responses request is ignored, and ``input`` may be missing.
+    """
+    model: str = "default"
+    input: str | list[ResponsesItem] = ""
+    instructions: str | None = None
 
 class ResponsesRequest(BaseModel):
     model: str = "default"
@@ -1685,13 +1698,20 @@ def create_app(
                 pending_tool_calls = []
 
         for item in req.input:
-            if item.type == "message":
+            if item.type == "message" or (
+                item.type is None and (item.role or item.content)
+            ):
                 flush_tool_calls()
-                parts = item.content if isinstance(item.content, list) else []
-                text = "".join(
-                    p["text"] for p in parts
-                    if isinstance(p, dict) and isinstance(p.get("text"), str)
-                )
+                if isinstance(item.content, str):
+                    # A plain string is a message body; the parts form
+                    # is only one way to say it.
+                    text = item.content
+                else:
+                    parts = item.content if isinstance(item.content, list) else []
+                    text = "".join(
+                        p["text"] for p in parts
+                        if isinstance(p, dict) and isinstance(p.get("text"), str)
+                    )
                 role = item.role or "user"
                 if role == "developer":
                     # llama-server maps developer → system internally,
@@ -2487,6 +2507,29 @@ def create_app(
         except Exception:
             count = max(1, len(text) // 4)
         return JSONResponse({"input_tokens": count})
+
+    @app.post("/v1/responses/input_tokens")
+    async def responses_input_tokens(req: ResponsesInputTokensRequest) -> Response:
+        """Count the tokens of a Responses request.
+
+        Clients that show the prompt size ask for this before the turn:
+        MiniMax Code does, and without the route it gets a 404, retries
+        it, and never shows the number.
+        """
+        messages = _responses_messages(
+            ResponsesRequest(model=req.model, input=req.input,
+                             instructions=req.instructions)
+        )
+        text = "\n".join(str(m.get("content") or "") for m in messages)
+        try:
+            count = len(engine.backend.tokenize(text))
+        except Exception:
+            # A backend that cannot tokenize must not fail the probe.
+            count = max(1, len(text) // 4)
+        return JSONResponse({
+            "object": "response.input_tokens",
+            "input_tokens": count,
+        })
 
     @app.post("/v1/responses")
     async def responses(req: ResponsesRequest) -> Response:

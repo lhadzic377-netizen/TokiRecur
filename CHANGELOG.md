@@ -6,6 +6,28 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **MiniMax Code runs on the local model.** `mcode` joins the launcher
+  and the model-capable client family. `toki model use` writes a
+  `tokirecur` provider under `custom_provider` in
+  `~/.minimax/config.yaml` - the user's own MiniMax provider, key and
+  preferences are left alone - and the session model is
+  provider-qualified (`custom_provider:tokirecur/<model-id>`), because a
+  bare model id resolves against the signed-in MiniMax account instead
+  of the local route. The launcher starts it with
+  `mcode --model custom_provider:tokirecur/<model-id>`; the token
+  travels in the config, which stays owner-only.
+
+### Fixed
+- **The prompt-size probe no longer 404s.** Clients that show the
+  prompt size before a turn (MiniMax Code does) ask the daemon to count
+  the tokens of a request. The route did not exist, so the client got a
+  404, retried it, and never showed the number. `POST
+  /v1/responses/input_tokens` counts the prompt now, and a Responses
+  input item no longer has to carry a `type` - clients that count
+  tokens send `{"role": ..., "content": ...}` - and a string body is
+  read as the message it is.
+
 ## [0.3.16] - 2026-11-13
 
 ### Fixed

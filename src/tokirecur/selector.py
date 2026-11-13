@@ -44,6 +44,7 @@ from .ctl import (
     write_kilo_config,
     write_kimi_config,
     write_mimo_config,
+    write_minimax_config,
     write_omp_config,
     write_openclaw_config,
     write_opencode_config,
@@ -139,6 +140,7 @@ _CLIENT_CONFIG_WRITERS = {
     "pi": write_pi_config,
     "kimi": write_kimi_config,
     "omp": write_omp_config,
+    "minimax": write_minimax_config,
 }
 
 
@@ -175,7 +177,7 @@ def _bound_env(spec: Any, client: str) -> dict[str, str]:
     endpoint = _bound_endpoint(spec, client)
     new_clients = {
         "qwen", "droid", "cline", "dsh", "grok", "kilo", "pi",
-        "copilot", "kimi", "omp",
+        "copilot", "kimi", "omp", "minimax",
     }
     if client == "codex" or client in new_clients:
         token = _auth_token() or auth_token()
@@ -386,6 +388,13 @@ def launch_cmd(interface: str, client: str, spec: Any | None) -> dict:
         if client == "omp":
             return {"argv": ["omp", "--provider", "tokirecur",
                              "--model", spec.model_id],
+                    "detach": False, "url": None, "env": env}
+        if client == "minimax":
+            # MiniMax Code addresses a BYOK provider as
+            # custom_provider:<id>/<model>; a bare model id would resolve
+            # against the signed-in MiniMax account instead.
+            return {"argv": ["mcode", "--model",
+                             f"custom_provider:tokirecur/{spec.model_id}"],
                     "detach": False, "url": None, "env": env}
     elif interface == "web":
         if client == "dsh":

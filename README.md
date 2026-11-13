@@ -122,7 +122,7 @@ Three frontends over one daemon. The API is what agents actually talk to.
 | Web | `toki web` | Single-page chat on `127.0.0.1:7777`, streaming, per-message metrics |
 | API | `toki serve` | OpenAI-compatible `/v1/chat/completions`, plus Anthropic and admin routes |
 
-The launcher starts Toki Chat, OpenCode, MiMo Code, Hermes, OpenClaw, Codex, Qwen Code, Factory Droid, Cline CLI, DeepSeek Harness, Grok Build, Kilo Code, Pi, GitHub Copilot CLI, Kimi Code, OMP and Claude Code, all pinned to the active model. OpenAI-compatible clients use the daemon's OpenAI route; Claude Code uses the local Anthropic-compatible `/anthropic/v1/messages` route with an owner-only settings override. The override carries the local token as `ANTHROPIC_AUTH_TOKEN` — not as `ANTHROPIC_API_KEY`, because Claude Code sends an API key only after it has approved it, and falls back to another credential when it has not: on a machine with a cloud provider configured, that credential belongs to that provider and the local daemon answers 401 for it. Qwen Code 1.0 is written through its `providers` section and launched with `qwen --model tokirecur/<model>`; the pre-1.0 `modelProviders` section and the `--openai-base-url` / `--auth-type` flags are kept for the releases that still read them.
+The launcher starts Toki Chat, OpenCode, MiMo Code, MiniMax Code, Hermes, OpenClaw, Codex, Qwen Code, Factory Droid, Cline CLI, DeepSeek Harness, Grok Build, Kilo Code, Pi, GitHub Copilot CLI, Kimi Code, OMP and Claude Code, all pinned to the active model. OpenAI-compatible clients use the daemon's OpenAI route; Claude Code uses the local Anthropic-compatible `/anthropic/v1/messages` route with an owner-only settings override. The override carries the local token as `ANTHROPIC_AUTH_TOKEN` — not as `ANTHROPIC_API_KEY`, because Claude Code sends an API key only after it has approved it, and falls back to another credential when it has not: on a machine with a cloud provider configured, that credential belongs to that provider and the local daemon answers 401 for it. Qwen Code 1.0 is written through its `providers` section and launched with `qwen --model tokirecur/<model>`; the pre-1.0 `modelProviders` section and the `--openai-base-url` / `--auth-type` flags are kept for the releases that still read them.
 
 ```bash
 toki tui                                  # raw / cached / compare: Ctrl+1 / 2 / 3
@@ -171,7 +171,7 @@ POST /cache/lookup            GET  /cache/stats
 DELETE /cache/{id}            GET  /healthz
 ```
 
-`toki model use` also writes MiMo Code's `mimocode.json` provider config; MiMo then selects the same model with `mimo -m tokirecur-<model>/<model-id>`.
+`toki model use` also writes MiMo Code's `mimocode.json` provider config; MiMo then selects the same model with `mimo -m tokirecur-<model>/<model-id>`. MiniMax Code (`mcode`) is written the same way: a `tokirecur` entry under `custom_provider` in `~/.minimax/config.yaml`, and the session model is provider-qualified (`custom_provider:tokirecur/<model-id>`), because a bare model id resolves against the signed-in MiniMax account instead of the local route.
 
 ## How it works
 

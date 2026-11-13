@@ -21,7 +21,7 @@ from tokirecur.selector import launch_cmd
 REMOVED_ACCOUNT_CLIENTS = ("muse", "cursor-agent", "devin")
 NEW_CLIENTS = (
     "qwen", "droid", "cline", "dsh", "grok", "kilo", "pi", "copilot",
-    "kimi", "omp",
+    "kimi", "omp", "minimax",
 )
 
 
@@ -40,7 +40,7 @@ def _spec():
 def test_catalog_contains_all_requested_clients():
     assert [app.key for app in LAUNCH_APPS] == [
         "toki", "tokirecur", "opencode", "hermes", "openclaw", "codex", "mimo",
-        "qwen", "droid", "cline", "dsh", "grok", "kilo", "pi",
+        "minimax", "qwen", "droid", "cline", "dsh", "grok", "kilo", "pi",
         "copilot", "claude", "kimi", "omp", "web", "dsh-web",
     ]
     assert all(get_launch_app(key) is not None for key in NEW_CLIENTS)
@@ -158,6 +158,8 @@ def test_new_client_launch_plans_pin_the_selected_model(monkeypatch):
         "copilot": ["copilot", "--model", spec.model_id],
         "kimi": ["kimi", "--model", f"tokirecur/{spec.model_id}"],
         "omp": ["omp", "--provider", "tokirecur", "--model", spec.model_id],
+        "minimax": ["mcode", "--model",
+                    f"custom_provider:tokirecur/{spec.model_id}"],
     }
     for key, argv in expected.items():
         plan = launch_cmd("chat", key, spec)
