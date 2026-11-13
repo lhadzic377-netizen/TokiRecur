@@ -19,6 +19,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   travels in the config, which stays owner-only.
 
 ### Fixed
+- **A prompt that does not fit is a 413, not a 500.** llama.cpp words
+  the overflow "request (N tokens) exceeds the available context size
+  (M tokens)", and the daemon did not know that wording - so an
+  oversized prompt came back as a 500 whose body no OpenAI-compatible
+  client can read ("413 status code (no body)" in MiniMax Code), and a
+  streaming client saw the turn die mid-stream and concluded the
+  provider was gone. The overflow is recognised now, it is checked
+  before the response headers go out - so the client gets the status
+  and can compact and retry - it is counted the way llama-server builds
+  the prompt (the chat template plus the tool schemas, which on an
+  agent client are more tokens than the conversation), and the error
+  body carries `error.message`, the shape OpenAI clients read.
 - **The prompt-size probe no longer 404s.** Clients that show the
   prompt size before a turn (MiniMax Code does) ask the daemon to count
   the tokens of a request. The route did not exist, so the client got a

@@ -427,6 +427,21 @@ class LlamaServerBackend(LlamaBackend):
         body = self._post("/tokenize", {"content": text})
         return [int(t) for t in body["tokens"]]
 
+    def apply_template(
+        self, messages: list[dict], tools: list | None = None,
+    ) -> str:
+        """The prompt llama-server would build for these messages.
+
+        The server renders the chat template itself, tools included, so
+        this is the only way to know how big a request really is: the
+        tool schemas alone can be more tokens than the conversation.
+        """
+        payload: dict[str, Any] = {"messages": messages}
+        if tools:
+            payload["tools"] = tools
+        body = self._post("/apply-template", payload)
+        return str(body.get("prompt", ""))
+
     def cache_save(self, slot_id: int, cache_id: str) -> dict[str, Any]:
         """Save the slot's KV cache to ``<cache_dir>/<cache_id>.bin``
         via llama-server's ``?action=save`` endpoint, then drop a

@@ -368,11 +368,113 @@ def _context_overflow_status(e: Exception) -> int | None:
     a bare llama.cpp 400 "not enough tokens" was the old behavior that
     read as a generic failure and sent hermes into a compress/retry
     loop against a window it believed to be 256k.
+
+    llama.cpp words this error two ways, and both are live: the older
+    "not enough tokens in the context window" and the current "request
+    (N tokens) exceeds the available context size (M tokens)". Missing
+    the second one turned every overflow into a 500, which is the
+    status a client reads as "the provider is gone" - MiniMax Code
+    compacts and retries on a 413, and gives up on a 500.
     """
     msg = str(e)
-    if "not enough tokens in the context window" in msg or "exceeds the context window" in msg:
+    if (
+        "not enough tokens in the context window" in msg
+        or "exceeds the context window" in msg
+        or "exceeds the available context size" in msg
+        or "exceed_context_size_error" in msg
+    ):
         return 413
     return None
+
+
+def _openai_error(
+    status: int, message: str, code: str | None = None,
+) -> JSONResponse:
+    """An error body in the shape OpenAI clients actually read.
+
+    FastAPI's default is ``{"detail": ...}``. Every OpenAI-compatible
+    client looks for ``error.message`` instead, so one of ours arrives
+    as an empty body - MiniMax Code prints "413 status code (no body)"
+    and retries, which hides the one message that would have told it
+    to compact and try again. The ``detail`` key stays for the clients
+    (and the dashboard) that read it.
+    """
+    return JSONResponse(
+        status_code=status,
+        content={
+            "detail": message,
+            "error": {
+                "message": message,
+                "type": (
+                    "invalid_request_error" if status < 500 else "server_error"
+                ),
+                "code": code,
+            },
+        },
+    )
+
+
+def _prompt_text(messages: list[dict]) -> str:
+    """The prompt's text, whatever shape the content came in."""
+    parts: list[str] = []
+    for message in messages:
+        content = message.get("content")
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict):
+                    if isinstance(part.get("text"), str):
+                        parts.append(part["text"])
+                elif isinstance(part, str):
+                    parts.append(part)
+        elif isinstance(content, str):
+            parts.append(content)
+    return "\n".join(parts)
+
+
+def _prompt_would_overflow(
+    engine: Any, messages: list[dict], tools: list | None = None,
+    ceiling: int | None = None,
+) -> bool:
+    """Whether the prompt alone cannot fit the slot's context window.
+
+    The check has to run before the response headers go out. A client
+    that streams gets the 413 as a status only while the turn has not
+    started; once the stream is open, an overflow arrives as a stream
+    that dies mid-turn, and the client concludes the provider is gone.
+    MiniMax Code compacts and retries on a 413 and gives up on a 500.
+
+    The window is the one the stack actually gave llama-server
+    (``TOKI_MAX_CONTEXT_TOKENS``), not a number the client believes.
+
+    The size is the one llama-server would really build: the chat
+    template plus the tool schemas, which on an agent client are often
+    more tokens than the conversation. Asking the server is the only
+    way to be right - a count taken from the message text alone is short
+    by the whole tool block.
+    """
+    if ceiling is None:
+        ceiling = _max_context_ceiling()
+    if not ceiling:
+        return False
+    text = _prompt_text(messages)
+    tools_text = _json.dumps(tools) if tools else ""
+    if not text and not tools_text:
+        return False
+    # Cheap filter first - roughly four characters to a token - so the
+    # server is only asked when the estimate is near the ceiling.
+    rough = (len(text) + len(tools_text)) // 4
+    if rough + 1024 < ceiling:
+        return False
+    count = None
+    try:
+        prompt = engine.backend.apply_template(messages, tools)
+        count = len(engine.backend.tokenize(prompt))
+    except Exception:
+        # A server that cannot render the template is not a reason to
+        # refuse the request; the estimate is the best we have.
+        count = rough
+    # The template adds a little on top of the text it renders.
+    return count + 64 > ceiling
 
 
 def _tool_call_parse_failure(e: Exception) -> bool:
@@ -387,9 +489,10 @@ def _tool_call_parse_failure(e: Exception) -> bool:
     return "failed to parse tool call" in msg or "tool call arguments" in msg
 
 
-def _overflow_detail() -> str:
+def _overflow_detail(ceiling: int | None = None) -> str:
     """Human + machine-parseable explanation for a context overflow."""
-    ceiling = _max_context_ceiling()
+    if ceiling is None:
+        ceiling = _max_context_ceiling()
     window = f"{ceiling} tokens" if ceiling else "the daemon's configured window"
     return (
         f"request exceeds the model's real context window ({window}). "
@@ -852,6 +955,12 @@ def create_app(
 
     app = FastAPI(title="Toki Recur", version="0.2.0", lifespan=lifespan)
     engine = RecyclingEngine(backend, index, similarity_threshold=similarity_threshold)
+    # The window this daemon really serves: what the stack gave
+    # llama-server, not what a client believes. The overflow check
+    # needs it, and the env var is only set when the stack spawned the
+    # daemon.
+    window = max_context_tokens or _max_context_ceiling()
+    app.state.max_context_tokens = window
 
     # The engine's serve_* methods are synchronous and mutate shared slot
     # state. Run them in a threadpool (so concurrent requests don't stall
@@ -2203,6 +2312,15 @@ def create_app(
         # projector-less backend 500s on pixels it cannot represent.
         messages = await _inline_images(messages)
         messages = _normalize_messages(messages)
+        # A prompt that cannot fit the window is an answer, not a
+        # stream: the client needs the status before the first byte, or
+        # it sees a stream that dies mid-turn and concludes the
+        # provider is gone.
+        if _prompt_would_overflow(engine, messages, req.tools, window):
+            return _openai_error(
+                413, _overflow_detail(window),
+                code="context_length_exceeded",
+            )
         temperature, sampling = _resolve_sampling(
             temperature=req.temperature,
             repeat_penalty=req.repeat_penalty,
@@ -2325,10 +2443,11 @@ def create_app(
             )
         except Exception as e:
             if _context_overflow_status(e):
-                raise HTTPException(status_code=413,
-                                    detail=_overflow_detail()) from e
+                return _openai_error(
+                    413, _overflow_detail(), code="context_length_exceeded",
+                )
             logger.exception("chat completion failed")
-            raise HTTPException(status_code=500, detail=str(e)) from e
+            return _openai_error(500, str(e))
 
     async def _tap_anthropic_stream(
         items: Any, *, model_name: str, messages: list[dict],
@@ -2543,14 +2662,21 @@ def create_app(
         ``store`` are ignored: toki is stateless, like the other
         OpenAI-compatible endpoints.
         """
+        messages = _responses_messages(req)
+        messages = await _inline_images(messages)
+        # Before the stream starts: a client needs the status, not a
+        # stream that dies mid-turn.
+        if _prompt_would_overflow(engine, messages, req.tools, window):
+            return _openai_error(
+                413, _overflow_detail(window),
+                code="context_length_exceeded",
+            )
         try:
             if req.stream:
                 return StreamingResponse(
                     _stream_responses(req),
                     media_type="text/event-stream",
                 )
-            messages = _responses_messages(req)
-            messages = await _inline_images(messages)
             max_tokens = req.max_output_tokens or 256
             reasoning_mode = (
                 "off"
@@ -2650,10 +2776,11 @@ def create_app(
             )
         except Exception as e:
             if _context_overflow_status(e):
-                raise HTTPException(status_code=413,
-                                    detail=_overflow_detail()) from e
+                return _openai_error(
+                    413, _overflow_detail(), code="context_length_exceeded",
+                )
             logger.exception("responses completion failed")
-            raise HTTPException(status_code=500, detail=str(e)) from e
+            return _openai_error(500, str(e))
 
     @app.get("/cache/list")
     async def cache_list() -> dict:
