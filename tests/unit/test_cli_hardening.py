@@ -5,6 +5,7 @@ in the CLI download / launch paths.
 from __future__ import annotations
 
 import io
+import os
 import tarfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -37,7 +38,10 @@ class TestCurlTokenNotInArgv:
         assert all("SECRET-TOKEN" not in arg for arg in captured["cmd"])
         assert "--config" in captured["cmd"]
         assert "SECRET-TOKEN" in captured["cfg_content"]
-        assert captured["cfg_mode"] == 0o600
+        if os.name == "posix":
+            # Windows has no POSIX permission bits: st_mode reports
+            # 0o666 for every file, owner-only included.
+            assert captured["cfg_mode"] == 0o600
         # The temporary config is removed after the run.
         assert not captured["cfg_path"].exists()
 
@@ -68,7 +72,8 @@ class TestDshLogOwnerOnly:
             f.write(b"http://127.0.0.1:3080/?token=abc\n")
         finally:
             f.close()
-        assert Path(log_path).stat().st_mode & 0o777 == 0o600
+        if os.name == "posix":
+            assert Path(log_path).stat().st_mode & 0o777 == 0o600
 
     def test_existing_world_readable_log_forced_0600(self, tmp_path, monkeypatch):
         import tokirecur.selector as sel
@@ -80,7 +85,8 @@ class TestDshLogOwnerOnly:
         log_path.chmod(0o644)
         f = sel._open_dsh_log(str(log_path))
         f.close()
-        assert log_path.stat().st_mode & 0o777 == 0o600
+        if os.name == "posix":
+            assert log_path.stat().st_mode & 0o777 == 0o600
 
 
 class TestTarExtractionFallback:

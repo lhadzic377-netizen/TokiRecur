@@ -4247,7 +4247,8 @@ def test_minimax_writer_points_the_client_at_the_active_model(
     assert cfg["defaultModel"] == f"custom_provider:tokirecur/{spec.model_id}"
 
     # The token lives in this file, so the file stays owner-only.
-    assert out.stat().st_mode & 0o077 == 0
+    if os.name == "posix":
+        assert out.stat().st_mode & 0o077 == 0
 
 
 def test_minimax_writer_drops_the_previous_model(
