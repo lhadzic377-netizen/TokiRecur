@@ -27,14 +27,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the number of slots llama-server had. The engine now locks only its
   routing state, claims a slot for the length of the request and
   releases it afterwards, so the clients overlap as far as the server
-  and the hardware allow. Measured on this box with a CPU-served model
-  and two slots: four concurrent clients went from 638 ms (4.05x one
-  request - no gain at all over one client at a time) to 444 ms (2.86x
-  one request, 1.40x the throughput of a single client); two clients
-  went from 2.02x to 1.59x. The streaming path never took that lock and
-  mutated the slot map without any lock at all, so two streams raced
-  on it; the routing state is locked now, and a slot with a request in
-  flight is never spilled.
+  and the hardware allow. Measured on this box with the model resident
+  on the GPU and four concurrent clients: 651 ms (4.03x one request -
+  no gain at all over one client at a time) became 456 ms (2.72x one
+  request, 1.47x the throughput of a single client); two clients went
+  from 2.06x to 1.38x. The same holds on a CPU-served model: 638 ms
+  became 444 ms (1.40x the throughput of one client). The streaming
+  path never took that lock and mutated the slot map without any lock
+  at all, so two streams raced on it; the routing state is locked now,
+  and a slot with a request in flight is never spilled.
 - **The hot-prefix pool asks the server that is actually running.** It
   looked for a free slot on port 8088 - where nothing listens on a
   machine whose model sits on its own port - so it never found one and
