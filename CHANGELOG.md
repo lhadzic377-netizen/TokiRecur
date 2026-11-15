@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.20] - 2026-11-15
+
 ### Added
 - **MiniMax Code runs on the local model.** `mcode` joins the launcher
   and the model-capable client family. `toki model use` writes a
@@ -19,6 +21,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   travels in the config, which stays owner-only.
 
 ### Fixed
+- **Two requests no longer wait for each other.** The daemon held one
+  lock across the whole generation, so a second client was answered
+  only after the first had finished - one request at a time, whatever
+  the number of slots llama-server had. The engine now locks only its
+  routing state, claims a slot for the length of the request and
+  releases it afterwards, so the clients overlap as far as the server
+  and the hardware allow. Measured on this box with a CPU-served model
+  and two slots: four concurrent clients went from 638 ms (4.05x one
+  request - no gain at all over one client at a time) to 444 ms (2.86x
+  one request, 1.40x the throughput of a single client); two clients
+  went from 2.02x to 1.59x. The streaming path never took that lock and
+  mutated the slot map without any lock at all, so two streams raced
+  on it; the routing state is locked now, and a slot with a request in
+  flight is never spilled.
+- **The hot-prefix pool asks the server that is actually running.** It
+  looked for a free slot on port 8088 - where nothing listens on a
+  machine whose model sits on its own port - so it never found one and
+  the pool never claimed a slot.
 - **A prompt that does not fit is a 413, not a 500.** llama.cpp words
   the overflow "request (N tokens) exceeds the available context size
   (M tokens)", and the daemon did not know that wording - so an
@@ -39,6 +59,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   input item no longer has to carry a `type` - clients that count
   tokens send `{"role": ..., "content": ...}` - and a string body is
   read as the message it is.
+
+### Changed
+- **One tokenization per request instead of two.** The routing text was
+  tokenized for the slot match and then tokenized again inside the
+  embedding, which is a round-trip to llama-server for nothing. The
+  token list is handed over now.
+- **The streaming path keeps its connection.** It opened a new HTTP
+  client - and a new TCP connection - for every request, so the
+  keep-alive that would have made the next request cheap went with it.
+- **The prefix comparison is done in blocks.** A 20k-token prompt was
+  compared one token at a time in Python, per slot: 0.78 ms each. The
+  comparison now runs on slices, 0.16 ms for the same prompt, and only
+  the block holding the first difference is walked token by token.
+- **The tap measures its own directory every 25 writes.** It stat-ed
+  every file in the tap directory on every request to enforce a
+  ceiling that is a soft one anyway.
 
 ## [0.3.16] - 2026-11-13
 

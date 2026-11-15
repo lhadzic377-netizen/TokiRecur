@@ -57,6 +57,10 @@ _TRUE = frozenset({"1", "true", "yes", "on", "y", "t"})
 _FALSE = frozenset({"0", "false", "no", "off", "n", "f"})
 
 _write_lock = threading.Lock()
+
+#: How often the tap measures its own directory against the cap.
+_CAP_CHECK_EVERY = 25
+_cap_checks = 0
 _warned: set[str] = set()
 
 
@@ -213,9 +217,18 @@ def _enforce_cap(active: Path) -> None:
     The active file is never dropped: stopping mid-day would leave a tap
     that looks on and records nothing, which is worse than a full disk
     that says so.
+
+    Measuring the directory means stat-ing every file in it, which is
+    work per request on a tap that keeps many days. The ceiling is a
+    soft one, so the check runs every few writes instead of every
+    write - the tap stays well under its budget either way.
     """
     budget = _env_mb("TOKI_TAP_MAX_MB", DEFAULT_MAX_MB)
     if budget <= 0:
+        return
+    global _cap_checks
+    _cap_checks += 1
+    if _cap_checks % _CAP_CHECK_EVERY:
         return
     try:
         sizes = [(p, p.stat().st_size) for p in _files()]

@@ -271,6 +271,26 @@ class LlamaServerBackend(LlamaBackend):
         self.cache_dir = Path(cache_dir) if cache_dir else None
         self.timeout = float(timeout) if timeout else backend_timeout()
         self._client = httpx.Client(timeout=self.timeout)
+        # The streaming path's client, created on first use and kept:
+        # a new client per request meant a new TCP connection per
+        # request, and the keep-alive that would have made the second
+        # request cheap went with it.
+        self._async_client: httpx.AsyncClient | None = None
+
+    def _stream_client(self) -> httpx.AsyncClient:
+        """The shared client the streaming path uses."""
+        if self._async_client is None:
+            self._async_client = httpx.AsyncClient(
+                timeout=httpx.Timeout(self.timeout, connect=10.0)
+            )
+        return self._async_client
+
+    async def aclose(self) -> None:
+        """Close the streaming client (the daemon does this on exit)."""
+        client = self._async_client
+        self._async_client = None
+        if client is not None:
+            await client.aclose()
 
     async def slot_snapshot(self) -> list[dict[str, Any]] | None:
         """Current llama-server slot states, or None if unreachable.
@@ -338,14 +358,19 @@ class LlamaServerBackend(LlamaBackend):
     _MAX_EMBED_TOKENS = 2000  # safe upper bound for /embedding
     _FALLBACK_DIM = 4096  # matches Qwen3.5-9B's embedding; safe default
 
-    def embed(self, text: str) -> list[float]:
+    def embed(self, text: str, tokens: list[int] | None = None) -> list[float]:
         """Embed `text`. If it exceeds the server's batch size, chunk it
         into segments and average the per-segment embeddings (the standard
         long-text strategy). On any error, fall back to a hash-based
         pseudo-embedding so the request degrades to a cache miss rather
-        than crashing the run."""
+        than crashing the run.
+
+        ``tokens`` is the text's token list when the caller already has
+        it - the request path tokenizes the routing text anyway, and
+        tokenizing it a second time is a round-trip for nothing.
+        """
         try:
-            return self._embed_chunked(text)
+            return self._embed_chunked(text, tokens=tokens)
         except Exception:
             # Last-resort fallback: deterministic pseudo-embedding from
             # the SHA-256 of the text. This is not semantically meaningful
@@ -358,9 +383,13 @@ class LlamaServerBackend(LlamaBackend):
                 for i in range(self._FALLBACK_DIM)
             ]
 
-    def _embed_chunked(self, text: str) -> list[float]:
-        # Tokenize to find the chunk boundaries.
-        tokens = self.tokenize(text)
+    def _embed_chunked(
+        self, text: str, tokens: list[int] | None = None,
+    ) -> list[float]:
+        # Tokenize to find the chunk boundaries - unless the caller
+        # already did.
+        if tokens is None:
+            tokens = self.tokenize(text)
         if len(tokens) <= self._MAX_EMBED_TOKENS:
             return self._embed_one(text)
 
@@ -928,9 +957,8 @@ class LlamaServerBackend(LlamaBackend):
             # across delta chunks.
             tool_calls_by_index: dict[int, dict] = {}
             try:
-                upstream_timeout = httpx.Timeout(self.timeout, connect=10.0)
-                async with httpx.AsyncClient(timeout=upstream_timeout) as client:
-                    async with client.stream(
+                client = self._stream_client()
+                async with client.stream(
                         "POST",
                         f"{self.base_url}/v1/chat/completions",
                         json=payload,

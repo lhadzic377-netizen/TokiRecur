@@ -16,6 +16,7 @@ without restore.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -58,6 +59,9 @@ class PersistentSlotPool:
         self.max_slots = max_slots
         self.llama_base_url = llama_base_url.rstrip("/")
         self.min_reuse_for_pooling = min_reuse_for_pooling
+        # The pool's maps are shared by every request that routes
+        # through the engine, so they are guarded.
+        self._lock = threading.Lock()
         # map: cache_id -> PersistentSlot
         self._slots: OrderedDict[str, PersistentSlot] = OrderedDict()
         # map: cache_id -> use_count
@@ -128,22 +132,26 @@ class PersistentSlotPool:
         request routed to the allocated slot.
         """
         # Already pooled.
-        if cache_id in self._slots:
-            slot = self._slots[cache_id]
-            slot.last_used_at = time.time()
-            slot.use_count += 1
-            self._slots.move_to_end(cache_id)
-            self._use_counts[cache_id] = slot.use_count
-            return slot
+        with self._lock:
+            if cache_id in self._slots:
+                slot = self._slots[cache_id]
+                slot.last_used_at = time.time()
+                slot.use_count += 1
+                self._slots.move_to_end(cache_id)
+                self._use_counts[cache_id] = slot.use_count
+                return slot
 
-        # Not pooled yet. Check whether this prefix has earned its keep.
-        if self._use_counts.get(cache_id, 0) < self.min_reuse_for_pooling:
-            self._use_counts[cache_id] = self._use_counts.get(cache_id, 0) + 1
-            return None
+            # Not pooled yet. Check whether this prefix has earned its keep.
+            if self._use_counts.get(cache_id, 0) < self.min_reuse_for_pooling:
+                self._use_counts[cache_id] = self._use_counts.get(cache_id, 0) + 1
+                return None
 
-        # Evict if needed, then allocate. The slot is reserved for this
-        # prefix; its KV gets prefilled on the next routed request.
-        self._evict_lru()
+            # Evict if needed. The slot is reserved for this prefix; its
+            # KV gets prefilled on the next routed request.
+            self._evict_lru()
+
+        # The slot query is a round-trip to llama-server; it is made
+        # outside the lock so a slow server does not hold up routing.
         slot_id = self._allocate_slot()
         if slot_id is None:
             logger.warning("no free slot available for %s", cache_id)
@@ -152,10 +160,11 @@ class PersistentSlotPool:
             slot_id=slot_id,
             cache_id=cache_id,
             n_past=n_past,
-            use_count=self._use_counts[cache_id],
+            use_count=self._use_counts.get(cache_id, 0),
             prefix_tokens=list(prefix_tokens) if prefix_tokens is not None else None,
         )
-        self._slots[cache_id] = slot
+        with self._lock:
+            self._slots[cache_id] = slot
         logger.info(
             "persistent slot pool: cache_id=%s slot=%d n_past=%d",
             cache_id, slot_id, n_past,

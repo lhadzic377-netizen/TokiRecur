@@ -951,6 +951,14 @@ def create_app(
             yield
         finally:
             watcher.cancel()
+            # The streaming path keeps one HTTP client alive so the
+            # connection is reused; close it with the app.
+            closer = getattr(backend, "aclose", None)
+            if closer is not None:
+                try:
+                    await closer()
+                except Exception:
+                    pass
         logger.info("Toki Recur daemon shutting down")
 
     app = FastAPI(title="Toki Recur", version="0.2.0", lifespan=lifespan)
@@ -962,15 +970,18 @@ def create_app(
     window = max_context_tokens or _max_context_ceiling()
     app.state.max_context_tokens = window
 
-    # The engine's serve_* methods are synchronous and mutate shared slot
-    # state. Run them in a threadpool (so concurrent requests don't stall
-    # the event loop) but serialize them behind a lock (so state mutations
-    # never interleave).
-    engine_lock = asyncio.Lock()
-
+    # The engine's serve_* methods are synchronous, so they run in a
+    # threadpool (so concurrent requests don't stall the event loop).
+    #
+    # They are NOT serialized behind one lock: a generation can take
+    # seconds, and holding a lock across it made every request wait for
+    # the one before it - one request at a time, whatever the number of
+    # slots llama-server has. The engine locks its own routing state
+    # (the slot map, the session pins, the in-flight slots) for the
+    # short routing and bookkeeping steps, and claims a free slot for
+    # the request, so two requests run on two slots at once.
     async def _run_engine(call, *args, **kwargs):
-        async with engine_lock:
-            return await asyncio.to_thread(call, *args, **kwargs)
+        return await asyncio.to_thread(call, *args, **kwargs)
 
     if max_context_tokens:
         # Match the engine's per-slot recycling budget to llama-server's

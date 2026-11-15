@@ -25,6 +25,7 @@ import asyncio
 import hashlib
 import logging
 import os
+import threading
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -181,12 +182,29 @@ def compute_reuse_depth(
 ) -> int:
     """Return the longest prefix length r such that cached_tokens[:r] ==
     new_tokens[:r]. Conservative: the cached KV is only valid for the
-    contiguous matched prefix."""
-    r = 0
+    contiguous matched prefix.
+
+    The comparison is done in blocks, which the interpreter compares at
+    C speed: a 20k-token prompt costs a few hundred microseconds per
+    slot in Python and a fraction of that in bulk. Only the block that
+    holds the first difference is walked one token at a time.
+    """
     limit = min(len(cached_tokens), len(new_tokens))
-    while r < limit and cached_tokens[r] == new_tokens[r]:
-        r += 1
-    return r
+    if limit <= 0:
+        return 0
+    block = 1024
+    start = 0
+    while start < limit:
+        end = min(start + block, limit)
+        if cached_tokens[start:end] == new_tokens[start:end]:
+            start = end
+            continue
+        # The first difference is inside this block.
+        for i in range(start, end):
+            if cached_tokens[i] != new_tokens[i]:
+                return i
+        return end
+    return limit
 
 
 def cosine_similarity(a: list[float], b: list[float]) -> float:
@@ -250,8 +268,27 @@ class RecyclingEngine:
         self.tree_cache = tree_cache
         if persistent_pool is None:
             from ..cache.persistent_pool import PersistentSlotPool
-            persistent_pool = PersistentSlotPool()
+            # The pool asks llama-server for its free slots, so it has
+            # to ask the server that is actually running: the default
+            # port (8088) belongs to nothing on a machine whose model
+            # sits on its own port, and the pool then never found a
+            # slot to claim.
+            persistent_pool = PersistentSlotPool(
+                llama_base_url=getattr(backend, "base_url", None)
+                or "http://127.0.0.1:8088",
+            )
         self.persistent_pool = persistent_pool
+        # The engine's routing state (which slot holds which prefix,
+        # which sessions are pinned where) is shared by every request.
+        # The lock is held for the routing and the bookkeeping, never
+        # for the generation itself: a generation can take seconds, and
+        # holding a lock across it would make every request wait for the
+        # one before it - one request at a time, whatever the number of
+        # slots llama-server has.
+        self._state_lock = threading.Lock()
+        # Slots with a request in flight. A second request prefers a
+        # free slot, so two requests can run at once on two slots.
+        self._busy_slots: set[int] = set()
 
     def serve_native(
         self,
@@ -423,33 +460,61 @@ class RecyclingEngine:
         # slots are exempt from spilling.
         spilled = False
         cache_prompt = True
-        if (
-            session_id is not None
-            and session_id in self._session_to_slot
-            and not self._is_slot_reserved(self._session_to_slot[session_id])
-        ):
-            existing_slot = self._session_to_slot[session_id]
-            existing_ctx = self._slot_context_tokens.get(existing_slot, 0)
-            if max_context_tokens is None:
-                max_context_tokens = self._max_context_tokens
-            if max_context_tokens and existing_ctx + len(new_tokens) > max_context_tokens:
-                self._spill_slot(existing_slot)
-                del self._session_to_slot[session_id]
-                spilled = True
-                cache_prompt = False  # Force fresh prefill on the new slot
+        with self._state_lock:
+            if (
+                session_id is not None
+                and session_id in self._session_to_slot
+                and not self._is_slot_reserved(self._session_to_slot[session_id])
+            ):
+                existing_slot = self._session_to_slot[session_id]
+                existing_ctx = self._slot_context_tokens.get(existing_slot, 0)
+                if max_context_tokens is None:
+                    max_context_tokens = self._max_context_tokens
+                # A slot with a request in flight is left alone: clearing
+                # its KV under the running request would corrupt that
+                # turn.
+                busy = existing_slot in self._busy_slots
+                if (
+                    not busy
+                    and max_context_tokens
+                    and existing_ctx + len(new_tokens) > max_context_tokens
+                ):
+                    self._spill_slot(existing_slot)
+                    del self._session_to_slot[session_id]
+                    spilled = True
+                    cache_prompt = False  # Force fresh prefill on the new slot
 
-        # Compute the content-addressed cache_id once. Used for index
-        # lookup, hot-prefix pooling and the result payload.
-        cache_id = make_cache_id(tokenize_text, "llama-server-slot")
+            # Compute the content-addressed cache_id once. Used for index
+            # lookup, hot-prefix pooling and the result payload.
+            cache_id = make_cache_id(tokenize_text, "llama-server-slot")
 
-        # Pick the slot that has the longest matching prefix with the new
-        # prompt. llama-server will then reuse the prefix automatically.
-        slot_id, reuse_depth = self._pick_slot(
-            new_tokens, max_slots, session_id=session_id,
-        )
+            # Pick the slot that has the longest matching prefix with the new
+            # prompt. llama-server will then reuse the prefix automatically.
+            slot_id, reuse_depth = self._pick_slot(
+                new_tokens, max_slots, session_id=session_id,
+            )
+            # Claim the slot for the length of the request, so a second
+            # request that arrives now picks a different one.
+            self._busy_slots.add(slot_id)
 
-        new_embedding = self.backend.embed(tokenize_text)
+        # The embedding is a forward pass on the same backend the model
+        # is served from. The token list is already known, so it is
+        # handed over instead of being tokenized a second time.
+        new_embedding = self._embed(tokenize_text, new_tokens)
         return new_tokens, new_embedding, slot_id, reuse_depth, spilled, cache_prompt, cache_id
+
+    def _embed(self, text: str, tokens: list[int]) -> list[float]:
+        """Embed the routing text, handing over the tokens we have.
+
+        A backend that predates the keyword ignores it - the request
+        path must not care which kind of backend it is talking to.
+        """
+        try:
+            return self.backend.embed(text, tokens=tokens)
+        except TypeError as e:
+            if "tokens" not in str(e):
+                raise
+            return self.backend.embed(text)
 
     def _finalize_request(
         self,
@@ -467,14 +532,17 @@ class RecyclingEngine:
     ) -> RecyclingResult:
         """Update slot bookkeeping + index after a completion and build
         the :class:`RecyclingResult`."""
-        # Update slot state.
-        self._slot_history[slot_id] = new_tokens
-        self._slot_context_tokens[slot_id] = (
-            self._slot_context_tokens.get(slot_id, 0) + len(new_tokens)
-        )
-        self._slot_use_count[slot_id] = self._slot_use_count.get(slot_id, 0) + 1
-        if session_id is not None:
-            self._session_to_slot[session_id] = slot_id
+        # Update slot state. The slot is released here: the request that
+        # claimed it is over, and a waiting request may take it.
+        with self._state_lock:
+            self._slot_history[slot_id] = new_tokens
+            self._slot_context_tokens[slot_id] = (
+                self._slot_context_tokens.get(slot_id, 0) + len(new_tokens)
+            )
+            self._slot_use_count[slot_id] = self._slot_use_count.get(slot_id, 0) + 1
+            if session_id is not None:
+                self._session_to_slot[session_id] = slot_id
+            self._busy_slots.discard(slot_id)
 
         # Hot-prefix detection only counts MISSES — a hit on an already-
         # reserved prefix shouldn't push us past the threshold a second
@@ -779,25 +847,41 @@ class RecyclingEngine:
             if depth >= MIN_REUSE_FOR_HIT:
                 return persistent_slot.slot_id, depth
 
-        # Find the slot with the longest matching prefix.
+        # Find the slot with the longest matching prefix. A slot that
+        # has a request in flight is still the best match - the prefix
+        # is there - but a free slot with the same depth is preferred,
+        # so two requests can run at once instead of queueing behind each
+        # other on one slot.
         best_slot = 0
         best_depth = 0
+        best_free = False
 
         for slot_id, prev_tokens in self._slot_history.items():
             # Skip pool-owned slots unless their prefix actually matches.
             if self.persistent_pool.owns_slot(slot_id):
                 continue
             depth = compute_reuse_depth(prev_tokens, new_tokens)
-            if depth > best_depth:
+            free = slot_id not in self._busy_slots
+            if depth > best_depth or (depth == best_depth and free and not best_free):
                 best_depth = depth
                 best_slot = slot_id
+                best_free = free
 
         # If no slot has any prefix match, round-robin among non-pool slots.
         if best_depth == 0:
             used = set(self._slot_history.keys())
             pool_owned = self.persistent_pool.owned_slot_ids
+            # An unused slot first, then a slot that is not busy, and
+            # only then a busy one - a busy slot still answers, it just
+            # waits for the request in front of it.
             for slot_id in range(max_slots):
-                if slot_id not in used and slot_id not in pool_owned:
+                if (slot_id not in used
+                        and slot_id not in pool_owned
+                        and slot_id not in self._busy_slots):
+                    return slot_id, 0
+            for slot_id in range(max_slots):
+                if (slot_id not in pool_owned
+                        and slot_id not in self._busy_slots):
                     return slot_id, 0
             # All non-pool slots used; pick the LRU non-pool slot.
             non_reserved = {
@@ -847,6 +931,10 @@ class RecyclingEngine:
         UI uses this to render a live slot-status panel.
         """
         self._init_slot_state()
+        with self._state_lock:
+            return self._slot_state_locked()
+
+    def _slot_state_locked(self) -> dict:
         pool_owned = self.persistent_pool.owned_slot_ids
         return {
             "slots": [
@@ -880,11 +968,12 @@ class RecyclingEngine:
         `POST /v1/cache/reset` calls.
         """
         self._init_slot_state()
-        self._slot_history.clear()
-        self._slot_context_tokens.clear()
-        self._slot_use_count.clear()
-        self._session_to_slot.clear()
-        self._session_order.clear()
+        with self._state_lock:
+            self._slot_history.clear()
+            self._slot_context_tokens.clear()
+            self._slot_use_count.clear()
+            self._session_to_slot.clear()
+            self._session_order.clear()
         # PersistentSlotPool owns its own use-counts / slot registry;
         # clearing it here drops the engine's view of "reserved slots"
         # without touching the on-disk cache files.
