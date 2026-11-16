@@ -204,6 +204,66 @@ def installed_build() -> dict[str, str | None]:
     return {"state_bin": state_bin, "registry": sorted(set(registry)) or None}
 
 
+def _vulkan_driver_for(vendor: str | None) -> bool:
+    """Whether a Vulkan driver for this vendor is installed.
+
+    The loader's ICD directory lists the drivers it can use; the one
+    that matters is the one for the card that is actually in the
+    machine. A box with the Intel and Mesa drivers but no RADV cannot
+    run an AMD card on Vulkan, however many ICDs it has.
+    """
+    icd_dir = "/usr/share/vulkan/icd.d"
+    if not os.path.isdir(icd_dir):
+        return False
+    try:
+        names = os.listdir(icd_dir)
+    except OSError:
+        return False
+    vendor = (vendor or "").lower()
+    if "nvidia" in vendor or "geforce" in vendor:
+        wanted = ("nvidia",)
+    elif "amd" in vendor or "radeon" in vendor:
+        wanted = ("amd", "radeon", "radv")
+    elif "intel" in vendor or "arc" in vendor:
+        wanted = ("intel",)
+    else:
+        # Unknown card: a driver for it might still be there.
+        wanted = ("amd", "radeon", "nvidia", "intel")
+    return any(
+        any(w in name.lower() for w in wanted) for name in names
+    )
+
+
+def available_backends() -> list[str]:
+    """The backends a model can be served by on this machine.
+
+    CUDA needs an NVIDIA card, ROCm an AMD one with a HIP toolchain,
+    Vulkan a matching Vulkan driver, Metal is macOS. CPU is always
+    there - the fallback that always works and is always slow.
+
+    The list is what the settings pane offers: a backend that is not
+    here cannot be installed for this machine, so offering it would
+    only produce a download that cannot work.
+    """
+    out: list[str] = []
+    hw = gpu_hardware()
+    backend = (hw.get("backend") or "").upper()
+    name = hw.get("name") or ""
+    if backend and backend != "CPU":
+        out.append(backend)
+    if "VULKAN" not in out and _vulkan_driver_for(name):
+        out.append("VULKAN")
+    if "CUDA" not in out and shutil.which("nvidia-smi"):
+        out.append("CUDA")
+    if "ROCM" not in out and (
+        shutil.which("hipconfig") or os.path.exists("/opt/rocm")
+    ):
+        out.append("ROCM")
+    if "CPU" not in out:
+        out.append("CPU")
+    return out
+
+
 def cuda_runtime_dlls(directory: str | os.PathLike[str]) -> list[str]:
     """cudart/cublas DLLs next to a Windows llama-server, sorted.
 

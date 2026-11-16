@@ -21,6 +21,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   travels in the config, which stays owner-only.
 
 ### Fixed
+- **The backend is a dropdown now, and it follows the hardware.** The
+  settings pane asked for a path and never said what the build was, so
+  a model could be pointed at a CPU build and keep answering - ten to
+  thirty times slower, with nothing in the output to say why. The
+  field is a list of the backends this machine can actually serve:
+  the card's own runtime first (ROCm on an AMD box), then the portable
+  ones whose driver is installed here (Vulkan, when the matching ICD
+  is present), then the CPU build that always works. Picking one
+  installs that build for the model - the download, the env block and
+  the self-check are the installer's job - and points the model at it;
+  a backend this machine cannot run is not offered at all. The free
+  text path is still there for a build from somewhere else.
 - **The settings pane no longer lets a model point at something that
   is not a build.** The backend build is the one setting that can make
   a stack unstartable, and a path that is not a build was written to

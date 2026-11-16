@@ -1,6 +1,7 @@
 """Tests for the Ollama-style Textual launcher and its UI design tokens."""
 
 import asyncio
+import subprocess
 import sys
 
 import pytest
@@ -990,3 +991,122 @@ def test_status_poll_runs_off_the_event_loop():
             assert app._statuses["9b"]["llama"] is True
 
     asyncio.run(run_app())
+
+
+# ── The backend dropdown ───────────────────────────────────────────────
+
+
+def test_the_backend_dropdown_offers_what_this_machine_can_run(
+    isolated_registry, monkeypatch,
+):
+    """The list follows the hardware, not a fixed set.
+
+    A backend this machine cannot serve is not offered: picking it
+    would only download a build that cannot work.
+    """
+    from tokirecur.diagnose import available_backends
+    from tokirecur.tui import launcher as launcher_mod
+
+    monkeypatch.setattr(
+        "tokirecur.diagnose.available_backends", lambda: ["ROCM", "CPU"]
+    )
+    spec = ctl.load_registry()[0]
+    choices = launcher_mod._backend_choices(spec)
+    values = set(choices.values())
+    assert "rocm" in values
+    assert "cpu" in values
+    # The free-text path is still there for a build from somewhere else.
+    assert launcher_mod._CUSTOM_VALUE in values
+    # And a backend the machine cannot run is not on the list.
+    assert "cuda" not in values
+    assert available_backends()
+
+
+def test_a_backend_name_is_not_mistaken_for_a_path():
+    from tokirecur.tui import launcher as launcher_mod
+
+    assert launcher_mod._is_backend_choice("vulkan")
+    assert launcher_mod._is_backend_choice("ROCm")
+    assert not launcher_mod._is_backend_choice("/usr/local/bin/llama-server")
+    assert not launcher_mod._is_backend_choice("")
+
+
+def test_picking_a_backend_installs_that_build(
+    isolated_registry, monkeypatch, tmp_path,
+):
+    """The dropdown asks for a backend, so the build has to be fetched
+    before the model can be pointed at it."""
+    from tokirecur.tui import launcher as launcher_mod
+
+    name = ctl.load_registry()[0].name
+    build = tmp_path / "llama-server"
+    build.write_text("#!/bin/sh\n")
+    build.chmod(0o755)
+    calls = []
+
+    class FakeProc:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    real_run = subprocess.run
+
+    def fake_run(cmd, **kw):
+        # Only the install is faked: the binary check runs ldd, which
+        # is a subprocess of its own.
+        if "install-llama" not in cmd:
+            return real_run(cmd, **kw)
+        calls.append(list(cmd))
+        # What the CLI does: point the model at the build it installed.
+        ctl.update_spec_field(name, "binary", str(build), apply=False)
+        return FakeProc()
+
+    monkeypatch.setattr(launcher_mod.subprocess, "run", fake_run)
+
+    async def run_app():
+        app = LauncherApp()
+        async with app.run_test(size=(100, 34)) as pilot:
+            await pilot.pause()
+            got = await app._install_backend(name, "vulkan")
+            await pilot.pause()
+        return got
+
+    got = asyncio.run(run_app())
+    assert got == str(build)
+    assert calls, "the build was not installed"
+    assert "install-llama" in calls[0]
+    assert "--backend" in calls[0]
+    assert "vulkan" in calls[0]
+    assert name in calls[0]
+
+
+def test_a_failed_install_keeps_the_model_on_its_build(
+    isolated_registry, monkeypatch,
+):
+    """A download that fails must not leave the model pointing at
+    nothing."""
+    from tokirecur.tui import launcher as launcher_mod
+
+    name = ctl.load_registry()[0].name
+    before = ctl.get_model(name).binary
+
+    class FakeProc:
+        returncode = 1
+        stdout = ""
+        stderr = "error: no release asset for this platform\n"
+
+    monkeypatch.setattr(
+        launcher_mod.subprocess, "run",
+        lambda cmd, **kw: FakeProc(),
+    )
+
+    async def run_app():
+        app = LauncherApp()
+        async with app.run_test(size=(100, 34)) as pilot:
+            await pilot.pause()
+            got = await app._install_backend(name, "vulkan")
+            await pilot.pause()
+        return got
+
+    assert asyncio.run(run_app()) is None
+    assert ctl.get_model(name).binary == before

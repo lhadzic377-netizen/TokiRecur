@@ -11,6 +11,8 @@ wordmark heads the pane (no ASCII art). Footer bar hints the keys.
 from __future__ import annotations
 
 import asyncio
+import subprocess
+import sys
 import time
 from collections.abc import Callable
 from functools import lru_cache
@@ -552,6 +554,53 @@ class LauncherApp(App[dict | None]):
             exclusive=False,
         )
 
+    async def _install_backend(self, name: str, backend: str) -> str | None:
+        """Install the build for a backend and return the path.
+
+        The download is the CLI's job, so the launcher runs
+        ``toki model install-llama`` for the model and reads back the
+        build it landed. None means the install failed and the model
+        keeps the build it has.
+        """
+        cmd = [
+            sys.executable, "-m", "tokirecur.cli", "model", "install-llama",
+            "--backend", backend, "--name", name, "--no-profile",
+        ]
+        try:
+            proc = await asyncio.to_thread(
+                subprocess.run, cmd, capture_output=True, text=True,
+                timeout=900,
+            )
+        except Exception as e:
+            self.notify(
+                f"could not install the {backend} build: {e}",
+                timeout=6, severity="error",
+            )
+            return None
+        if proc.returncode != 0:
+            tail = (proc.stderr or proc.stdout or "").strip().splitlines()
+            self.notify(
+                f"the {backend} build was not installed: "
+                f"{tail[-1] if tail else 'see the output'}",
+                timeout=8, severity="error",
+            )
+            return None
+        from .. import ctl
+
+        spec = next((s for s in ctl.load_registry() if s.name == name), None)
+        path = str(getattr(spec, "binary", "") or "") if spec else ""
+        if not path:
+            self.notify(
+                f"the {backend} build was installed but the model was not "
+                f"pointed at it",
+                timeout=8, severity="error",
+            )
+            return None
+        self.notify(
+            f"{name} now runs on the {backend} build", timeout=4,
+        )
+        return path
+
     def _warn_about_backend(self, name: str, binary: str) -> None:
         """Say what the model will now run on.
 
@@ -585,6 +634,20 @@ class LauncherApp(App[dict | None]):
             next((s for s in self.specs if s.name == name), None),
             field, new_value,
         )
+        if field == "binary" and _is_backend_choice(new_value):
+            # The dropdown asks for a backend, not a path. Installing
+            # that build is the CLI's job - it knows the release
+            # assets, the env block and the self-check - so the
+            # launcher runs it and then points the model at the result.
+            installed = await self._install_backend(name, str(new_value))
+            if installed is None:
+                self._restarting.pop((name, field), None)
+                return
+            new_value = installed
+            shown = _display_choice(
+                next((s for s in self.specs if s.name == name), None),
+                field, new_value,
+            )
         try:
             await asyncio.to_thread(
                 ctl_mod.update_spec_field, name, field, new_value, apply=apply
@@ -1630,6 +1693,8 @@ def _choices_for_field(spec: Any, field: str) -> dict[str, str] | None:
         from ..adapters import choice_map
 
         return choice_map(spec)
+    if field == "binary":
+        return _backend_choices(spec)
     base = _SETTINGS_CHOICES.get(field)
     if base is None:
         return base
@@ -1652,6 +1717,48 @@ def _choices_for_field(spec: Any, field: str) -> dict[str, str] | None:
         ordered[k] = v
     ordered["custom…"] = _CUSTOM_VALUE
     return ordered
+
+
+#: The backends a model can be served by, as the dropdown shows them.
+_BACKEND_LABELS = {
+    "CUDA": "CUDA",
+    "ROCM": "ROCm",
+    "VULKAN": "Vulkan",
+    "SYCL": "SYCL",
+    "METAL": "Metal",
+    "CPU": "CPU",
+}
+
+
+def _is_backend_choice(value: Any) -> bool:
+    """Whether a settings value names a backend rather than a path."""
+    text = str(value or "").strip().lower()
+    return text in {"cuda", "rocm", "vulkan", "sycl", "metal", "cpu"}
+
+
+def _backend_choices(spec: Any) -> dict[str, str]:
+    """The backends this machine can serve the model with.
+
+    The list follows the hardware: the card's own runtime first, then
+    the portable ones that are actually installed here, then the CPU
+    build that always works. A backend this machine cannot run is not
+    offered - picking it would only download a build that cannot work.
+    """
+    from ..diagnose import available_backends
+
+    try:
+        backends = available_backends()
+    except Exception:
+        backends = ["CPU"]
+    choices: dict[str, str] = {}
+    for backend in backends:
+        label = _BACKEND_LABELS.get(backend.upper(), backend.title())
+        current = _backend_label(str(getattr(spec, "binary", "") or ""))
+        if current and current.upper() == backend.upper():
+            label = f"{label} (current)"
+        choices[label] = backend.lower()
+    choices["custom…"] = _CUSTOM_VALUE
+    return choices
 
 
 def _model_variants(specs: Any) -> list[Any]:
