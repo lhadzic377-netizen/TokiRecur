@@ -53,15 +53,27 @@ def test_every_flag_the_launcher_passes_is_one_the_binary_knows(
     binary = shutil.which(client)
     if binary is None:
         pytest.skip(f"{client} is not installed")
+    # A client with subcommands keeps the flags of the subcommand out
+    # of the top-level help: hermes chat --tui is not in hermes --help.
+    # The help that matters is the one of the command the launcher runs.
+    argv = _launch_argv(client)
+    subcommand = (
+        argv[1] if len(argv) > 1 and not argv[1].startswith("-") else None
+    )
+    command = [binary] + ([subcommand] if subcommand else []) + ["--help"]
     try:
         result = subprocess.run(
-            [binary, "--help"], capture_output=True, text=True, timeout=25
+            command, capture_output=True, text=True, timeout=25
         )
     except Exception:
         pytest.skip(f"{client} --help did not run")
     text = (result.stdout or "") + (result.stderr or "")
     if not text.strip():
         pytest.skip(f"{client} --help said nothing")
+    if "dependency environment" in text or "install" in text.lower() and "usage:" not in text.lower():
+        # The binary could not start (a broken install on this machine).
+        # That is not a flag the launcher got wrong.
+        pytest.skip(f"{client} could not show its help")
     for flag in _flags(_launch_argv(client)):
         assert flag in text, f"{client} does not know {flag}"
 

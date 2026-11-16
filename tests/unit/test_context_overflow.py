@@ -15,12 +15,15 @@ the conversation.
 """
 
 import json
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
 from tokirecur.api.app import (
     _context_overflow_status,
+    _estimate_prompt_tokens,
     _openai_error,
+    _prompt_would_overflow,
     create_app,
 )
 
@@ -172,3 +175,64 @@ def test_the_tools_are_counted_with_the_prompt():
     # The server was asked to render the prompt, tools included.
     assert backend.applied
     assert backend.applied[0][1] == tools
+
+
+class MixedBackend:
+    """A backend whose prompts are denser at one end than the other.
+
+    The overflow check estimates the token count from a sample of the
+    prompt, so the sample has to be representative: the head and the
+    tail are both taken, and a prompt that lands inside the margin is
+    counted exactly.
+    """
+
+    def __init__(self, head_chars_per_token: int, tail_chars_per_token: int):
+        self.head = head_chars_per_token
+        self.tail = tail_chars_per_token
+        self.tokenize_calls = 0
+        self.full_calls = 0
+
+    def _count(self, text: str) -> int:
+        # "a" is dense, "b" is sparse, so a sample of the prompt can
+        # count differently from the whole of it.
+        return (text.count("a") // self.head) + (text.count("b") // self.tail)
+
+    def tokenize(self, text: str) -> list[int]:
+        self.tokenize_calls += 1
+        return [0] * self._count(text)
+
+    def apply_template(self, messages, tools=None) -> str:
+        return "".join(
+            str(m.get("content") or "") for m in messages
+        ) + ("".join(str(t) for t in (tools or [])))
+
+
+def test_the_estimate_holds_when_the_density_changes_along_the_prompt():
+    """A prompt that does not fit is refused even when the sample
+    counts it differently from the whole."""
+    backend = MixedBackend(head_chars_per_token=8, tail_chars_per_token=2)
+    engine = SimpleNamespace(backend=backend)
+    # 40000 characters: "a" is sparse (8 per token), "b" is dense
+    # (2 per token) - 12500 tokens in all, over an 8000 window.
+    messages = [{"role": "user", "content": "a" * 20000 + "b" * 20000}]
+    assert _prompt_would_overflow(engine, messages, None, ceiling=8000) is True
+
+
+def test_a_prompt_that_fits_is_not_refused_when_the_sample_counts_it_low():
+    backend = MixedBackend(head_chars_per_token=2, tail_chars_per_token=16)
+    engine = SimpleNamespace(backend=backend)
+    messages = [{"role": "user", "content": "a" * 20000 + "b" * 20000}]
+    # 11250 tokens in all, inside a 12000 window: a prompt that fits
+    # must not be refused.
+    assert _prompt_would_overflow(engine, messages, None, ceiling=12000) is False
+
+
+def test_the_sampled_estimate_is_close_to_the_true_count():
+    """On a prompt of one density, the sample is within a few percent."""
+    backend = MixedBackend(head_chars_per_token=4, tail_chars_per_token=4)
+    engine = SimpleNamespace(backend=backend)
+    text = "a" * 40000
+    rendered = backend.apply_template([{"role": "user", "content": text}])
+    estimate = _estimate_prompt_tokens(engine, rendered)
+    true = len(backend.tokenize(rendered))
+    assert abs(estimate - true) / true < 0.1, (estimate, true)

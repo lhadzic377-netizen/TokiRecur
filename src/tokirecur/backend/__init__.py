@@ -302,10 +302,10 @@ class LlamaServerBackend(LlamaBackend):
         task — the latter never advances.
         """
         try:
-            async with httpx.AsyncClient(timeout=3.0) as client:
-                r = await client.get(f"{self.base_url}/slots")
-                r.raise_for_status()
-                raw = r.json()
+            client = self._stream_client()
+            r = await client.get(f"{self.base_url}/slots", timeout=3.0)
+            r.raise_for_status()
+            raw = r.json()
         except Exception:
             return None
         out: list[dict[str, Any]] = []

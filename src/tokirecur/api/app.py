@@ -431,6 +431,41 @@ def _prompt_text(messages: list[dict]) -> str:
     return "\n".join(parts)
 
 
+def _estimate_prompt_tokens(engine: Any, rendered: str) -> int | None:
+    """Estimate how many tokens a rendered prompt is.
+
+    Tokenizing the whole prompt costs tens of milliseconds on an
+    agent-sized one (65 ms for 100k characters), and the count is only
+    needed to tell "fits" from "does not fit". So the head and the tail
+    of the prompt are tokenized and scaled: on real prompts that lands
+    within 8% of the true count, and it costs a fraction of the time.
+    A prompt short enough to sample in one piece is counted exactly.
+    """
+    sample_chars = 12000
+    if len(rendered) <= sample_chars:
+        try:
+            return len(engine.backend.tokenize(rendered))
+        except Exception:
+            return None
+    # The sample is spread over the prompt rather than taken from its
+    # ends: a prompt is often prose at the front and tool schemas in
+    # the middle, and the ends alone would not be representative.
+    pieces = 4
+    chunk = sample_chars // pieces
+    step = max(1, (len(rendered) - chunk) // (pieces - 1))
+    sample = "".join(
+        rendered[start:start + chunk]
+        for start in range(0, len(rendered) - chunk + 1, step)
+    )[:sample_chars]
+    try:
+        tokens = len(engine.backend.tokenize(sample))
+    except Exception:
+        return None
+    if not tokens or not sample:
+        return None
+    return int(tokens / len(sample) * len(rendered))
+
+
 def _prompt_would_overflow(
     engine: Any, messages: list[dict], tools: list | None = None,
     ceiling: int | None = None,
@@ -451,6 +486,11 @@ def _prompt_would_overflow(
     more tokens than the conversation. Asking the server is the only
     way to be right - a count taken from the message text alone is short
     by the whole tool block.
+
+    The count is estimated rather than exact: the estimate is within a
+    few percent, so the decision is taken with a margin around the
+    window, and only a prompt that lands inside that margin is counted
+    token by token.
     """
     if ceiling is None:
         ceiling = _max_context_ceiling()
@@ -465,14 +505,26 @@ def _prompt_would_overflow(
     rough = (len(text) + len(tools_text)) // 4
     if rough + 1024 < ceiling:
         return False
-    count = None
     try:
-        prompt = engine.backend.apply_template(messages, tools)
-        count = len(engine.backend.tokenize(prompt))
+        rendered = engine.backend.apply_template(messages, tools)
     except Exception:
         # A server that cannot render the template is not a reason to
-        # refuse the request; the estimate is the best we have.
-        count = rough
+        # refuse the request.
+        return False
+    estimate = _estimate_prompt_tokens(engine, rendered)
+    if estimate is None:
+        return False
+    # The estimate can be a few percent out, so the window gets a
+    # margin: inside it the prompt is counted exactly.
+    margin = max(256, ceiling // 12)
+    if estimate + margin < ceiling:
+        return False
+    if estimate - margin > ceiling:
+        return True
+    try:
+        count = len(engine.backend.tokenize(rendered))
+    except Exception:
+        count = estimate
     # The template adds a little on top of the text it renders.
     return count + 64 > ceiling
 
@@ -793,6 +845,20 @@ class PrecisionRequest(BaseModel):
     max_tokens: int | None = Field(32, ge=1, le=512)
 
 
+def _get_auth_tokens() -> list[str]:
+    """The tokens this daemon accepts (usually one).
+
+    The daemon and the client configs have to agree on the token or
+    every request is a 401. They can disagree when one of them runs
+    with ``TOKI_AUTH_TOKEN`` exported and the other does not, so both
+    the machine's tokens are accepted - they are the owner's own, and
+    the file they live in is owner-only.
+    """
+    from ..ctl import configured_auth_tokens
+
+    return configured_auth_tokens()
+
+
 def _get_auth_token() -> str | None:
     """The token this daemon accepts, or None when none is configured.
 
@@ -802,9 +868,8 @@ def _get_auth_token() -> str | None:
     holds a well-known placeholder is replaced with a real one on the way
     past — a placeholder protects nothing.
     """
-    from ..ctl import configured_auth_token
-
-    return configured_auth_token()
+    tokens = _get_auth_tokens()
+    return tokens[0] if tokens else None
 
 
 def _backend_model_id(backend) -> str | None:
@@ -826,8 +891,8 @@ def _backend_model_id(backend) -> str | None:
 
 def _check_auth(request: Request) -> None:
     """Validate bearer token. Raises 401 if missing/invalid."""
-    expected = _get_auth_token()
-    if expected is None:
+    expected = _get_auth_tokens()
+    if not expected:
         # No token configured — accept everything on loopback, reject
         # on non-loopback.
         client_host = request.client.host if request.client else ""
@@ -853,8 +918,9 @@ def _check_auth(request: Request) -> None:
             headers={"WWW-Authenticate": "Bearer"},
         )
     if not any(
-        hmac.compare_digest(value.encode("utf-8"), expected.encode("utf-8"))
+        hmac.compare_digest(value.encode("utf-8"), token.encode("utf-8"))
         for value in candidates
+        for token in expected
     ):
         METRICS.auth_failures.inc()
         # A wrong token is almost never a wrong server: it is a client

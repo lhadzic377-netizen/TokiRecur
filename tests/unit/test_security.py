@@ -249,3 +249,34 @@ class _FakeIndex:
 
     def stats(self) -> dict:
         return {"entries": len(self.entries), "bytes_on_disk": 0, "embedding_dim": 4}
+
+
+def test_the_daemon_accepts_both_of_the_machine_tokens(monkeypatch, tmp_path):
+    """A daemon started with TOKI_AUTH_TOKEN and a client configured
+    from the auth file must not lock each other out.
+
+    Both tokens are this machine's own - the file is owner-only - so a
+    request carrying either one is the owner talking to their own
+    daemon, not a stranger.
+    """
+    from tokirecur.api.app import _check_auth
+    from tokirecur.ctl import configured_auth_tokens
+
+    auth_file = tmp_path / ".config" / "tokirecur" / "auth"
+    auth_file.parent.mkdir(parents=True, exist_ok=True)
+    auth_file.write_text("token-from-the-file\n")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("TOKI_AUTH_TOKEN", "token-from-the-env")
+
+    tokens = configured_auth_tokens()
+    assert "token-from-the-env" in tokens
+    assert "token-from-the-file" in tokens
+
+    class _Request:
+        headers = {"authorization": "Bearer token-from-the-file"}
+        url = type("U", (), {"path": "/v1/chat/completions"})()
+        client = type("C", (), {"host": "127.0.0.1"})()
+
+    # The file's token is accepted even though the env var names a
+    # different one.
+    _check_auth(_Request())

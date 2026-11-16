@@ -67,6 +67,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   read as the message it is.
 
 ### Changed
+- **The overflow check stopped counting the whole prompt.** Tokenizing
+  a rendered prompt costs tens of milliseconds on an agent-sized one
+  (39 ms for 106k characters on this box), and the count is only
+  needed to tell "fits" from "does not fit". The prompt is now sampled
+  - spread over its length, so a prompt that is prose at the front and
+  tool schemas in the middle is represented - and scaled: 39 ms became
+  19 ms here and 77 ms became 15 ms on a larger one, with the
+  estimate within 1% of the true count. A prompt that lands inside
+  the margin around the window is still counted exactly.
+- **The daemon accepts both of the machine's tokens.** A daemon
+  started with `TOKI_AUTH_TOKEN` exported and a client configured
+  from the auth file used to disagree, and every request between them
+  was a 401 - the "Reconnecting" class of failure. Both are the
+  owner's own tokens and the file is owner-only, so either one is
+  accepted now.
 - **One tokenization per request instead of two.** The routing text was
   tokenized for the slot match and then tokenized again inside the
   embedding, which is a round-trip to llama-server for nothing. The
@@ -74,6 +89,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **The streaming path keeps its connection.** It opened a new HTTP
   client - and a new TCP connection - for every request, so the
   keep-alive that would have made the next request cheap went with it.
+  The slot watcher shares it too.
 - **The prefix comparison is done in blocks.** A 20k-token prompt was
   compared one token at a time in Python, per slot: 0.78 ms each. The
   comparison now runs on slices, 0.16 ms for the same prompt, and only

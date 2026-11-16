@@ -226,6 +226,40 @@ def configured_auth_token() -> str | None:
     return None
 
 
+def configured_auth_tokens() -> list[str]:
+    """Every token this machine accepts, most specific first.
+
+    The environment variable wins for a single process; the file is
+    what the rest of the machine uses. A daemon started with the
+    variable set and a client configured from the file would otherwise
+    disagree, and every request between them would be a 401 - the
+    "Reconnecting" class of failure. Both are this machine's own
+    tokens (the file is owner-only), so accepting either of them does
+    not widen the exposure.
+    """
+    out: list[str] = []
+    env = os.environ.get("TOKI_AUTH_TOKEN")
+    if env and env.strip() and not _is_placeholder(env):
+        out.append(env.strip())
+    for path in (
+        Path.home() / ".config" / "tokirecur" / "auth",
+        Path("/etc/toki-recur/auth"),
+    ):
+        try:
+            if not path.is_file():
+                continue
+            content = path.read_text().strip()
+            if not content:
+                continue
+            if _is_placeholder(content):
+                content = _new_auth_token(path)
+        except OSError:
+            continue
+        if content and content not in out:
+            out.append(content)
+    return out
+
+
 def auth_token() -> str:
     """The token the daemon will actually accept.
 
