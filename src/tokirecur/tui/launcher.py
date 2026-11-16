@@ -552,6 +552,20 @@ class LauncherApp(App[dict | None]):
             exclusive=False,
         )
 
+    def _warn_about_backend(self, name: str, binary: str) -> None:
+        """Say what the model will now run on.
+
+        A CPU-only build loads the model and answers - ten to thirty
+        times slower, with nothing in the output to say why.
+        """
+        backend = _backend_label(binary)
+        if not backend or backend.upper() == "CPU":
+            self.notify(
+                f"{name} now runs on {backend or 'an unknown backend'} - "
+                f"a CPU build answers ten to thirty times slower",
+                timeout=6, severity="warning",
+            )
+
     async def _commit_edit(self, name: str, field: str, new_value: str, apply: bool) -> None:
         """Write the registry, optionally apply the downstream effect,
         and surface what happened to the user.
@@ -602,6 +616,8 @@ class LauncherApp(App[dict | None]):
                 f"{name}.{field} = {shown}  ·  restarted, configs synced",
                 timeout=3,
             )
+            if field == "binary":
+                self._warn_about_backend(name, str(new_value))
         elif field in _SYNC_ONLY_FIELDS:
             self.notify(
                 f"{name}.{field} = {shown}  ·  configs synced",
@@ -1676,6 +1692,21 @@ def _recorder_row() -> tuple[str, str, str]:
     return (RECORDER_GROUP, RECORDER_FIELD, f"on · {detail}")
 
 
+def _backend_label(binary: str) -> str:
+    """What a llama-server build is: ROCm, CUDA, Vulkan, CPU, ...
+
+    The path says where the build is, not what it will run the model
+    on - and swapping a GPU build for a CPU one is a ten-times slowdown
+    with no error anywhere.
+    """
+    try:
+        from ..diagnose import binary_backend
+
+        return binary_backend(binary) or ""
+    except Exception:
+        return ""
+
+
 def _settings_rows(
     specs: Any,
     app: LauncherApp | None = None,
@@ -1750,6 +1781,12 @@ def _settings_rows(
                 rows.append((spec.name, field, describe_active(spec)))
                 continue
             reg_value = getattr(spec, field, None)
+            if field == "binary" and reg_value:
+                # Say what the build actually is: the path alone does
+                # not say whether the model will end up on the GPU.
+                backend = _backend_label(str(reg_value))
+                if backend:
+                    reg_value = f"{reg_value}  ·  {backend}"
             live_value = _live_value(app, spec, field)
             mismatched = (
                 live_value is not None

@@ -4267,3 +4267,46 @@ def test_minimax_writer_drops_the_previous_model(
     assert second.model_id in models
     assert first.model_id not in models
     assert cfg["defaultModel"] == f"custom_provider:tokirecur/{second.model_id}"
+
+
+def test_the_backend_build_is_checked_before_it_is_written(
+    env, with_pulled_model, tmp_path,
+):
+    """A path that is not a build is refused, not written.
+
+    The registry's binary is the tuned llama-server build; pointing a
+    model at something that is not a build leaves the stack with
+    nothing to run on, and the launcher would report a restart failure
+    instead of the mistake.
+    """
+    spec = with_pulled_model["9b"]
+    missing = tmp_path / "nope" / "llama-server"
+    with pytest.raises(ValueError, match="not a build"):
+        ctl.update_spec_field(spec.name, "binary", str(missing))
+
+    # The registry still holds the old build.
+    assert ctl.get_model(spec.name).binary == spec.binary
+
+
+def test_a_build_that_is_not_executable_is_refused(
+    env, with_pulled_model, tmp_path,
+):
+    spec = with_pulled_model["9b"]
+    plain = tmp_path / "llama-server"
+    plain.write_text("#!/bin/sh\n")
+    plain.chmod(0o644)
+    with pytest.raises(ValueError, match="not executable"):
+        ctl.update_spec_field(spec.name, "binary", str(plain))
+
+
+def test_the_settings_row_says_what_the_build_is(env, with_pulled_model):
+    """The path alone does not say whether the model runs on the GPU."""
+    from tokirecur.tui import launcher as launcher_mod
+
+    spec = with_pulled_model["9b"]
+    rows = launcher_mod._settings_rows([spec], None)
+    binaries = [value for name, field, value in rows if field == "binary"]
+    assert binaries, [r for r in rows if r[1] == "binary"]
+    # Either a backend was detected or the build could not be read -
+    # never a bare path with no backend at all when one is known.
+    assert "·" in binaries[0] or not launcher_mod._backend_label(spec.binary)

@@ -1640,6 +1640,23 @@ def _effort_list(v: str) -> list[str]:
     return seen
 
 
+def _check_backend_binary(path: str) -> str | None:
+    """Make sure a backend build is one that can actually be run.
+
+    Returns the build's backend ("ROCm", "CUDA", "CPU", ...) so the
+    caller can say what the model would run on, or None when the
+    backend could not be worked out.
+    """
+    from ..diagnose import binary_backend
+
+    resolved = Path(path).expanduser()
+    if not resolved.exists() or not resolved.is_file():
+        raise ValueError(f"not a build: {resolved}")
+    if not os.access(resolved, os.X_OK):
+        raise ValueError(f"not executable: {resolved}")
+    return binary_backend(str(resolved))
+
+
 _EDITABLE_FIELDS: dict[str, Callable[[str], Any]] = {
     "gguf": str,
     # The active adapter mode ("" or BASE_MODE_ID for the base model).
@@ -1716,6 +1733,13 @@ def update_spec_field(
         parsed = _EDITABLE_FIELDS[field](value)
     except (ValueError, TypeError) as e:
         raise ValueError(f"bad value for '{field}': {e}") from e
+    if field == "binary":
+        # The backend build is the one setting that can make the stack
+        # unstartable, so it is checked before the registry is written:
+        # a path that is not a build leaves the model with nothing to
+        # run on, and the launcher would report a restart failure
+        # instead of the mistake.
+        _check_backend_binary(str(parsed))
     # Lock spans the whole read-modify-write so two concurrent
     # callers can't both read the same version, both edit, and both
     # write — the second writer would clobber the first.

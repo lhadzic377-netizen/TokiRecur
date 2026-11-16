@@ -21,6 +21,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   travels in the config, which stays owner-only.
 
 ### Fixed
+- **The settings pane no longer lets a model point at something that
+  is not a build.** The backend build is the one setting that can make
+  a stack unstartable, and a path that is not a build was written to
+  the registry like any other value - the launcher then reported a
+  restart failure instead of the mistake. The path is checked before
+  the registry is written, the settings row says what the build
+  actually is (ROCm, CUDA, Vulkan, CPU - the path alone does not say
+  whether the model will run on the GPU), and a swap onto a CPU-only
+  build says what it means: the model still answers, ten to thirty
+  times slower, with nothing in the output to say why.
 - **Two requests no longer wait for each other.** The daemon held one
   lock across the whole generation, so a second client was answered
   only after the first had finished - one request at a time, whatever
