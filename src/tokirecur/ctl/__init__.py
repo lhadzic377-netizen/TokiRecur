@@ -6654,6 +6654,77 @@ def write_opencode_config(
     return cfg_path
 
 
+def _migrate_openclaw_roster(cfg: dict[str, Any]) -> None:
+    """Move a legacy ``agents.list`` to the keyed ``agents.entries``.
+
+    OpenClaw moved the agent roster from a list to a map keyed by the
+    agent's id, and the installed version refuses to start on the old
+    shape: "OpenClaw config is invalid: ~/.openclaw/openclaw.json".
+    The roster is the user's; the shape is not, so the migration
+    happens here - otherwise toki writes a config that its own launcher
+    cannot start.
+    """
+    agents = cfg.get("agents")
+    if not isinstance(agents, dict):
+        return
+    roster = agents.get("list")
+    if not isinstance(roster, list):
+        return
+    entries = agents.get("entries")
+    if not isinstance(entries, dict):
+        entries = {}
+        for agent in roster:
+            if not isinstance(agent, dict):
+                continue
+            agent_id = str(agent.get("id") or "").strip()
+            if not agent_id:
+                continue
+            key = agent_id
+            suffix = 2
+            while key in entries:
+                key = f"{agent_id}-{suffix}"
+                suffix += 1
+            entries[key] = {
+                k: v for k, v in agent.items() if k != "id"
+            }
+        agents["entries"] = entries
+    agents.pop("list", None)
+
+
+def _repair_openclaw_config(cfg: dict[str, Any]) -> None:
+    """Make the config the installed OpenClaw will accept.
+
+    OpenClaw refuses to start on a config it considers invalid - the
+    launcher launches it, so an invalid config means the client never
+    opens. The keys below are ones the installed version retired; they
+    are the user's settings, but the shape is the client's, and a
+    retired key is worth less than a client that starts.
+    """
+    agents = cfg.get("agents")
+    if isinstance(agents, dict):
+        entries = agents.get("entries")
+        if isinstance(entries, dict) and len(entries) > 1:
+            # A roster with more than one agent has to say who owns
+            # what: without the marker the client calls the config
+            # invalid.
+            agents.setdefault("ownership", "explicit")
+    gateway = cfg.get("gateway")
+    if isinstance(gateway, dict):
+        tailscale = gateway.get("tailscale")
+        if isinstance(tailscale, dict):
+            # Retired: managed routes follow the gateway's life now.
+            tailscale.pop("resetOnExit", None)
+        reload_cfg = gateway.get("reload")
+        if isinstance(reload_cfg, dict):
+            mode = str(reload_cfg.get("mode") or "")
+            if mode and mode not in ("off", "hybrid"):
+                # "hot" was the old name for what is now "hybrid".
+                reload_cfg["mode"] = "hybrid"
+    meta = cfg.get("meta")
+    if isinstance(meta, dict):
+        meta.pop("lastTouchedAt", None)
+
+
 def write_openclaw_config(
     spec: ModelSpec, specs: list[ModelSpec] | None = None,
     path: Path | None = None, mode: str | None = None,
@@ -6670,6 +6741,12 @@ def write_openclaw_config(
         "OPENCLAW_CONFIG", str(Path.home() / ".openclaw/openclaw.json")))
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     cfg: dict[str, Any] = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
+
+    # The roster shape is the client's business, not the user's: an
+    # installed OpenClaw refuses to start on the legacy list, or on a
+    # key the installed version has retired.
+    _migrate_openclaw_roster(cfg)
+    _repair_openclaw_config(cfg)
 
     # Guard against a foreign config shape (e.g. `models` as a list).
     models = cfg.get("models")

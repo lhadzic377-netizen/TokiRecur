@@ -21,6 +21,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   travels in the config, which stays owner-only.
 
 ### Fixed
+- **OpenClaw starts again.** The installed OpenClaw moved its agent
+  roster from a list to a map keyed by the agent's id, and it refuses
+  to start on the old shape - "OpenClaw config is invalid". toki is
+  what writes that file, so it wrote a config its own launcher could
+  not open. The roster is migrated to the keyed shape now, and the
+  keys the installed version has retired are repaired with it (the
+  ownership marker a multi-agent roster needs, the retired
+  `gateway.tailscale.resetOnExit`, the old name for the gateway's
+  reload mode). The roster itself is the user's and is kept.
 - **The backend is a dropdown now, and it follows the hardware.** The
   settings pane asked for a path and never said what the build was, so
   a model could be pointed at a CPU build and keep answering - ten to

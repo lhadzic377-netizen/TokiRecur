@@ -4310,3 +4310,91 @@ def test_the_settings_row_says_what_the_build_is(env, with_pulled_model):
     # Either a backend was detected or the build could not be read -
     # never a bare path with no backend at all when one is known.
     assert "·" in binaries[0] or not launcher_mod._backend_label(spec.binary)
+
+
+def test_openclaw_roster_is_migrated_to_the_keyed_shape(
+    env, with_pulled_model, tmp_path,
+):
+    """OpenClaw moved the roster to a map keyed by the agent's id.
+
+    The installed version refuses to start on the old shape ("OpenClaw
+    config is invalid"), and toki is what writes the file - so the
+    migration has to happen here or the launcher launches a client that
+    will not open.
+    """
+    spec = with_pulled_model["9b"]
+    path = tmp_path / "openclaw.json"
+    path.write_text(json.dumps({
+        "agents": {
+            "list": [
+                {"id": "main"},
+                {"id": "luke", "name": "Luke", "workspace": "/w"},
+            ],
+        },
+    }))
+
+    ctl.write_openclaw_config(spec, [spec], path=path)
+    cfg = json.loads(path.read_text())
+    agents = cfg["agents"]
+    assert "list" not in agents
+    assert set(agents["entries"]) == {"main", "luke"}
+    # The id becomes the key; the rest of the agent stays.
+    assert agents["entries"]["luke"]["name"] == "Luke"
+    assert agents["entries"]["luke"]["workspace"] == "/w"
+    assert "id" not in agents["entries"]["luke"]
+
+
+def test_openclaw_config_is_repaired_to_what_the_client_accepts(
+    env, with_pulled_model, tmp_path,
+):
+    """A config the installed OpenClaw calls invalid means a client that
+    never opens. The retired keys are repaired, the user's own settings
+    are kept."""
+    spec = with_pulled_model["9b"]
+    path = tmp_path / "openclaw.json"
+    path.write_text(json.dumps({
+        "agents": {
+            "entries": {"main": {}, "luke": {}},
+            "defaults": {"model": {"primary": "keep/me"}},
+        },
+        "gateway": {
+            "port": 18789,
+            "reload": {"mode": "hot"},
+            "tailscale": {"mode": "off", "resetOnExit": False},
+        },
+        "meta": {"lastTouchedAt": "2026-07-31T11:27:22.441Z"},
+    }))
+
+    ctl.write_openclaw_config(spec, [spec], path=path)
+    cfg = json.loads(path.read_text())
+    # A roster with more than one agent has to say who owns what.
+    assert cfg["agents"]["ownership"] == "explicit"
+    # toki owns the model the session runs; the user's other settings
+    # survive.
+    assert cfg["agents"]["defaults"]["model"]["primary"] == (
+        f"tokirecur-{spec.name}/{spec.model_id}"
+    )
+    assert cfg["gateway"]["port"] == 18789
+    assert cfg["gateway"]["tailscale"]["mode"] == "off"
+    # The retired keys are gone.
+    assert "resetOnExit" not in cfg["gateway"]["tailscale"]
+    assert cfg["gateway"]["reload"]["mode"] == "hybrid"
+    assert "lastTouchedAt" not in cfg["meta"]
+
+
+def test_openclaw_repair_leaves_a_valid_config_alone(
+    env, with_pulled_model, tmp_path,
+):
+    """A config that is already the shape the client wants is not
+    touched."""
+    spec = with_pulled_model["9b"]
+    path = tmp_path / "openclaw.json"
+    path.write_text(json.dumps({
+        "agents": {"entries": {"main": {}}, "ownership": "explicit"},
+        "gateway": {"reload": {"mode": "hybrid"}, "tailscale": {"mode": "off"}},
+    }))
+
+    ctl.write_openclaw_config(spec, [spec], path=path)
+    cfg = json.loads(path.read_text())
+    assert cfg["gateway"]["reload"]["mode"] == "hybrid"
+    assert cfg["agents"]["ownership"] == "explicit"
