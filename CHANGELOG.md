@@ -17,7 +17,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   default` goes back to the house style, and `TOKI_THEME` applies a
   theme for one run. The Textual stylesheet is rendered from the
   active palette, so a theme reaches the widgets that are styled in CSS
-  as well as the ones styled in Python.
+  as well as the ones styled in Python. The edition is more than a
+  palette: the wordmark is drawn in a heavier face and painted in a
+  sunset - the sun at the top of the letters, the sand through the
+  middle, the sea at the foot - with the horizon under it drawn as a
+  rule in the same colours.
 - **MiniMax Code runs on the local model.** `mcode` joins the launcher
   and the model-capable client family. `toki model use` writes a
   `tokirecur` provider under `custom_provider` in

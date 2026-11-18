@@ -99,3 +99,48 @@ def test_the_house_style_shows_no_badge(monkeypatch):
 
     rendered = asyncio.run(run_app())
     assert "LIMITED EDITION" not in rendered
+
+
+def test_the_gradient_runs_from_the_first_stop_to_the_last():
+    stops = ("#ff0000", "#0000ff")
+    ramp = art.gradient(stops, 3)
+    assert len(ramp) == 3
+    assert ramp[0] == "#ff0000"
+    assert ramp[-1] == "#0000ff"
+    assert ramp[1] == "#800080"
+
+
+def test_one_stop_is_one_colour():
+    assert art.gradient(("#ffd60a",), 4) == ["#ffd60a"] * 4
+
+
+def test_the_sunset_wordmark_is_a_gradient():
+    """GTA VI is a sunset: the wordmark runs from the sun to the sea."""
+    if art.THEME != "gta6":
+        pytest.skip("the house style paints the wordmark in one colour")
+    assert art.wordmark_gradient() == (art.SUN, art.SAND, art.SEA)
+    assert art.horizon_gradient() == (art.SUN, art.SAND, art.SEA)
+
+
+def test_the_wordmark_font_is_the_themes_own():
+    assert art.wordmark_font() == art.WORDMARK_FONTS[art.THEME]
+    # The limited edition is a heavier face than the house style.
+    assert art.WORDMARK_FONTS["gta6"] != art.WORDMARK_FONTS["default"]
+
+
+def test_the_launcher_draws_the_horizon_under_the_wordmark(monkeypatch):
+    """The horizon is the sea meeting the sky - it is the edition."""
+    import asyncio
+
+    from tokirecur.tui import launcher as launcher_mod
+
+    monkeypatch.setattr(art, "EDITION_LABEL", art.EDITION_LABELS["gta6"])
+
+    async def run_app():
+        app = launcher_mod.LauncherApp()
+        async with app.run_test(size=(100, 40)) as pilot:
+            await pilot.pause()
+            return str(app.pane.render())
+
+    rendered = asyncio.run(run_app())
+    assert "▀" in rendered

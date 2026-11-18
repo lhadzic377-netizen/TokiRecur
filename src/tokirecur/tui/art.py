@@ -40,6 +40,13 @@ DEFAULT_PALETTE: dict[str, str] = {
     "RED": "#ff6b8b",
     "BLUE": "#5a7adb",
     "PURPLE": "#c084fc",
+    # The scene: a sky, a sun, a sand, a sea. The house style has no
+    # scene, so these follow its single accent.
+    "SKY": "#12121c",
+    "SUN": "#ffd60a",
+    "SAND": "#b8860b",
+    "SEA": "#5a7adb",
+    "CHROME": "#f0ece0",
 }
 
 #: Limited edition themes, by name.
@@ -58,10 +65,17 @@ THEMES: dict[str, dict[str, str]] = {
         "YELLOW_DIM": "#8c1f4c",
         "TEXT": "#f6f1e7",
         "MUTED": "#8c87a8",
-        "GREEN": "#45e0a0",
+        "GREEN": "#3fe0a0",
         "RED": "#ff5a6e",
         "BLUE": "#35d0ff",
         "PURPLE": "#a66bff",
+        # Leonida at dusk: a deep sky, the sun still hot over the
+        # water, sand between them, the sea in neon teal.
+        "SKY": "#0d0b24",
+        "SUN": "#ff2e88",
+        "SAND": "#ff9e2c",
+        "SEA": "#25e0d8",
+        "CHROME": "#e8e4f2",
     },
 }
 
@@ -117,6 +131,14 @@ RED = PALETTE["RED"]
 BLUE = PALETTE["BLUE"]
 PURPLE = PALETTE["PURPLE"]
 
+# ── The scene ────────────────────────────────────────────────────────
+
+SKY = PALETTE["SKY"]
+SUN = PALETTE["SUN"]
+SAND = PALETTE["SAND"]
+SEA = PALETTE["SEA"]
+CHROME = PALETTE["CHROME"]
+
 # ── Brand wordmark ─────────────────────────────────────────────────
 
 # The ASCII banner is gone; the brand is typographic. Renderers style
@@ -124,6 +146,70 @@ PURPLE = PALETTE["PURPLE"]
 WORDMARK = "TOKI"
 
 TAGLINE = "recycled-prefill LLM stack · AMD Ryzen AI"
+
+
+#: The wordmark font per theme. The house style uses pyfiglet's
+#: "standard"; a limited edition can pick a heavier, more poster-like
+#: face - GTA VI's wordmark is a heavy upright plate.
+WORDMARK_FONTS: dict[str, str] = {
+    "default": "standard",
+    "gta6": "doom",
+}
+
+
+def wordmark_font() -> str:
+    """The figlet font the wordmark is drawn in."""
+    return WORDMARK_FONTS.get(THEME, "standard")
+
+
+def wordmark_gradient() -> tuple[str, ...]:
+    """The colours the wordmark is painted in, top to bottom.
+
+    The house style is one colour. GTA VI is a sunset: the hot sun at
+    the top of the letters, the sand through the middle, the neon sea
+    at the foot.
+    """
+    if THEME == "gta6":
+        return (SUN, SAND, SEA)
+    return (YELLOW,)
+
+
+def horizon_gradient() -> tuple[str, ...]:
+    """The colours of the horizon rule under the wordmark."""
+    if THEME == "gta6":
+        return (SUN, SAND, SEA)
+    return (YELLOW,)
+
+
+def _mix(a: str, b: str, t: float) -> str:
+    """Two colours, a fraction between them."""
+    ah = a.lstrip("#")
+    bh = b.lstrip("#")
+    out = []
+    for i in (0, 2, 4):
+        ca = int(ah[i:i + 2], 16)
+        cb = int(bh[i:i + 2], 16)
+        out.append(round(ca + (cb - ca) * t))
+    return "#" + "".join(f"{c:02x}" for c in out)
+
+
+def gradient(stops: tuple[str, ...], steps: int) -> list[str]:
+    """``steps`` colours from the first stop to the last.
+
+    One stop means one colour - the house style paints the wordmark in
+    a single accent.
+    """
+    if steps <= 0:
+        return []
+    if len(stops) == 1 or steps == 1:
+        return [stops[0]] * steps
+    out: list[str] = []
+    segments = len(stops) - 1
+    for i in range(steps):
+        pos = i / max(steps - 1, 1) * segments
+        segment = min(int(pos), segments - 1)
+        out.append(_mix(stops[segment], stops[segment + 1], pos - segment))
+    return out
 
 
 def stylesheet() -> str:

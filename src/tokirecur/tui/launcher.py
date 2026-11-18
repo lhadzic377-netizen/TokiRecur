@@ -897,9 +897,9 @@ class LauncherApp(App[dict | None]):
             if art.EDITION_LABEL:
                 # The limited edition says so, right under the wordmark.
                 badge = Text(
-                    self._GUT + art.EDITION_LABEL, style=f"bold {art.AMBER}"
+                    self._GUT + art.EDITION_LABEL, style=f"bold {art.CHROME}"
                 )
-                lines = wordmark + [badge] + lines
+                lines = wordmark + [badge, _horizon(width)] + lines
             else:
                 lines = wordmark + lines
         status = self._render_status(width)
@@ -1257,14 +1257,37 @@ def _render_wordmark() -> list[Text]:
 
 @lru_cache(maxsize=1)
 def _wordmark_lines() -> tuple[Text, ...]:
+    """The wordmark, painted in the theme's gradient.
+
+    The house style paints it in one accent; GTA VI paints it in a
+    sunset - the hot sun at the top of the letters, the sand through
+    the middle, the neon sea at the foot.
+    """
     import pyfiglet
 
-    raw = pyfiglet.figlet_format("TOKI", font="standard").rstrip("\n")
+    raw = pyfiglet.figlet_format(
+        "TOKI", font=art.wordmark_font()
+    ).rstrip("\n")
     lines = [ln for ln in raw.split("\n") if ln.strip()]
+    colors = art.gradient(art.wordmark_gradient(), len(lines))
     return tuple(
-        Text(LauncherApp._GUT + line, style=f"bold {art.YELLOW}")
-        for line in lines
+        Text(LauncherApp._GUT + line, style=f"bold {color}")
+        for line, color in zip(lines, colors, strict=False)
     )
+
+
+def _horizon(width: int) -> Text:
+    """The horizon under the wordmark: a rule in the theme's gradient.
+
+    In the house style it is a single accent line; in GTA VI it is the
+    sea meeting the sky.
+    """
+    span = max(width - len(LauncherApp._GUT), 1)
+    colors = art.gradient(art.horizon_gradient(), span)
+    text = Text(LauncherApp._GUT)
+    for color in colors:
+        text.append("\u2580", style=color)
+    return text
 
 
 # ── Settings pane ──────────────────────────────────────────────────────
