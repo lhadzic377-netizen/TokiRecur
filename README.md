@@ -158,6 +158,11 @@ toki bench --model 9b --workload agent_long_context --max-tokens 64 --output-jso
 toki stats | toki evict --target-mb 4096
 toki doctor | toki hardware
 
+# appearance
+toki theme                                   # list the themes
+toki theme gta6                              # a limited edition
+toki theme default                           # back to the house style
+
 # training data (off by default)
 toki tap on | status | off
 toki tap export --format sft --out training.jsonl
@@ -257,6 +262,25 @@ The daemon's `/v1/chat/completions` is OpenAI-compatible and tool-calling capabl
 | Wall-clock gain | 5% |
 
 Grades: A+ ≥ 90, A ≥ 80, B ≥ 70, C ≥ 60, D ≥ 50, F < 50. Workloads range from `realistic_mixed` (201 prompts across five traffic types) and `stress_adversarial` (301 adversarial prompts) to `agent_long_context`, `rag_chunks`, `mixed` and `no_overlap`.
+
+## Themes
+
+The launcher, the chat TUI and the CLI share one palette. A limited
+edition theme replaces it:
+
+```bash
+toki theme                # list them, and say which one is in force
+toki theme gta6           # switch the whole box to it
+toki theme default        # back to the house style
+```
+
+`TOKI_THEME=gta6 toki` applies a theme for one run only. The choice is
+remembered, so the next launcher starts in it.
+
+| theme | what it is |
+| --- | --- |
+| `default` | the house style: black, vivid yellow, amber |
+| `gta6` | limited edition - Leonida at dusk: near-black with a blue cast, hot magenta, sunset orange, cyan |
 
 ## Recording turns (`toki tap`)
 

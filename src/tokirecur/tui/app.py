@@ -20,7 +20,7 @@ from textual.reactive import reactive
 from textual.widgets import Input
 
 from . import _cleanup as _tui_cleanup
-from . import history
+from . import art, history
 from .client import DaemonClient
 from .widgets import (
     ChatLog,
@@ -33,7 +33,10 @@ from .widgets import (
 class TokiApp(App):
     """Production TUI chat client for Toki Recur."""
 
-    CSS_PATH = "theme.tcss"
+    # The stylesheet is generated from the active theme, so a limited
+    # edition reaches the widgets that are styled in CSS as well as the
+    # ones styled in Python.
+    CSS = art.stylesheet()
 
     BINDINGS = [
         Binding("ctrl+c", "quit", "Quit", show=False, priority=True),

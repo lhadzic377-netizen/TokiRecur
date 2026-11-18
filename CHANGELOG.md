@@ -9,6 +9,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [0.3.20] - 2026-11-15
 
 ### Added
+- **A limited edition theme: GTA VI.** The launcher, the chat TUI and
+  the CLI now share one palette that a theme can replace. `toki theme
+  gta6` paints the whole box in Leonida at dusk - near-black with a
+  blue cast, the hot magenta of a Vice City sign, a sunset orange and
+  the cyan of the water - and says so under the wordmark; `toki theme
+  default` goes back to the house style, and `TOKI_THEME` applies a
+  theme for one run. The Textual stylesheet is rendered from the
+  active palette, so a theme reaches the widgets that are styled in CSS
+  as well as the ones styled in Python.
 - **MiniMax Code runs on the local model.** `mcode` joins the launcher
   and the model-capable client family. `toki model use` writes a
   `tokirecur` provider under `custom_provider` in

@@ -893,7 +893,15 @@ class LauncherApp(App[dict | None]):
             lines = self._render_settings(width)
         else:
             lines = self._render_launchers(width)
-            lines = _render_wordmark() + lines
+            wordmark = _render_wordmark()
+            if art.EDITION_LABEL:
+                # The limited edition says so, right under the wordmark.
+                badge = Text(
+                    self._GUT + art.EDITION_LABEL, style=f"bold {art.AMBER}"
+                )
+                lines = wordmark + [badge] + lines
+            else:
+                lines = wordmark + lines
         status = self._render_status(width)
         # Compose a single Text from the per-line Text parts using
         # append_text, which avoids the previous `body.append(str(ln))`

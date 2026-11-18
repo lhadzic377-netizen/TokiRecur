@@ -1406,6 +1406,48 @@ def probe_reasoning_levels(spec: ModelSpec) -> list[str]:
     return levels
 
 
+def _theme_path() -> Path:
+    """Where the chosen theme is remembered.
+
+    A sibling of the active-model marker: the theme is a property of
+    this installation, not of the model being served.
+    """
+    if os.environ.get("TOKI_THEME_FILE"):
+        return Path(os.environ["TOKI_THEME_FILE"])
+    return DEFAULT_REGISTRY.parent / "theme"
+
+
+def read_theme() -> str | None:
+    """The theme this installation uses, or None for the house style."""
+    try:
+        value = _theme_path().read_text().strip().lower()
+    except OSError:
+        return None
+    return value or None
+
+
+def write_theme(name: str | None) -> Path:
+    """Remember the theme to use. None goes back to the house style."""
+    path = _theme_path()
+    if name is None:
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        return path
+    value = name.strip().lower()
+    from ..tui.art import THEMES
+
+    if value not in THEMES:
+        raise ValueError(
+            f"unknown theme {value!r}; "
+            f"expected one of {', '.join(sorted(THEMES))}"
+        )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(value + "\n")
+    return path
+
+
 def _active_effort_path() -> Path:
     """Where the active reasoning effort is remembered.
 
