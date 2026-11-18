@@ -21,6 +21,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   travels in the config, which stays owner-only.
 
 ### Fixed
+- **The doctor says why a model will not start.** "The model is not
+  running" is not an answer: a build that does not know the model's
+  architecture refuses the file in milliseconds and the daemon never
+  starts, so the model looks like it is simply off. The doctor reads
+  the model's own log now and says what went wrong - the architecture
+  it does not know, and that the model needs a build that supports it
+  (often a fork), which the settings' backend dropdown can point at.
 - **OpenClaw starts again.** The installed OpenClaw moved its agent
   roster from a list to a map keyed by the agent's id, and it refuses
   to start on the old shape - "OpenClaw config is invalid". toki is

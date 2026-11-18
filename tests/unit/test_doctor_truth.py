@@ -81,3 +81,50 @@ def test_a_healthy_log_gives_no_reason(iso_env):
         "0.06.000 I load_tensors: offloaded 40/40 layers to GPU\n"
     )
     assert diagnose.gpu_fallback_reason(spec) is None
+
+
+def test_the_doctor_says_why_a_model_will_not_start(tmp_path, monkeypatch):
+    """'The model is not running' is not an answer.
+
+    A build that does not know the model's architecture refuses the file
+    in milliseconds, and the daemon never starts - so the model looks
+    like it is simply off.
+    """
+    from tokirecur import diagnose
+
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "llama.log").write_text(
+        "0.00.078.013 E llama_model_load: error loading model: "
+        "unknown model architecture: 'sensenova_loop'\n"
+        "0.00.078.067 E llama_model_load_from_file_impl: failed to load model\n"
+        "0.00.111.715 E srv    load_model: failed to load model, 'x.gguf'\n"
+    )
+
+    class FakeSpec:
+        def state_dir(self):
+            return state
+
+    reason = diagnose.model_load_failure(FakeSpec())
+    assert reason is not None
+    assert "sensenova_loop" in reason
+    assert "build" in reason
+
+
+def test_a_model_that_loaded_reports_no_failure(tmp_path):
+    """A stale error from an earlier attempt is not the answer."""
+    from tokirecur import diagnose
+
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "llama.log").write_text(
+        "0.00.078.013 E llama_model_load: error loading model: "
+        "unknown model architecture: 'sensenova_loop'\n"
+        "0.02.081.102 I srv    server_run_i: model loaded\n"
+    )
+
+    class FakeSpec:
+        def state_dir(self):
+            return state
+
+    assert diagnose.model_load_failure(FakeSpec()) is None

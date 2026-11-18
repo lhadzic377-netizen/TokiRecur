@@ -492,6 +492,20 @@ def doctor(fix: bool) -> None:
         rows.append((f"llama-server :{llama_port}", "ok" if r.status_code == 200 else "down"))
     except Exception:
         rows.append((f"llama-server :{llama_port}", "not reachable"))
+    # "The model is not running" is not an answer. When the server is
+    # down, its log usually says why - most often that the build does
+    # not know the model's architecture.
+    if rows[-1][1] != "ok":
+        try:
+            from ..ctl import get_model, read_active
+
+            active = read_active()
+            spec = get_model(active) if active else None
+            reason = diagnose.model_load_failure(spec) if spec else None
+        except Exception:
+            reason = None
+        if reason:
+            rows.append((f"llama-server :{llama_port}", reason))
     # A wedged backend answers /health with 200 while serving nothing:
     # llama-server keeps a cancelled task's slot flagged busy, and after
     # two cancellations no request can be served again. Say so, with the

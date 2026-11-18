@@ -20,6 +20,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 from . import ctl, winproc
 from .claude_compat import api_key_status as claude_api_key_status
@@ -232,6 +233,43 @@ def _vulkan_driver_for(vendor: str | None) -> bool:
     return any(
         any(w in name.lower() for w in wanted) for name in names
     )
+
+
+def model_load_failure(spec: Any) -> str | None:
+    """Why the model's llama-server did not come up, if its log says.
+
+    The commonest cause is a build that does not know the model's
+    architecture: llama-server refuses the file in milliseconds and the
+    daemon never starts, so from the outside the model is simply "not
+    running". The log says which architecture, and that is the whole
+    answer.
+    """
+    try:
+        log = spec.state_dir() / "llama.log"
+        if not log.is_file():
+            return None
+        lines = log.read_text(errors="replace").splitlines()[-400:]
+    except (AttributeError, OSError, TypeError):
+        return None
+    # Only the LAST attempt counts: a model that loaded and then died
+    # for another reason has a stale error further up the log.
+    last_error: str | None = None
+    for line in reversed(lines):
+        if "model loaded" in line:
+            return None
+        if last_error is None:
+            if "unknown model architecture" in line:
+                arch = line.split("unknown model architecture:")[-1]
+                arch = arch.strip().strip("'\"")
+                last_error = (
+                    f"the installed llama-server does not know the "
+                    f"architecture '{arch}' - this model needs a build that "
+                    f"supports it (often a fork); point the model at that "
+                    f"build in the settings (binary -> custom...)"
+                )
+            elif "error loading model" in line:
+                last_error = "llama-server could not load the model file"
+    return last_error
 
 
 def available_backends() -> list[str]:
