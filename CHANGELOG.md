@@ -8,6 +8,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.3.21] - 2026-11-19
 
+### Added
+- **GTA VI says its name again.** The lettering under the wordmark is
+  back - "GTA VI" - with the horizon under it, the way the theme was
+  first drawn. It names the mood; it is not an edition.
+
 ### Fixed
 - **An adapter finds its base model on Windows.** The family of a model
   is read from the last segment of its path, but only a POSIX separator

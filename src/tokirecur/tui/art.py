@@ -263,6 +263,12 @@ WORDMARK_FONTS: dict[str, str] = {
     "gta6": "doom",
 }
 
+#: The lettering a theme shows under the wordmark. GTA VI says its
+#: name - it is a mood like the others, not an edition.
+THEME_LABELS: dict[str, str] = {
+    "gta6": "GTA VI",
+}
+
 
 def _theme_file() -> os.PathLike[str] | str:
     """Where the chosen theme is remembered."""
@@ -317,6 +323,15 @@ def __getattr__(name: str) -> str:
 def wordmark_font() -> str:
     """The figlet font the wordmark is drawn in."""
     return WORDMARK_FONTS.get(_active_theme_name(), "standard")
+
+
+def theme_label() -> str:
+    """The lettering the active theme shows under the wordmark.
+
+    Empty for a theme that does not name itself - the house style does
+    not.
+    """
+    return THEME_LABELS.get(_active_theme_name(), "")
 
 
 def wordmark_gradient() -> tuple[str, ...]:

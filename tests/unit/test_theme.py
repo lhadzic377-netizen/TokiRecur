@@ -127,6 +127,20 @@ def test_gta_vi_gets_the_sunset_and_the_horizon():
     assert brand.horizon(20).plain.count("▀") == 20
 
 
+def test_gta_vi_says_its_name_under_the_wordmark():
+    """The lettering, with the horizon under it."""
+    from tokirecur.tui import brand
+
+    assert art.theme_label() == art.THEME_LABELS.get(art.THEME, "")
+    if art.THEME == "gta6":
+        label = brand.label()
+        assert label is not None
+        assert label.plain.strip() == "GTA VI"
+    else:
+        # The house style does not name itself.
+        assert brand.label() is None
+
+
 def test_the_wordmark_font_is_the_themes_own():
     assert art.wordmark_font() == art.WORDMARK_FONTS.get(art.THEME, "standard")
     # GTA VI is a heavier face than the house style.

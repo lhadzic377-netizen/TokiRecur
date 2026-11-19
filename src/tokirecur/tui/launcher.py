@@ -949,12 +949,15 @@ class LauncherApp(App[dict | None]):
         else:
             lines = self._render_launchers(width)
             wordmark = _render_wordmark()
+            lettering = brand.label(self._GUT)
+            if lettering is not None:
+                # GTA VI says its name under the wordmark.
+                wordmark = wordmark + [lettering]
             if art.THEME == "gta6":
                 # GTA VI gets its horizon; the other themes are the
                 # wordmark on its own.
-                lines = wordmark + [_horizon(width)] + lines
-            else:
-                lines = wordmark + lines
+                wordmark = wordmark + [_horizon(width)]
+            lines = wordmark + lines
         status = self._render_status(width)
         # Compose a single Text from the per-line Text parts using
         # append_text, which avoids the previous `body.append(str(ln))`

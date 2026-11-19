@@ -57,6 +57,14 @@ def wordmark(gutter: str = "") -> Text:
     return text
 
 
+def label(gutter: str = "") -> Text | None:
+    """The theme's lettering under the wordmark, or None without one."""
+    text = art.theme_label()
+    if not text:
+        return None
+    return Text(f"{gutter}{text}", style=f"bold {art.CHROME}")
+
+
 def horizon(width: int, gutter: str = "") -> Text:
     """The horizon under the wordmark: a rule in the theme's gradient.
 

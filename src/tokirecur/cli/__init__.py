@@ -1122,6 +1122,9 @@ def status() -> None:
     from ..tui import brand
 
     con.print(brand.wordmark(), highlight=False)
+    lettering = brand.label()
+    if lettering is not None:
+        con.print(lettering, highlight=False)
     con.print(art.TAGLINE, style="dim", highlight=False)
     con.print("")
     con.print("")
