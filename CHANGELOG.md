@@ -6,7 +6,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.3.22] - 2026-11-19
+## [0.3.21] - 2026-11-19
 
 ### Added
 - **Goose and Pool run on the local model.** Two more harnesses join
@@ -31,10 +31,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   violet its binary carries on a warm near-black; `pool` wears the
   blue of its logo on the dark it ships with. Both are in the
   settings pane's theme list like every other theme.
-
-## [0.3.21] - 2026-11-19
-
-### Added
 - **GTA VI says its name again.** The lettering under the wordmark is
   back - "GTA VI" - with the horizon under it, the way the theme was
   first drawn. It names the mood; it is not an edition.
