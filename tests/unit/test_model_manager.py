@@ -518,7 +518,7 @@ def test_sync_cli_configs_writes_all(env, with_pulled_model, monkeypatch):
     spec = with_pulled_model["laguna"]
     monkeypatch.setenv("CODEX_HOME", str(env / "codex-home"))
     paths = ctl.sync_cli_configs(spec)
-    assert len(paths) == 16
+    assert len(paths) == 18
     for p in paths.values():
         assert Path(p).exists()
         if os.name == "posix":
@@ -549,6 +549,11 @@ def test_sync_cli_configs_writes_all(env, with_pulled_model, monkeypatch):
     assert mcode["custom_provider"]["tokirecur"]["api"] == "openai-completions"
     assert pulled_model_id in mcode["custom_provider"]["tokirecur"]["models"]
     assert mcode["defaultModel"] == f"custom_provider:tokirecur/{spec.model_id}"
+    goose = yaml.safe_load(paths["goose"].read_text())
+    assert goose["GOOSE_PROVIDER"] == "tokirecur"
+    assert goose["GOOSE_MODEL"] == spec.model_id
+    pool = yaml.safe_load(paths["pool"].read_text())
+    assert pool["pool"]["api_url"] == f"{spec.daemon_url}/v1"
 
 
 def test_new_client_config_writers_bind_active_model(env, with_pulled_model, monkeypatch):

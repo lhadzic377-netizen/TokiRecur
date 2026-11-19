@@ -6,6 +6,32 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.22] - 2026-11-19
+
+### Added
+- **Goose and Pool run on the local model.** Two more harnesses join
+  the launcher, the client-config family and the theme list - Block's
+  goose and Poolside's pool. Neither is an opencode clone, so neither
+  takes a provider block in a JSON file. goose reads a provider from
+  `~/.config/goose/custom_providers/tokirecur.json` and picks it with
+  `GOOSE_PROVIDER` and `GOOSE_MODEL` in `config.yaml`; its `base_url`
+  is the full request path - goose appends nothing to it, so a URL
+  that stops at `/v1` answers 404 - and its key is read from the
+  `TOKI_AUTH_TOKEN` environment variable, so no secret is written to
+  disk. pool only speaks to an OpenAI-compatible endpoint in
+  standalone mode, and only the environment selects that mode: the
+  launcher starts it with `POOLSIDE_STANDALONE_BASE_URL`,
+  `POOLSIDE_API_KEY`, `POOLSIDE_STANDALONE_MODEL` and
+  `POOLSIDE_STANDALONE_CONTEXT_LENGTH`, and
+  `~/.config/poolside/settings.yaml` keeps the saved API URL next to
+  the user's own agent servers and MCP servers. Both were verified
+  against a local llama-server: goose answered "HELLO FROM GOOSE" and
+  pool answered "HELLO FROM POOL".
+- **A theme for each of them.** `goose` wears the blue, teal and
+  violet its binary carries on a warm near-black; `pool` wears the
+  blue of its logo on the dark it ships with. Both are in the
+  settings pane's theme list like every other theme.
+
 ## [0.3.21] - 2026-11-19
 
 ### Added

@@ -122,7 +122,9 @@ Three frontends over one daemon. The API is what agents actually talk to.
 | Web | `toki web` | Single-page chat on `127.0.0.1:7777`, streaming, per-message metrics |
 | API | `toki serve` | OpenAI-compatible `/v1/chat/completions`, plus Anthropic and admin routes |
 
-The launcher starts Toki Chat, OpenCode, MiMo Code, MiniMax Code, Hermes, OpenClaw, Codex, Qwen Code, Factory Droid, Cline CLI, DeepSeek Harness, Grok Build, Kilo Code, Pi, GitHub Copilot CLI, Kimi Code, OMP and Claude Code, all pinned to the active model. OpenAI-compatible clients use the daemon's OpenAI route; Claude Code uses the local Anthropic-compatible `/anthropic/v1/messages` route with an owner-only settings override. The override carries the local token as `ANTHROPIC_AUTH_TOKEN` — not as `ANTHROPIC_API_KEY`, because Claude Code sends an API key only after it has approved it, and falls back to another credential when it has not: on a machine with a cloud provider configured, that credential belongs to that provider and the local daemon answers 401 for it. Qwen Code 1.0 is written through its `providers` section and launched with `qwen --model tokirecur/<model>`; the pre-1.0 `modelProviders` section and the `--openai-base-url` / `--auth-type` flags are kept for the releases that still read them.
+The launcher starts Toki Chat, OpenCode, MiMo Code, MiniMax Code, Hermes, OpenClaw, Codex, Qwen Code, Factory Droid, Cline CLI, DeepSeek Harness, Grok Build, Kilo Code, Pi, GitHub Copilot CLI, Kimi Code, OMP, Goose, Pool and Claude Code, all pinned to the active model. OpenAI-compatible clients use the daemon's OpenAI route; Claude Code uses the local Anthropic-compatible `/anthropic/v1/messages` route with an owner-only settings override. The override carries the local token as `ANTHROPIC_AUTH_TOKEN` — not as `ANTHROPIC_API_KEY`, because Claude Code sends an API key only after it has approved it, and falls back to another credential when it has not: on a machine with a cloud provider configured, that credential belongs to that provider and the local daemon answers 401 for it. Qwen Code 1.0 is written through its `providers` section and launched with `qwen --model tokirecur/<model>`; the pre-1.0 `modelProviders` section and the `--openai-base-url` / `--auth-type` flags are kept for the releases that still read them.
+
+Two of them reach the model their own way. **goose** reads a provider from `~/.config/goose/custom_providers/tokirecur.json` and picks it with `GOOSE_PROVIDER` and `GOOSE_MODEL` in `config.yaml`; its `base_url` is the full request path (goose appends nothing to it) and its key is read from the `TOKI_AUTH_TOKEN` environment variable, so no secret is written to disk. **pool** only speaks to an OpenAI-compatible endpoint in standalone mode, and only the environment selects that mode - the launcher starts it with `POOLSIDE_STANDALONE_BASE_URL`, `POOLSIDE_API_KEY`, `POOLSIDE_STANDALONE_MODEL` and `POOLSIDE_STANDALONE_CONTEXT_LENGTH`, and `~/.config/poolside/settings.yaml` keeps the saved API URL next to the user's own agent servers.
 
 ```bash
 toki tui                                  # raw / cached / compare: Ctrl+1 / 2 / 3
@@ -295,6 +297,8 @@ primary accent), so a theme is a palette and not a rename.
 | `qwen` | Qwen Code's violet |
 | `mimo` | MiMo Code's orange |
 | `omp` | Oh My Pi's lime |
+| `goose` | Block's agent: a blue on a warm near-black, with the teal and the violet |
+| `pool` | Poolside's agent: the blue of its logo on the dark it ships with |
 | `pi` | a rose |
 | `minimax` | MiniMax Code's indigo |
 | `codex` | OpenAI's green |

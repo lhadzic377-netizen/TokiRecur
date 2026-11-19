@@ -238,6 +238,24 @@ THEMES: dict[str, dict[str, str]] = {
         sky="#16161e", sun="#bb9af7", sand="#f7768e", sea="#0db9d7",
         chrome="#c0caf5",
     ),
+    # Goose: Block's agent - a blue on a warm near-black, with the
+    # teal and the violet its binary carries.
+    "goose": _palette(
+        "#131010", "#1c1a19", "#332f2c", "#4b4642",
+        "#5c98f9", "#47c9a2", "#2f4a75",
+        "#e3e6ea", "#b7b1b1",
+        sky="#131010", sun="#5c98f9", sand="#47c9a2", sea="#9b8afb",
+        chrome="#f4f4f4",
+    ),
+    # Pool: Poolside's agent - the blue of its logo, on the dark it
+    # ships with.
+    "pool": _palette(
+        "#1a1b26", "#24283b", "#2f344d", "#414868",
+        "#0087ff", "#5bc4bf", "#0a4f80",
+        "#c0caf5", "#565f89",
+        sky="#1a1b26", sun="#0087ff", sand="#5bc4bf", sea="#57c7ff",
+        chrome="#f8f8f2",
+    ),
     # GitHub Copilot: the Primer palette.
     "copilot": _palette(
         "#0d1117", "#161b22", "#30363d", "#484f58",

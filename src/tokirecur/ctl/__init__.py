@@ -6246,6 +6246,127 @@ def write_omp_config(
     return cfg_path
 
 
+#: The id the local provider carries in every client config.
+GOOSE_PROVIDER_ID = "tokirecur"
+
+
+def _goose_config_dir() -> Path:
+    """Where goose keeps its config.
+
+    goose reads ``~/.config/goose`` on Linux and
+    ``%APPDATA%\\Block\\goose\\config`` on Windows.
+    """
+    explicit = os.environ.get("TOKI_GOOSE_CONFIG")
+    if explicit:
+        return Path(explicit).expanduser()
+    if os.name == "nt":
+        base = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
+        return Path(base) / "Block" / "goose" / "config"
+    return Path.home() / ".config" / "goose"
+
+
+def _goose_config_path() -> Path:
+    return _goose_config_dir() / "config.yaml"
+
+
+def _pool_config_path() -> Path:
+    explicit = os.environ.get("TOKI_POOL_CONFIG")
+    if explicit:
+        return Path(explicit).expanduser()
+    return Path.home() / ".config" / "poolside" / "settings.yaml"
+
+
+def write_goose_config(
+    spec: ModelSpec, specs: list[ModelSpec] | None = None,
+    path: Path | None = None, mode: str | None = None,
+) -> Path:
+    """Point goose at the local model.
+
+    goose reaches a provider through a JSON file in
+    ``custom_providers/`` and picks it with ``GOOSE_PROVIDER`` and
+    ``GOOSE_MODEL`` in ``config.yaml``. The provider's ``base_url`` is
+    the FULL request path - goose appends nothing to it - and its key
+    is read from the environment variable named in ``api_key_env``,
+    which is why no secret is written to disk here.
+
+    The user's own goose settings are left alone: only the provider
+    file and the two keys that select it are ours.
+    """
+    cfg_path = path or _goose_config_path()
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg: dict[str, Any] = {}
+    if cfg_path.exists():
+        try:
+            loaded = yaml.safe_load(cfg_path.read_text())
+        except (OSError, yaml.YAMLError):
+            loaded = None
+        if isinstance(loaded, dict):
+            cfg = loaded
+
+    all_specs = specs if specs is not None else load_registry()
+    mode = _resolve_mode("goose", mode)
+    advertised = _advertised_specs(all_specs, spec, mode)
+    provider = {
+        "name": GOOSE_PROVIDER_ID,
+        "engine": "openai",
+        "display_name": "Toki Recur",
+        "description": "The local toki daemon",
+        # The key is read from the environment, never from the file.
+        "api_key_env": "TOKI_AUTH_TOKEN",
+        "base_url": f"{_client_endpoint(spec, mode)}/chat/completions",
+        "models": [
+            {"name": s.model_id, "context_limit": _effective_ctx(s)}
+            for s in advertised
+        ],
+        "headers": {},
+        "supports_streaming": True,
+        "requires_auth": True,
+    }
+    provider_dir = cfg_path.parent / "custom_providers"
+    provider_dir.mkdir(parents=True, exist_ok=True)
+    provider_path = provider_dir / f"{GOOSE_PROVIDER_ID}.json"
+    _write_private_config(provider_path, json.dumps(provider, indent=2) + "\n")
+
+    cfg["GOOSE_PROVIDER"] = GOOSE_PROVIDER_ID
+    cfg["GOOSE_MODEL"] = spec.model_id
+    _write_private_config(cfg_path, yaml.safe_dump(cfg, sort_keys=False))
+    return cfg_path
+
+
+def write_pool_config(
+    spec: ModelSpec, specs: list[ModelSpec] | None = None,
+    path: Path | None = None, mode: str | None = None,
+) -> Path:
+    """Point pool at the local model.
+
+    pool only speaks to an OpenAI-compatible endpoint in standalone
+    mode, and standalone mode is selected by
+    ``POOLSIDE_STANDALONE_BASE_URL`` - a settings key cannot do it. The
+    launcher therefore passes the endpoint, the key and the model in the
+    environment when it starts pool; this writes the saved API URL so
+    the connection is the local one and stays the user's own settings
+    (their agent servers, their MCP servers) around it.
+    """
+    cfg_path = path or _pool_config_path()
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg: dict[str, Any] = {}
+    if cfg_path.exists():
+        try:
+            loaded = yaml.safe_load(cfg_path.read_text())
+        except (OSError, yaml.YAMLError):
+            loaded = None
+        if isinstance(loaded, dict):
+            cfg = loaded
+
+    pool = cfg.get("pool")
+    if not isinstance(pool, dict):
+        pool = {}
+        cfg["pool"] = pool
+    pool["api_url"] = _client_endpoint(spec, _resolve_mode("pool", mode))
+    _write_private_config(cfg_path, yaml.safe_dump(cfg, sort_keys=False))
+    return cfg_path
+
+
 def _write_omp_roles(models_path: Path, spec: ModelSpec) -> None:
     """Point OMP's default role at the model that is being served.
 
@@ -7132,6 +7253,8 @@ def sync_cli_configs(spec: ModelSpec, mode: str | None = None) -> dict[str, Path
         ("kimi", write_kimi_config),
         ("omp", write_omp_config),
         ("minimax", write_minimax_config),
+        ("goose", write_goose_config),
+        ("pool", write_pool_config),
     ):
         try:
             tool_mode = _resolve_mode(tool, mode)

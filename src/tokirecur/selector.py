@@ -39,6 +39,7 @@ from .ctl import (
     write_codex_config,
     write_droid_config,
     write_dsh_config,
+    write_goose_config,
     write_grok_config,
     write_hermes_config,
     write_kilo_config,
@@ -49,6 +50,7 @@ from .ctl import (
     write_openclaw_config,
     write_opencode_config,
     write_pi_config,
+    write_pool_config,
     write_qwen_config,
 )
 from .launch_catalog import get_launch_app
@@ -141,6 +143,8 @@ _CLIENT_CONFIG_WRITERS = {
     "kimi": write_kimi_config,
     "omp": write_omp_config,
     "minimax": write_minimax_config,
+    "goose": write_goose_config,
+    "pool": write_pool_config,
 }
 
 
@@ -177,7 +181,7 @@ def _bound_env(spec: Any, client: str) -> dict[str, str]:
     endpoint = _bound_endpoint(spec, client)
     new_clients = {
         "qwen", "droid", "cline", "dsh", "grok", "kilo", "pi",
-        "copilot", "kimi", "omp", "minimax",
+        "copilot", "kimi", "omp", "minimax", "goose", "pool",
     }
     if client == "codex" or client in new_clients:
         token = _auth_token() or auth_token()
@@ -200,6 +204,19 @@ def _bound_env(spec: Any, client: str) -> dict[str, str]:
         env["COPILOT_PROVIDER_MAX_PROMPT_TOKENS"] = str(context)
         env["COPILOT_PROVIDER_MAX_OUTPUT_TOKENS"] = str(output)
         env["COPILOT_MODEL"] = spec.model_id
+    if client == "goose":
+        # The provider file names the key's environment variable, and
+        # goose needs the provider and the model named to pick it.
+        env["GOOSE_PROVIDER"] = "tokirecur"
+        env["GOOSE_MODEL"] = spec.model_id
+    if client == "pool":
+        # pool only speaks to an OpenAI-compatible endpoint in
+        # standalone mode, and only the environment selects it.
+        env["POOLSIDE_STANDALONE_BASE_URL"] = endpoint
+        env["POOLSIDE_API_KEY"] = token
+        env["POOLSIDE_STANDALONE_MODEL"] = spec.model_id
+        context, _output = _client_limits(spec)
+        env["POOLSIDE_STANDALONE_CONTEXT_LENGTH"] = str(context)
     if client == "cline":
         config_dir = cline_config_dir()
         env["CLINE_DATA_DIR"] = str(config_dir / "data")
@@ -389,6 +406,12 @@ def launch_cmd(interface: str, client: str, spec: Any | None) -> dict:
             return {"argv": ["omp", "--provider", "tokirecur",
                              "--model", spec.model_id],
                     "detach": False, "url": None, "env": env}
+        if client == "goose":
+            # goose opens its session with no arguments.
+            return {"argv": ["goose"], "detach": False, "url": None, "env": env}
+        if client == "pool":
+            # pool opens the ACP client session with no arguments.
+            return {"argv": ["pool"], "detach": False, "url": None, "env": env}
         if client == "minimax":
             # MiniMax Code addresses a BYOK provider as
             # custom_provider:<id>/<model>; a bare model id would resolve

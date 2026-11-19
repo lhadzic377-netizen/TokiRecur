@@ -165,6 +165,22 @@ LAUNCH_APPS: tuple[LaunchApp, ...] = (
     ),
     LaunchApp("omp", "Launch OMP", "Oh My Pi coding agent", "chat", "omp", command="omp"),
     LaunchApp(
+        "goose",
+        "Launch Goose",
+        "Block's on-machine AI agent",
+        "chat",
+        "goose",
+        command="goose",
+    ),
+    LaunchApp(
+        "pool",
+        "Launch Pool",
+        "Poolside's coding agent",
+        "chat",
+        "pool",
+        command="pool",
+    ),
+    LaunchApp(
         "web",
         "Launch Web Dashboards",
         "browser UIs: toki · openclaw · hermes",
