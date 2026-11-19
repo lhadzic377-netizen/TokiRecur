@@ -27,7 +27,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   registry in a worker - a restart waits for llama-server - so the
   value is not there the moment the modal closes. On a slow machine the
   test read the spec before the worker had written it, and reported a
-  commit that had happened.
+  commit that had happened. The tests now wait for the worker, and the
+  stack work the commit does is stubbed: a restart that waits a minute
+  for a server that is not there is not what those tests are about.
 
 ## [0.3.20] - 2026-11-15
 

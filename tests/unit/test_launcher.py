@@ -203,18 +203,39 @@ def test_number_keys_jump_to_model():
 
 
 async def _wait_for_spec(app, name: str, field: str, value) -> None:
-    """Wait for the registry to show a committed value.
+    """Wait for the committed value to reach the launcher's own specs.
 
-    The launcher commits in a worker thread - a restart waits for
-    llama-server - so the value is not there the moment the modal
-    closes. On a slow machine it was not there when the test read it.
+    The launcher commits in a worker: the registry is written first and
+    the stack is restarted after, and the app reloads its specs when the
+    worker is done - not when the modal closes. A test that reads the
+    spec straight after the modal races the worker, and on a slow
+    machine it loses.
     """
+    await app.workers.wait_for_complete()
     for _ in range(200):
         spec = next((s for s in app.specs if s.name == name), None)
         if spec is not None and str(getattr(spec, field, "")) == str(value):
             return
         await asyncio.sleep(0.05)
     raise AssertionError(f"{name}.{field} did not become {value!r}")
+
+
+def _stub_the_stack(monkeypatch) -> None:
+    """Stub the work a committed field does to the stack.
+
+    A restart waits for llama-server to come back - a minute on a
+    machine where nothing is running - and the client configs are
+    rewritten for every harness. Neither is what these tests are about,
+    and both make the test slow on a machine where the harness CLIs are
+    installed.
+    """
+    from tokirecur import ctl as ctl_mod
+
+    def _no_restart(name, **kwargs):
+        raise RuntimeError("the stack is not running in a test")
+
+    monkeypatch.setattr(ctl_mod, "use_model", _no_restart)
+    monkeypatch.setattr(ctl_mod, "sync_cli_configs", lambda *a, **kw: None)
 
 
 async def _goto_setting(pilot, app, field: str, name: str) -> None:
@@ -307,7 +328,7 @@ def test_settings_pane_esc_returns_to_launchers():
     assert asyncio.run(run_app()) == "launchers"
 
 
-def test_settings_edit_modal_commits_new_value():
+def test_settings_edit_modal_commits_new_value(monkeypatch):
     """Pressing Enter on a settings row opens the modal; submitting
     calls update_spec_field and refreshes the spec.
 
@@ -323,6 +344,8 @@ def test_settings_edit_modal_commits_new_value():
     new gguf value before the runtime error fires (caught and surfaced
     as a warning notification, registry still updated).
     """
+    _stub_the_stack(monkeypatch)
+
     async def run_app():
         app = LauncherApp()
         async with app.run_test(size=(100, 34)) as pilot:
@@ -600,7 +623,7 @@ def _setting_row_index(app, field: str) -> int:
     raise AssertionError(f"no settings row for field {field!r}")
 
 
-def test_settings_dropdown_save_commits_preset():
+def test_settings_dropdown_save_commits_preset(monkeypatch):
     """Enter on a dropdown field opens a choice modal; picking a preset
     auto-commits (no Save-button dance) and writes it to the registry.
 
@@ -611,6 +634,8 @@ def test_settings_dropdown_save_commits_preset():
     RuntimeError fires — caught and surfaced as a warning.
     """
     from textual.widgets import Select
+
+    _stub_the_stack(monkeypatch)
 
     async def run_app():
         app = LauncherApp()
@@ -874,9 +899,11 @@ def test_settings_choices_for_non_ctx_fields_are_static(monkeypatch):
     assert _choices_for_field(FakeSpec(), "reasoning") == _SETTINGS_CHOICES["reasoning"]
 
 
-def test_settings_sync_only_field_does_not_show_confirm():
+def test_settings_sync_only_field_does_not_show_confirm(monkeypatch):
     """Editing max_tokens (sync-only) commits directly without a
     ConfirmRestartScreen."""
+    _stub_the_stack(monkeypatch)
+
     async def run_app():
         app = LauncherApp()
         async with app.run_test(size=(100, 34)) as pilot:
