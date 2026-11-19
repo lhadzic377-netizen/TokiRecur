@@ -3267,7 +3267,9 @@ def _normalised_model_name(name: str) -> str:
     without the shard suffix, and the registry and the server can differ
     in case and separators, so both sides are folded to one shape.
     """
-    stem = name.strip().rsplit("/", 1)[-1]
+    from ..draftmatch import last_segment
+
+    stem = last_segment(name.strip())
     if stem.lower().endswith(".gguf"):
         stem = stem[: -len(".gguf")]
     stem = stem.lower().replace("_", "-").replace(".", "-")

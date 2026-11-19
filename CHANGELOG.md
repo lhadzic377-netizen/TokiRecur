@@ -6,6 +6,29 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.21] - 2026-11-19
+
+### Fixed
+- **An adapter finds its base model on Windows.** The family of a model
+  is read from the last segment of its path, but only a POSIX separator
+  was split on - so on Windows the family came out as the whole
+  directory, and installing an adapter said "no installed model matches
+  this adapter's target" for a base that was installed and named
+  correctly. A path is split on either separator now, and the same
+  applies to the model's own name when it is compared with the name
+  llama-server reports: a Windows path never matched, so the launcher
+  said a running model was not running.
+- **The install tests look for the build the installer looks for.** The
+  installer reads `llama-server.exe` on Windows and `llama-server`
+  everywhere else; the tests planted the POSIX name on every platform,
+  so on a Windows box the installer never saw the build the test had
+  planted and the test measured the wrong thing.
+- **The settings tests wait for the commit.** The launcher writes the
+  registry in a worker - a restart waits for llama-server - so the
+  value is not there the moment the modal closes. On a slow machine the
+  test read the spec before the worker had written it, and reported a
+  commit that had happened.
+
 ## [0.3.20] - 2026-11-15
 
 ### Added

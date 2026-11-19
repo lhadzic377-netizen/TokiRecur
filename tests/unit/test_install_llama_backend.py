@@ -2443,6 +2443,16 @@ def test_install_macos_cpu_uses_local_cpu_build(tmp_path, monkeypatch, capsys):
 # ── An existing GPU build is not silently replaced by a CPU one ────────
 
 
+def _exe_name() -> str:
+    """The build's name on this platform.
+
+    The installer looks for ``llama-server.exe`` on Windows and
+    ``llama-server`` everywhere else - a test that plants the POSIX
+    name on a Windows box plants a file the installer never sees.
+    """
+    return "llama-server.exe" if sys.platform.startswith("win") else "llama-server"
+
+
 def _fake_profile_cpu():
     """A profile that recommends CPU, with no GPU and plenty of RAM."""
     from tokirecur.hardware import CPUProfile
@@ -2476,7 +2486,7 @@ def test_install_keeps_a_gpu_build_when_the_profile_recommends_cpu(tmp_path, mon
 
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    existing = bin_dir / "llama-server"
+    existing = bin_dir / _exe_name()
     existing.write_bytes(b"MZ")
 
     monkeypatch.delenv("TOKI_BACKEND", raising=False)
@@ -2511,7 +2521,7 @@ def test_install_refuses_an_explicit_cpu_over_a_gpu_build_and_names_the_command(
 
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    (bin_dir / "llama-server").write_bytes(b"MZ")
+    (bin_dir / _exe_name()).write_bytes(b"MZ")
 
     monkeypatch.delenv("TOKI_INSTALL_LLAMA_FORCE_DOWNGRADE", raising=False)
     monkeypatch.setattr(diagnose, "binary_backend", lambda p: "vulkan")

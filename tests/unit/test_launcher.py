@@ -202,6 +202,21 @@ def test_number_keys_jump_to_model():
     assert idx_after == 1  # pressing "2" jumps to model index 1
 
 
+async def _wait_for_spec(app, name: str, field: str, value) -> None:
+    """Wait for the registry to show a committed value.
+
+    The launcher commits in a worker thread - a restart waits for
+    llama-server - so the value is not there the moment the modal
+    closes. On a slow machine it was not there when the test read it.
+    """
+    for _ in range(200):
+        spec = next((s for s in app.specs if s.name == name), None)
+        if spec is not None and str(getattr(spec, field, "")) == str(value):
+            return
+        await asyncio.sleep(0.05)
+    raise AssertionError(f"{name}.{field} did not become {value!r}")
+
+
 async def _goto_setting(pilot, app, field: str, name: str) -> None:
     """Move the settings highlight to a row, by name.
 
@@ -323,6 +338,7 @@ def test_settings_edit_modal_commits_new_value():
             assert app.screen.__class__.__name__ == "ConfirmRestartScreen"
             await pilot.click("#confirm-ok")
             await pilot.pause()
+            await _wait_for_spec(app, "9b", "gguf", "/tmp/new-9b.gguf")
             new_gguf = app.specs[0].gguf
         return new_gguf
 
@@ -613,6 +629,7 @@ def test_settings_dropdown_save_commits_preset():
             assert app.screen.__class__.__name__ == "ConfirmRestartScreen"
             await pilot.click("#confirm-ok")
             await pilot.pause()
+            await _wait_for_spec(app, "9b", "kv", "q8_0")
             return app.specs[0].kv
 
     assert asyncio.run(run_app()) == "q8_0"
@@ -873,6 +890,7 @@ def test_settings_sync_only_field_does_not_show_confirm():
             await pilot.pause()
             # No confirm modal opened; the registry was updated.
             assert app.screen.__class__.__name__ != "ConfirmRestartScreen"
+            await _wait_for_spec(app, "9b", "max_tokens", 4096)
             return app.specs[0].max_tokens
 
     assert asyncio.run(run_app()) == 4096
@@ -890,6 +908,7 @@ def test_settings_noop_field_does_not_show_confirm():
             app._on_edit_dismissed("true")
             await pilot.pause()
             assert app.screen.__class__.__name__ != "ConfirmRestartScreen"
+            await _wait_for_spec(app, "9b", "always_on", True)
             return app.specs[0].always_on
 
     assert asyncio.run(run_app()) is True
@@ -953,6 +972,7 @@ def test_settings_restart_required_confirm_proceed_triggers_apply(monkeypatch):
             assert app.screen.__class__.__name__ == "ConfirmRestartScreen"
             await pilot.click("#confirm-ok")
             await pilot.pause()
+            await _wait_for_spec(app, "9b", "ctx_size", 8192)
             return app.specs[0].ctx_size
 
     new_ctx = asyncio.run(run_app())

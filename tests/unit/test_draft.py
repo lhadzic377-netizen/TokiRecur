@@ -284,6 +284,48 @@ def test_target_family_strips_quant_and_split_suffixes():
     assert target_family("Q4_K_M.gguf") == "Q4_K_M"
 
 
+def test_a_family_is_read_from_the_last_segment_of_either_separator():
+    """A Windows path names the same family as a POSIX one.
+
+    Splitting on "/" alone left the whole directory in the name, so an
+    adapter on a Windows box could not find the base model it belongs
+    to - and no installed model matched.
+    """
+    from tokirecur.draftmatch import adapter_target_family
+
+    windows = r"C:\Users\runner\AppData\Local\Temp\models\Qwen3.8-27B.gguf"
+    posix = "/tmp/models/Qwen3.8-27B.gguf"
+    assert target_family(windows) == target_family(posix) == "Qwen3.8-27B"
+    assert adapter_target_family(windows) == adapter_target_family(posix)
+
+
+def test_an_adapter_on_a_windows_path_finds_its_installed_base(tmp_path):
+    """The whole path, not just the name, has to work."""
+    from tokirecur.ctl import find_target_for_adapter
+
+    base = tmp_path / "models" / "base"
+    base.mkdir(parents=True)
+    target = base / "Qwen3.8-27B-Q4_K_M.gguf"
+    target.write_bytes(b"x")
+    raw = {
+        "name": "base",
+        "label": "Qwen3.8-27B",
+        "gguf": str(target),
+        "llama_port": 18080,
+        "daemon_port": 18081,
+        "ctx_size": 4096,
+        "parallel": 1,
+        "kv": "f16",
+        "max_tokens": 1024,
+        "model_id": "base",
+    }
+    spec = _build_spec(raw)
+    adapter = tmp_path / "other" / "Qwen3.8-27B-DSpine-b16-Q4_K_M.gguf"
+    adapter.parent.mkdir()
+    adapter.write_bytes(b"x")
+    assert find_target_for_adapter([spec], str(adapter)) is spec
+
+
 class _FakeApi:
     def __init__(self, repos: dict[str, list[str]]):
         self.repos = repos

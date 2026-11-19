@@ -2,7 +2,7 @@
 
 import os
 
-__version__ = "0.3.20"
+__version__ = "0.3.21"
 
 
 def cache_prompt_enabled() -> bool:

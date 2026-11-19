@@ -123,3 +123,18 @@ def test_names_are_compared_without_case_or_separators():
     with _Server("Ornith-1.5-35B-Q4_K_M") as server:
         spec = _spec(server.port, gguf="/models/o/ornith_1_5_35b_q4_k_m.gguf")
         assert ctl.llama_reachable(spec) is True
+
+
+def test_a_windows_path_is_the_same_model_as_a_posix_one():
+    """The path is stripped either way round.
+
+    Only a POSIX separator was split on, so on Windows the directory
+    stayed in the name, the name never matched what the server
+    reported, and a running model read as down.
+    """
+    with _Server("Qwen3.5-9B-Q4_K_M") as server:
+        spec = _spec(
+            server.port,
+            gguf=r"C:\models\qwen3.5-9B-Q4_K_M.gguf",
+        )
+        assert ctl.llama_reachable(spec) is True

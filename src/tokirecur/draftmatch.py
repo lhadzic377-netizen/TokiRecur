@@ -57,13 +57,24 @@ class DraftCandidate:
     quant: str
 
 
+def last_segment(text: str) -> str:
+    """The last segment of a path or a repository id.
+
+    A repository id is separated by "/", a Windows path by "\\", and
+    the family of a model is read from the last segment either way.
+    Splitting on "/" alone left a Windows path whole - the family came
+    out as the entire directory, and no installed model matched it.
+    """
+    return re.split(r"[/\\]", str(text or "").rstrip("/\\"))[-1]
+
+
 def target_family(filename: str) -> str:
     """The target's model family, without its quantisation suffix.
 
     "Qwen3.8-27B-Q4_K_M.gguf" -> "Qwen3.8-27B". A name without a
     quantisation suffix is returned unchanged.
     """
-    stem = filename.rsplit("/", 1)[-1]
+    stem = last_segment(filename)
     if stem.lower().endswith(".gguf"):
         stem = stem[:-5]
     # A split part names the same model as its siblings; the part
@@ -83,7 +94,7 @@ def adapter_target_family(repo_or_file: str) -> str:
     same family that :func:`target_family` finds on a model file can be
     recovered from the adapter's repository name.
     """
-    segment = repo_or_file.rstrip("/").rsplit("/", 1)[-1]
+    segment = last_segment(repo_or_file)
     if segment.lower().endswith(".gguf"):
         stem = target_family(segment)
     else:
