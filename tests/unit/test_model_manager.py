@@ -549,9 +549,16 @@ def test_sync_cli_configs_writes_all(env, with_pulled_model, monkeypatch):
     assert mcode["custom_provider"]["tokirecur"]["api"] == "openai-completions"
     assert pulled_model_id in mcode["custom_provider"]["tokirecur"]["models"]
     assert mcode["defaultModel"] == f"custom_provider:tokirecur/{spec.model_id}"
-    goose = yaml.safe_load(paths["goose"].read_text())
-    assert goose["GOOSE_PROVIDER"] == "tokirecur"
-    assert goose["GOOSE_MODEL"] == spec.model_id
+    # goose reports the provider file: it names the endpoint and the
+    # models. config.yaml beside it selects the provider and the model.
+    goose = json.loads(paths["goose"].read_text())
+    assert spec.daemon_url in goose["base_url"]
+    assert spec.model_id in {m["name"] for m in goose["models"]}
+    goose_cfg = yaml.safe_load(
+        (Path(os.environ["TOKI_GOOSE_CONFIG"]) / "config.yaml").read_text()
+    )
+    assert goose_cfg["GOOSE_PROVIDER"] == "tokirecur"
+    assert goose_cfg["GOOSE_MODEL"] == spec.model_id
     pool = yaml.safe_load(paths["pool"].read_text())
     assert pool["pool"]["api_url"] == f"{spec.daemon_url}/v1"
 

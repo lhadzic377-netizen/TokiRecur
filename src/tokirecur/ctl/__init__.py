@@ -6330,7 +6330,9 @@ def write_goose_config(
     cfg["GOOSE_PROVIDER"] = GOOSE_PROVIDER_ID
     cfg["GOOSE_MODEL"] = spec.model_id
     _write_private_config(cfg_path, yaml.safe_dump(cfg, sort_keys=False))
-    return cfg_path
+    # The provider file is the one that names the endpoint and the
+    # models, so it is the path toki reports for this client.
+    return provider_path
 
 
 def write_pool_config(

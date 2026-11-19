@@ -53,7 +53,9 @@ def test_the_goose_provider_file_points_at_the_local_model(env, model):
     )
 
     out = ctl.write_goose_config(model, path=cfg_dir / "config.yaml")
-    assert out == cfg_dir / "config.yaml"
+    # The provider file is the one that names the endpoint and the
+    # models, so it is the path toki reports.
+    assert out == cfg_dir / "custom_providers" / "tokirecur.json"
 
     provider = json.loads(
         (cfg_dir / "custom_providers" / "tokirecur.json").read_text()
@@ -68,7 +70,7 @@ def test_the_goose_provider_file_points_at_the_local_model(env, model):
     assert model.model_id in names
     assert all(m["context_limit"] > 0 for m in provider["models"])
 
-    cfg = yaml.safe_load(out.read_text())
+    cfg = yaml.safe_load((cfg_dir / "config.yaml").read_text())
     assert cfg["GOOSE_PROVIDER"] == "tokirecur"
     assert cfg["GOOSE_MODEL"] == model.model_id
     # The user's own goose settings are still there.

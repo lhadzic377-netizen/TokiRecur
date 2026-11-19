@@ -41,6 +41,12 @@ CONFIG_CLIENTS = (
     "cline", "claude", "dsh", "grok", "kilo", "pi", "kimi", "omp",
 )
 
+# pool keeps its endpoint in the settings file and takes the model from
+# the environment the launcher starts it with (POOLSIDE_STANDALONE_MODEL),
+# so there is no model in the file that could name a dead stack. Its
+# endpoint is still checked.
+NO_MODEL_IN_CONFIG = {"pool"}
+
 
 @pytest.fixture
 def fresh_home(tmp_path, monkeypatch):
@@ -144,7 +150,10 @@ def test_every_config_names_the_live_model_and_daemon(fresh_home, model):
 
     for client, path in written.items():
         text = Path(path).read_text("utf-8", "replace")
-        assert model.model_id in text, f"{client} config does not name {model.model_id}"
+        if client not in NO_MODEL_IN_CONFIG:
+            assert model.model_id in text, (
+                f"{client} config does not name {model.model_id}"
+            )
         assert "8823" in text or model.daemon_url in text, (
             f"{client} config does not point at the bound daemon"
         )
@@ -176,7 +185,8 @@ def test_switching_models_reselects_every_client(fresh_home, model):
     stale_id = model.model_id
     for client, path in first.items():
         text = Path(path).read_text("utf-8", "replace")
-        assert second.model_id in text, f"{client} never saw the new model"
+        if client not in NO_MODEL_IN_CONFIG:
+            assert second.model_id in text, f"{client} never saw the new model"
         # The old id may survive inside a roster, but never as the choice.
         assert f'model = "{stale_id}"' not in text, f"{client} still selects the old model"
         assert f'"model": "{stale_id}"' not in text, f"{client} still selects the old model"
