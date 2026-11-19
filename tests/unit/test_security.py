@@ -266,6 +266,8 @@ def test_the_daemon_accepts_both_of_the_machine_tokens(monkeypatch, tmp_path):
     auth_file.parent.mkdir(parents=True, exist_ok=True)
     auth_file.write_text("token-from-the-file\n")
     monkeypatch.setenv("HOME", str(tmp_path))
+    # Windows resolves the home directory from USERPROFILE, not HOME.
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.setenv("TOKI_AUTH_TOKEN", "token-from-the-env")
 
     tokens = configured_auth_tokens()

@@ -4295,6 +4295,9 @@ def test_the_backend_build_is_checked_before_it_is_written(
     assert ctl.get_model(spec.name).binary == spec.binary
 
 
+@pytest.mark.skipif(
+    os.name == "nt", reason="Windows has no execute bit to clear"
+)
 def test_a_build_that_is_not_executable_is_refused(
     env, with_pulled_model, tmp_path,
 ):
