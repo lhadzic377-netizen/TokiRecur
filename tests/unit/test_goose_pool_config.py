@@ -9,6 +9,7 @@ have to leave the user's own settings alone.
 """
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -78,6 +79,9 @@ def test_the_goose_provider_file_points_at_the_local_model(env, model):
     assert cfg["extensions"]["developer"]["enabled"] is True
 
 
+@pytest.mark.skipif(
+    os.name == "nt", reason="Windows has no POSIX permission bits"
+)
 def test_the_goose_provider_file_is_owner_only(env, model):
     cfg_dir = env / "goose"
     cfg_dir.mkdir()
