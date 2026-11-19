@@ -163,19 +163,19 @@ def theme(name: str | None) -> None:
     """Show or switch the colour theme.
 
     With no argument it lists the themes and says which one is in
-    force. With a name it switches: "default" is the house palette,
-    the others are limited editions.
+    force. With a name it switches: "default" is the house palette
+    and every other name is a harness toki launches.
     """
     from ..ctl import read_theme, write_theme
-    from ..tui.art import EDITION_LABELS, THEMES
+    from ..tui import art
+
+    THEMES = art.THEMES
 
     active = (read_theme() or "default").lower()
     if not name:
         for key in sorted(THEMES):
-            label = EDITION_LABELS.get(key)
             mark = "*" if key == active else " "
-            suffix = f"  ({label})" if label else ""
-            click.echo(f" {mark} {key}{suffix}")
+            click.echo(f" {mark} {key}")
         click.echo("\nSwitch with: toki theme <name>")
         return
     try:
@@ -183,10 +183,7 @@ def theme(name: str | None) -> None:
     except ValueError as e:
         raise SystemExit(f"error: {e}") from None
     chosen = name.strip().lower()
-    label = EDITION_LABELS.get(chosen)
-    click.echo(
-        f"theme: {chosen}" + (f" - {label}" if label else " (house style)")
-    )
+    click.echo(f"theme: {chosen}")
     click.echo("start the launcher again to see it")
 
 
@@ -1122,7 +1119,9 @@ def status() -> None:
         return "[dim]stopped[/dim]", "no pidfile"
 
     con = Console()
-    con.print(art.WORDMARK, style=f"bold {art.YELLOW}", highlight=False)
+    from ..tui import brand
+
+    con.print(brand.wordmark(), highlight=False)
     con.print(art.TAGLINE, style="dim", highlight=False)
     con.print("")
     con.print("")
@@ -3799,9 +3798,9 @@ def main() -> int:
         click.echo("")
         from rich.console import Console
 
-        from ..tui import art
+        from ..tui import brand
         con = Console()
-        con.print(art.WORDMARK, style=f"bold {art.YELLOW}", highlight=False)
+        con.print(brand.wordmark(), highlight=False)
         con.print("")
         click.echo("Current stack status:")
         try:

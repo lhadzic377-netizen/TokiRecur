@@ -129,6 +129,24 @@ def create_dashboard_app(*, reports_dir: Path) -> FastAPI:
         return "<h1>Toki Recur Dashboard</h1><p>Template not found.</p>"
 
     if STATIC_DIR.exists():
+
+        @app.get("/static/style.css")
+        async def themed_style() -> HTMLResponse:
+            """The stylesheet, painted in the active theme.
+
+            The dashboard is the one surface outside the terminal, and
+            it carried the house palette in its own file. It is the
+            same palette now, so the theme reaches the browser too.
+            """
+            from ..tui import art
+
+            css = (STATIC_DIR / "style.css").read_text()
+            for slot, value in art.PALETTE.items():
+                css = css.replace(
+                    art.DEFAULT_PALETTE[slot].lower(), value.lower()
+                )
+            return HTMLResponse(css, media_type="text/css")
+
         app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     return app
 

@@ -1436,7 +1436,9 @@ def write_theme(name: str | None) -> Path:
             pass
         return path
     value = name.strip().lower()
-    from ..tui.art import THEMES
+    from ..tui import art
+
+    THEMES = art.THEMES
 
     if value not in THEMES:
         raise ValueError(

@@ -28,7 +28,7 @@ from textual.containers import VerticalScroll
 from textual.reactive import reactive
 from textual.widgets import Static
 
-from .art import AMBER, RED, YELLOW
+from . import art
 
 # ── ChatLog ──────────────────────────────────────────────────────────
 
@@ -374,15 +374,15 @@ class StatusBar(Static):
         text.append("daemon ", style="dim")
         text.append(_auth_glyph(self.auth_status), style=_auth_color(self.auth_status))
         text.append("auth │ ", style="dim")
-        text.append(f"mode={self.mode} ", style=f"bold {YELLOW}")
+        text.append(f"mode={self.mode} ", style=f"bold {art.YELLOW}")
         text.append(f"session={self.session_id[:10]} ", style="dim")
         text.append(f"ctx={self.ctx_pct}% ", style="bold cyan")
-        text.append(f"maxtok={self.max_tokens} ", style=f"bold {AMBER}")
+        text.append(f"maxtok={self.max_tokens} ", style=f"bold {art.AMBER}")
         text.append(f"hits={self.hit_rate} ", style="dim cyan")
         from .. import tap
 
         if tap.is_enabled():
-            text.append("● rec ", style=f"bold {RED}")
+            text.append("● rec ", style=f"bold {art.RED}")
         text.append("│ Ctrl+R · Ctrl+T · /help", style="dim")
         return text
 
@@ -458,7 +458,7 @@ class InfoPanel(Static):
         panel = Text()
 
         # Live metrics.
-        panel.append("Live\n", style=f"bold {YELLOW}")
+        panel.append("Live\n", style=f"bold {art.YELLOW}")
         m = self._metrics
         reqs = int(m.get("requests_total", 0))
         hits = int(m.get("cache_hits", 0))
@@ -478,7 +478,7 @@ class InfoPanel(Static):
         panel.append("\n")
 
         # Session counters (client-side).
-        panel.append("Session\n", style=f"bold {YELLOW}")
+        panel.append("Session\n", style=f"bold {art.YELLOW}")
         s = self._session_stats
         msgs = int(s.get("messages", 0))
         gen = int(s.get("tokens_generated", 0))
@@ -489,7 +489,7 @@ class InfoPanel(Static):
         panel.append("\n")
 
         # Precision results.
-        panel.append("Precision\n", style=f"bold {YELLOW}")
+        panel.append("Precision\n", style=f"bold {art.YELLOW}")
         d = self.precision
         if not d:
             panel.append("  (Ctrl+P to run)\n", style="dim")
@@ -557,7 +557,7 @@ class Sidebar(Static):
 
     def render(self) -> RenderableType:
         panel = Text()
-        panel.append("Toki\n", style=f"bold {YELLOW}")
+        panel.append("Toki\n", style=f"bold {art.YELLOW}")
         panel.append("─" * 20 + "\n", style="dim")
 
         # Mode
@@ -570,7 +570,7 @@ class Sidebar(Static):
         sid = self.session_id
         if len(sid) > 16:
             sid = sid[:8] + "…" + sid[-4:]
-        panel.append(f"ses  {sid}\n", style=YELLOW)
+        panel.append(f"ses  {sid}\n", style=art.YELLOW)
 
         # Backends
         panel.append("─" * 20 + "\n", style="dim")
@@ -595,7 +595,7 @@ class Sidebar(Static):
 
         # Slots
         panel.append("─" * 20 + "\n", style="dim")
-        panel.append("Slots\n", style=f"bold {YELLOW}")
+        panel.append("Slots\n", style=f"bold {art.YELLOW}")
         slots = self.slots or []
         if not slots:
             panel.append("  (none)\n", style="dim")

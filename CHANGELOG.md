@@ -9,17 +9,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [0.3.20] - 2026-11-15
 
 ### Added
-- **A limited edition theme: GTA VI.** The launcher, the chat TUI and
-  the CLI now share one palette that a theme can replace. `toki theme
-  gta6` paints the whole box in Leonida at dusk - near-black with a
-  blue cast, the hot magenta of a Vice City sign, a sunset orange and
-  the cyan of the water - and says so under the wordmark; `toki theme
-  default` goes back to the house style, and `TOKI_THEME` applies a
-  theme for one run. The Textual stylesheet is rendered from the
-  active palette, so a theme reaches the widgets that are styled in CSS
-  as well as the ones styled in Python. The edition is more than a
-  palette: the wordmark is drawn in a heavier face and painted in a
-  sunset - the sun at the top of the letters, the sand through the
+- **A theme per harness, listed in the settings pane.** The launcher,
+  the chat TUI, the CLI and the web dashboard now share one palette
+  that a theme can replace. Every harness toki launches has a theme of
+  its own, taken from the colours that harness actually wears -
+  Claude's warm clay, opencode's cream on charcoal, Kimi's electric
+  blue, openclaw's amber on black, hermes' petrol teal, Qwen's violet,
+  MiMo's orange, Grok's Tokyo Night purple - plus the house style and
+  GTA VI, which is a mood like the others and not a limited edition.
+  The settings pane lists them under `theme` and picking one repaints
+  the launcher where it stands; `toki theme` lists the same set from
+  the shell, `toki theme <name>` switches the whole box, and `TOKI_THEME`
+  applies a theme for one run. The slots keep their names whatever the
+  theme - `YELLOW` is the primary accent - so a theme is a palette and
+  not a rename, and the palette is read at the moment it is used, so
+  the switch takes effect without a restart. The Textual stylesheet is
+  rendered from the active palette, so a theme reaches the widgets that
+  are styled in CSS as well as the ones styled in Python. GTA VI is more
+  than a palette: the wordmark is drawn in a heavier face and painted
+  in a sunset - the sun at the top of the letters, the sand through the
   middle, the sea at the foot - with the horizon under it drawn as a
   rule in the same colours.
 - **MiniMax Code runs on the local model.** `mcode` joins the launcher

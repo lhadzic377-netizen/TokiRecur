@@ -33,9 +33,9 @@ from .widgets import (
 class TokiApp(App):
     """Production TUI chat client for Toki Recur."""
 
-    # The stylesheet is generated from the active theme, so a limited
-    # edition reaches the widgets that are styled in CSS as well as the
-    # ones styled in Python.
+    # The stylesheet is generated from the active theme, so a theme
+    # reaches the widgets that are styled in CSS as well as the ones
+    # styled in Python.
     CSS = art.stylesheet()
 
     BINDINGS = [
@@ -116,6 +116,9 @@ class TokiApp(App):
     # ── Lifecycle ─────────────────────────────────────────────────────
 
     async def on_mount(self) -> None:
+        # The palette is read now, not when this module was imported:
+        # the theme may have been switched since.
+        art.retheme(self, art.stylesheet())
         self.session_id = self._session_id
         self.status_bar.session_id = self._session_id
         self.status_bar.mode = self.mode

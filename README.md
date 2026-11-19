@@ -160,7 +160,7 @@ toki doctor | toki hardware
 
 # appearance
 toki theme                                   # list the themes
-toki theme gta6                              # a limited edition
+toki theme claude                            # wear one harness's colours
 toki theme default                           # back to the house style
 
 # training data (off by default)
@@ -265,22 +265,45 @@ Grades: A+ ≥ 90, A ≥ 80, B ≥ 70, C ≥ 60, D ≥ 50, F < 50. Workloads ran
 
 ## Themes
 
-The launcher, the chat TUI and the CLI share one palette. A limited
-edition theme replaces it:
+The launcher, the chat TUI, the CLI and the web dashboard share one
+palette, and every harness toki launches has a theme of its own - the
+colours that harness actually wears. The settings pane lists them under
+`theme` and picks one from there; the shell does the same:
 
 ```bash
 toki theme                # list them, and say which one is in force
-toki theme gta6           # switch the whole box to it
+toki theme claude         # switch the whole box to it
 toki theme default        # back to the house style
 ```
 
-`TOKI_THEME=gta6 toki` applies a theme for one run only. The choice is
-remembered, so the next launcher starts in it.
+`TOKI_THEME=claude toki` applies a theme for one run only. The choice is
+remembered, so the next launcher starts in it. A theme switched from the
+settings pane repaints the launcher where it stands - no restart.
+
+The palette slots keep their names whatever the theme (`YELLOW` is the
+primary accent), so a theme is a palette and not a rename.
 
 | theme | what it is |
 | --- | --- |
 | `default` | the house style: black, vivid yellow, amber |
-| `gta6` | limited edition - Leonida at dusk: near-black with a blue cast, hot magenta, sunset orange, cyan |
+| `claude` | Anthropic's warm clay on a dark ground |
+| `openclaw` | amber on black, with a rust and a teal |
+| `hermes` | a deep petrol blue |
+| `opencode` | opencode's cream on charcoal, with a lavender-blue |
+| `kilo` | kilo is an opencode fork and wears the same colours |
+| `kimi` | Kimi Code's electric blue on near-black |
+| `qwen` | Qwen Code's violet |
+| `mimo` | MiMo Code's orange |
+| `omp` | Oh My Pi's lime |
+| `pi` | a rose |
+| `minimax` | MiniMax Code's indigo |
+| `codex` | OpenAI's green |
+| `droid` | Factory Droid's periwinkle |
+| `cline` | Cline's GitHub greys and their light blue |
+| `dsh` | DeepSeek Harness's blue |
+| `grok` | Grok Build's Tokyo Night |
+| `copilot` | GitHub Copilot's Primer palette |
+| `gta6` | GTA VI - Leonida at dusk: near-black with a blue cast, hot magenta, sunset orange, cyan. The wordmark is drawn in a heavier face and painted in a sunset - the sun at the top of the letters, the sand through the middle, the sea at the foot - with the horizon under it drawn as a rule in the same colours. |
 
 ## Recording turns (`toki tap`)
 

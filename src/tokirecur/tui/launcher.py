@@ -15,7 +15,6 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable
-from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -45,7 +44,7 @@ from ..ctl import (
 )
 from ..launch_catalog import LAUNCH_APPS, configured_provider_model, unavailable_reason
 from . import _cleanup as _tui_cleanup
-from . import art
+from . import art, brand
 
 # Fields whose change requires a llama-server restart (the spec's
 # launch window changes; the running server can't honour the new
@@ -65,7 +64,9 @@ _MODEL_SWAP_FIELDS = frozenset({"gguf", "binary"})
 _SYNC_ONLY_FIELDS = frozenset({"max_tokens", "model_id", "reasoning"})
 
 
-CSS = f"""
+def _launcher_css() -> str:
+    """The launcher's stylesheet, built from the active palette."""
+    return f"""
 Screen {{
     background: {art.BG};
     color: {art.TEXT};
@@ -89,6 +90,17 @@ Screen {{
 """
 
 
+def _retheme(app: LauncherApp) -> None:
+    """Repaint the app in the palette the theme just chose.
+
+    Textual reads ``App.CSS`` once, when the app starts, and keeps the
+    text it read. Replacing the class attribute is not enough - the
+    stylesheet still holds the colours it was built with - so the
+    source is replaced too and the stylesheet re-parsed.
+    """
+    art.retheme(app, _launcher_css())
+
+
 def _visible_rows(app: Any, reserve: int) -> int:
     """How many rows a pane may use, when the app is on a screen.
 
@@ -109,6 +121,11 @@ class LauncherApp(App[dict | None]):
     """Keyboard-driven launcher: pick an app, pin a model, Enter to run."""
 
     TITLE = "Toki Recur launcher"
+
+    # The launcher's own stylesheet, built from the active palette. It
+    # is a class attribute so a theme switched from the settings pane
+    # can replace it and re-parse.
+    CSS = _launcher_css()
 
     BINDINGS = [
         # The keys a modal needs are not priority bindings. A priority
@@ -180,6 +197,9 @@ class LauncherApp(App[dict | None]):
     # ── Compose ───────────────────────────────────────────────────────
 
     def on_mount(self) -> None:
+        # The palette is read now, not when this module was imported:
+        # the theme may have been switched since.
+        _retheme(self)
         self.specs = load_registry()
         self.variants = _model_variants(self.specs)
         if not self.specs:
@@ -379,6 +399,25 @@ class LauncherApp(App[dict | None]):
         else:
             self.notify("Recording stopped. Files stay where they are.", timeout=5)
 
+    def _set_theme(self, name: str) -> None:
+        """Switch the whole box to a theme, and repaint.
+
+        The palette is read at the moment it is used, so the launcher
+        repaints without a restart - but the stylesheet is part of
+        the app, so it is re-parsed too.
+        """
+        from ..ctl import write_theme
+
+        try:
+            write_theme(name)
+        except ValueError as e:
+            self.notify(str(e), timeout=5, severity="error")
+            return
+        invalidate_settings_rows()
+        _retheme(self)
+        self._refresh += 1
+        self.notify(f"theme: {name}", timeout=4)
+
     def action_toggle_tap(self) -> None:
         """Ctrl+T: record every managed turn to JSONL, or stop."""
         from .. import tap
@@ -421,6 +460,16 @@ class LauncherApp(App[dict | None]):
             state = "on" if tap.is_enabled() else "off"
             screen = SettingsChoiceScreen(
                 name, field, state, _SETTINGS_CHOICES[RECORDER_FIELD]
+            )
+            self.push_screen(screen, self._on_choice_dismissed)
+            return
+        if field == THEME_FIELD:
+            # The themes this box has.
+            from ..tui import art
+
+            state = value
+            screen = SettingsChoiceScreen(
+                name, field, state, {k: k for k in sorted(art.THEMES)}
             )
             self.push_screen(screen, self._on_choice_dismissed)
             return
@@ -497,6 +546,12 @@ class LauncherApp(App[dict | None]):
             # The recorder is not in the registry and never was. Commit
             # the pick to the switch, and nowhere else.
             self._set_recorder(new_value.strip().lower() == "on")
+            return
+        if field == THEME_FIELD:
+            # The theme is not in the registry either. It is the whole
+            # box's colours, so the pick repaints the launcher rather
+            # than a model's settings.
+            self._set_theme(new_value.strip().lower())
             return
         if field in _RESTART_REQUIRED_FIELDS:
             # Modal: ask first. Use a different label for the model-swap
@@ -894,12 +949,10 @@ class LauncherApp(App[dict | None]):
         else:
             lines = self._render_launchers(width)
             wordmark = _render_wordmark()
-            if art.EDITION_LABEL:
-                # The limited edition says so, right under the wordmark.
-                badge = Text(
-                    self._GUT + art.EDITION_LABEL, style=f"bold {art.CHROME}"
-                )
-                lines = wordmark + [badge, _horizon(width)] + lines
+            if art.THEME == "gta6":
+                # GTA VI gets its horizon; the other themes are the
+                # wordmark on its own.
+                lines = wordmark + [_horizon(width)] + lines
             else:
                 lines = wordmark + lines
         status = self._render_status(width)
@@ -927,7 +980,8 @@ class LauncherApp(App[dict | None]):
             line.append(self._error, style=f"bold {art.RED}")
             return line
         if self.pinned:
-            line.append(f"● {self.pinned}", style=f"bold {art.YELLOW}")
+            marker = brand.STAR if art.THEME == "gta6" else "●"
+            line.append(f"{marker} {self.pinned}", style=f"bold {art.YELLOW}")
             st = self._statuses.get(self.pinned, {})
             llama = st.get("llama")
             daemon = st.get("daemon")
@@ -1255,39 +1309,14 @@ def _render_wordmark() -> list[Text]:
     return list(_wordmark_lines())
 
 
-@lru_cache(maxsize=1)
 def _wordmark_lines() -> tuple[Text, ...]:
-    """The wordmark, painted in the theme's gradient.
-
-    The house style paints it in one accent; GTA VI paints it in a
-    sunset - the hot sun at the top of the letters, the sand through
-    the middle, the neon sea at the foot.
-    """
-    import pyfiglet
-
-    raw = pyfiglet.figlet_format(
-        "TOKI", font=art.wordmark_font()
-    ).rstrip("\n")
-    lines = [ln for ln in raw.split("\n") if ln.strip()]
-    colors = art.gradient(art.wordmark_gradient(), len(lines))
-    return tuple(
-        Text(LauncherApp._GUT + line, style=f"bold {color}")
-        for line, color in zip(lines, colors, strict=False)
-    )
+    """The wordmark as a poster, painted in the theme's gradient."""
+    return tuple(brand.poster(LauncherApp._GUT))
 
 
 def _horizon(width: int) -> Text:
-    """The horizon under the wordmark: a rule in the theme's gradient.
-
-    In the house style it is a single accent line; in GTA VI it is the
-    sea meeting the sky.
-    """
-    span = max(width - len(LauncherApp._GUT), 1)
-    colors = art.gradient(art.horizon_gradient(), span)
-    text = Text(LauncherApp._GUT)
-    for color in colors:
-        text.append("\u2580", style=color)
-    return text
+    """The horizon under the wordmark: a rule in the theme's gradient."""
+    return brand.horizon(width, LauncherApp._GUT)
 
 
 # ── Settings pane ──────────────────────────────────────────────────────
@@ -1299,6 +1328,10 @@ def _horizon(width: int) -> Text:
 #: model, and a field name that is not in ``_SETTINGS_FIELDS``.
 RECORDER_GROUP = "machine"
 RECORDER_FIELD = "record turns"
+
+#: The theme row: the colours of the whole box, like the recorder a
+#: machine-wide switch.
+THEME_FIELD = "theme"
 
 _SETTINGS_FIELDS: tuple[str, ...] = (
     "gguf",
@@ -1330,6 +1363,7 @@ _SETTINGS_CHOICES: dict[str, dict[str, str]] = {
         "on": "on",
         "off": "off",
     },
+    THEME_FIELD: {},  # filled in per machine: the themes it has
     "ctx_size": {
         "2048": "2048",
         "4096": "4096",
@@ -1830,6 +1864,19 @@ def _recorder_row() -> tuple[str, str, str]:
     return (RECORDER_GROUP, RECORDER_FIELD, f"on · {detail}")
 
 
+def _theme_row() -> tuple[str, str, str]:
+    """The machine-wide theme row: which colours this box wears.
+
+    It sits next to the recorder because it is the other setting that
+    is not a model's business.
+    """
+    from ..ctl import read_theme
+    from ..tui import art
+
+    active = (read_theme() or art.DEFAULT_THEME).lower()
+    return (RECORDER_GROUP, THEME_FIELD, active)
+
+
 def _backend_label(binary: str) -> str:
     """What a llama-server build is: ROCm, CUDA, Vulkan, CPU, ...
 
@@ -1879,6 +1926,7 @@ def _settings_rows(
     except Exception:
         live_part = ()
     recorder = _recorder_row()
+    theme = _theme_row()
     # The active adapter mode and the catalog size are part of the
     # rendering: switching modes changes the row a poll later leaves
     # untouched.
@@ -1888,12 +1936,16 @@ def _settings_rows(
         for s in specs
         for mode in [active_adapter_mode(s)]
     )
-    key = (tuple(s.name for s in specs), live_part, adapter_part, recorder)
+    theme_part = theme[2]
+    key = (
+        tuple(s.name for s in specs), live_part, adapter_part, recorder,
+        theme_part,
+    )
     cached = _SETTINGS_ROWS_CACHE.get(key)
     if cached is not None:
         return cached
 
-    rows: list[tuple[str, str, str]] = [recorder]
+    rows: list[tuple[str, str, str]] = [recorder, theme]
     for spec in specs:
         for field in _SETTINGS_FIELDS:
             if field not in ctl_mod._EDITABLE_FIELDS:
