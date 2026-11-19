@@ -3574,7 +3574,7 @@ def test_update_spec_field_apply_true_restart_required_calls_use_model(
 
 
 def test_update_spec_field_apply_true_restart_required_all_fields(
-    seeded_env, monkeypatch
+    seeded_env, monkeypatch, tmp_path
 ):
     """Every restart-required field triggers use_model when apply=True."""
     started: list[str] = []
@@ -3586,6 +3586,13 @@ def test_update_spec_field_apply_true_restart_required_all_fields(
     monkeypatch.setattr(ctl, "use_model", fake_use_model)
     monkeypatch.setattr(ctl, "sync_cli_configs", lambda *a, **kw: None)
 
+    # The backend build is checked before the registry is written, so
+    # the path has to be a real executable. /usr/bin/llama-server is
+    # not on every runner - and the check is the point of the field.
+    build = tmp_path / "llama-server"
+    build.write_text("#!/bin/sh\nexit 0\n")
+    build.chmod(0o755)
+
     for field in ("ctx_size", "kv", "parallel", "binary", "gguf",
                   "llama_port", "daemon_port"):
         started.clear()
@@ -3593,7 +3600,7 @@ def test_update_spec_field_apply_true_restart_required_all_fields(
             "ctx_size": "8192",
             "kv": "q8_0",
             "parallel": "1",
-            "binary": "/usr/bin/llama-server",
+            "binary": str(build),
             "gguf": "/tmp/foo.gguf",
             "llama_port": "9999",
             "daemon_port": "9998",
