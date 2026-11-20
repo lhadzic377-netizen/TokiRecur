@@ -41,11 +41,19 @@ CONFIG_CLIENTS = (
     "cline", "claude", "dsh", "grok", "kilo", "pi", "kimi", "omp",
 )
 
+# Clients whose config does not carry both the model and the endpoint.
+#
 # pool keeps its endpoint in the settings file and takes the model from
 # the environment the launcher starts it with (POOLSIDE_STANDALONE_MODEL),
-# so there is no model in the file that could name a dead stack. Its
-# endpoint is still checked.
+# so there is no model in the file that could name a dead stack.
+#
+# Antigravity is the other way round: the settings file names the model
+# and the endpoint comes from GOOGLE_GEMINI_BASE_URL in the environment.
+#
+# Neither can name a dead stack: the launcher computes the missing half
+# from the live spec when it starts the client.
 NO_MODEL_IN_CONFIG = {"pool"}
+NO_ENDPOINT_IN_CONFIG = {"antigravity"}
 
 
 @pytest.fixture
@@ -154,9 +162,10 @@ def test_every_config_names_the_live_model_and_daemon(fresh_home, model):
             assert model.model_id in text, (
                 f"{client} config does not name {model.model_id}"
             )
-        assert "8823" in text or model.daemon_url in text, (
-            f"{client} config does not point at the bound daemon"
-        )
+        if client not in NO_ENDPOINT_IN_CONFIG:
+            assert "8823" in text or model.daemon_url in text, (
+                f"{client} config does not point at the bound daemon"
+            )
 
 
 def test_switching_models_reselects_every_client(fresh_home, model):

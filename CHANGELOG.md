@@ -27,10 +27,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the user's own agent servers and MCP servers. Both were verified
   against a local llama-server: goose answered "HELLO FROM GOOSE" and
   pool answered "HELLO FROM POOL".
+- **Antigravity runs on the local model.** Google's agentic IDE has a
+  terminal CLI (`agy`), and it is the one harness that speaks neither
+  the OpenAI API nor the Anthropic one: it asks for
+  `/v1beta/models/<model>:generateContent` in Gemini's shape. The
+  daemon serves that route now - the request is translated into the
+  engine's shape and the answer back into Gemini's, and the stream
+  ends when the server closes it, because Gemini has no `[DONE]`
+  sentinel and a client that reads one as JSON fails on it. The key is
+  accepted in `x-goog-api-key`, which is where the Google SDKs carry
+  it. Antigravity is pointed at the daemon with a custom model in
+  `~/.gemini/antigravity-cli/settings.json` and
+  `GOOGLE_GEMINI_BASE_URL` in the environment; the user's own
+  permissions, colour scheme and models stay as they are. It always
+  routes through the daemon: the Gemini route lives there, not on
+  llama-server.
 - **A theme for each of them.** `goose` wears the blue, teal and
   violet its binary carries on a warm near-black; `pool` wears the
-  blue of its logo on the dark it ships with. Both are in the
-  settings pane's theme list like every other theme.
+  blue of its logo on the dark it ships with; `antigravity` wears the
+  mint, the amber and the blue of the Tokyo Night it ships with. All
+  three are in the settings pane's theme list like every other theme.
 - **GTA VI says its name again.** The lettering under the wordmark is
   back - "GTA VI" - with the horizon under it, the way the theme was
   first drawn. It names the mood; it is not an edition.

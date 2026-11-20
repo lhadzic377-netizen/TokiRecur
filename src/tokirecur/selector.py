@@ -34,6 +34,7 @@ from .ctl import (
     qwen_model_ref,
     qwen_uses_custom_providers,
     read_active,
+    write_antigravity_config,
     write_claude_config,
     write_cline_config,
     write_codex_config,
@@ -145,6 +146,7 @@ _CLIENT_CONFIG_WRITERS = {
     "minimax": write_minimax_config,
     "goose": write_goose_config,
     "pool": write_pool_config,
+    "antigravity": write_antigravity_config,
 }
 
 
@@ -181,7 +183,7 @@ def _bound_env(spec: Any, client: str) -> dict[str, str]:
     endpoint = _bound_endpoint(spec, client)
     new_clients = {
         "qwen", "droid", "cline", "dsh", "grok", "kilo", "pi",
-        "copilot", "kimi", "omp", "minimax", "goose", "pool",
+        "copilot", "kimi", "omp", "minimax", "goose", "pool", "antigravity",
     }
     if client == "codex" or client in new_clients:
         token = _auth_token() or auth_token()
@@ -204,6 +206,12 @@ def _bound_env(spec: Any, client: str) -> dict[str, str]:
         env["COPILOT_PROVIDER_MAX_PROMPT_TOKENS"] = str(context)
         env["COPILOT_PROVIDER_MAX_OUTPUT_TOKENS"] = str(output)
         env["COPILOT_MODEL"] = spec.model_id
+    if client == "antigravity":
+        # Antigravity speaks the Gemini API, and the endpoint comes
+        # from the environment: the SDK appends /v1beta/models/<model>
+        # to it, so it is the daemon's root and not its /v1.
+        env["GEMINI_API_KEY"] = token
+        env["GOOGLE_GEMINI_BASE_URL"] = spec.daemon_url
     if client == "goose":
         # The provider file names the key's environment variable, and
         # goose needs the provider and the model named to pick it.
@@ -412,6 +420,9 @@ def launch_cmd(interface: str, client: str, spec: Any | None) -> dict:
         if client == "pool":
             # pool opens the ACP client session with no arguments.
             return {"argv": ["pool"], "detach": False, "url": None, "env": env}
+        if client == "antigravity":
+            # agy opens its session with no arguments.
+            return {"argv": ["agy"], "detach": False, "url": None, "env": env}
         if client == "minimax":
             # MiniMax Code addresses a BYOK provider as
             # custom_provider:<id>/<model>; a bare model id would resolve

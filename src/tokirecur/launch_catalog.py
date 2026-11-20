@@ -181,6 +181,14 @@ LAUNCH_APPS: tuple[LaunchApp, ...] = (
         command="pool",
     ),
     LaunchApp(
+        "antigravity",
+        "Launch Antigravity",
+        "Google's agentic IDE, in the terminal",
+        "chat",
+        "antigravity",
+        command="agy",
+    ),
+    LaunchApp(
         "web",
         "Launch Web Dashboards",
         "browser UIs: toki · openclaw · hermes",

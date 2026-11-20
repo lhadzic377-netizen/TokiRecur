@@ -6369,6 +6369,76 @@ def write_pool_config(
     return cfg_path
 
 
+#: The key Antigravity's custom model carries in its settings file.
+ANTIGRAVITY_MODEL_KEY = "tokirecur"
+
+
+def _antigravity_settings_path() -> Path:
+    explicit = os.environ.get("TOKI_ANTIGRAVITY_CONFIG")
+    if explicit:
+        return Path(explicit).expanduser()
+    return Path.home() / ".gemini" / "antigravity-cli" / "settings.json"
+
+
+def write_antigravity_config(
+    spec: ModelSpec, specs: list[ModelSpec] | None = None,
+    path: Path | None = None, mode: str | None = None,
+) -> Path:
+    """Point Antigravity's CLI at the local model.
+
+    Antigravity (``agy``) speaks the Gemini API, not the OpenAI one:
+    it asks for ``/v1beta/models/<model>:generateContent``. It reaches
+    an endpoint through a custom model in its settings file - the model
+    name carries the ``gemini-api://`` scheme - and the endpoint itself
+    comes from ``GOOGLE_GEMINI_BASE_URL`` in the environment.
+
+    The settings file is the user's: their permissions, their colour
+    scheme and their other models stay exactly as they are. Only the
+    provider, the selected model and our custom model are ours.
+
+    The route is the daemon's, always: the Gemini API lives there, not
+    on llama-server, so ``raw`` is not an option for this client.
+    """
+    cfg_path = path or _antigravity_settings_path()
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg: dict[str, Any] = {}
+    if cfg_path.exists():
+        try:
+            loaded = json.loads(cfg_path.read_text())
+        except (OSError, TypeError, ValueError):
+            loaded = None
+        if isinstance(loaded, dict):
+            cfg = loaded
+
+    cfg["modelProvider"] = "gemini"
+    # The model is selected by the KEY of the custom model, not by its
+    # label: the CLI resolves the key and refuses a label it cannot
+    # match.
+    cfg["model"] = ANTIGRAVITY_MODEL_KEY
+    custom = cfg.get("customModelsConfig")
+    if not isinstance(custom, dict):
+        custom = {}
+        cfg["customModelsConfig"] = custom
+    models = custom.get("customModels")
+    if not isinstance(models, dict):
+        models = {}
+        custom["customModels"] = models
+    models[ANTIGRAVITY_MODEL_KEY] = {
+        # The model the SDK asks for. The endpoint comes from the
+        # environment, so this names the model and nothing else.
+        "modelName": f"gemini-api://{spec.model_id}",
+        "label": "Toki Recur",
+        # The CLI's own output budget is 65536 tokens, and it refuses
+        # to start when the window it was told about is not larger
+        # than that. A model with a smaller window is still served: the
+        # daemon answers 413 when a prompt does not fit, which is a
+        # better answer than a client that will not start.
+        "maxTokens": max(_effective_ctx(spec), 131072),
+    }
+    _write_private_config(cfg_path, json.dumps(cfg, indent=2) + "\n")
+    return cfg_path
+
+
 def _write_omp_roles(models_path: Path, spec: ModelSpec) -> None:
     """Point OMP's default role at the model that is being served.
 
@@ -7257,6 +7327,7 @@ def sync_cli_configs(spec: ModelSpec, mode: str | None = None) -> dict[str, Path
         ("minimax", write_minimax_config),
         ("goose", write_goose_config),
         ("pool", write_pool_config),
+        ("antigravity", write_antigravity_config),
     ):
         try:
             tool_mode = _resolve_mode(tool, mode)

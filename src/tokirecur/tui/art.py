@@ -256,6 +256,15 @@ THEMES: dict[str, dict[str, str]] = {
         sky="#1a1b26", sun="#0087ff", sand="#5bc4bf", sea="#57c7ff",
         chrome="#f8f8f2",
     ),
+    # Antigravity: Google's agent, in the Tokyo Night it ships with -
+    # the mint, the amber and the blue its binary carries.
+    "antigravity": _palette(
+        "#1a1b26", "#24283b", "#2f344d", "#414868",
+        "#61ffca", "#e0af68", "#1f7a63",
+        "#c0caf5", "#7a7fa5",
+        sky="#1a1b26", sun="#e0af68", sand="#9ece6a", sea="#7aa2f7",
+        chrome="#f8f8f2",
+    ),
     # GitHub Copilot: the Primer palette.
     "copilot": _palette(
         "#0d1117", "#161b22", "#30363d", "#484f58",

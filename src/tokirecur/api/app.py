@@ -59,6 +59,36 @@ from .anthropic import (
 from .anthropic import (
     session_id as anthropic_session_id,
 )
+from .gemini import (
+    GeminiGenerateContentRequest,
+)
+from .gemini import (
+    chat_template_kwargs as gemini_chat_template_kwargs,
+)
+from .gemini import (
+    chunk_body as gemini_chunk_body,
+)
+from .gemini import (
+    error_body as gemini_error_body,
+)
+from .gemini import (
+    max_output_tokens as gemini_max_output_tokens,
+)
+from .gemini import (
+    response_body as gemini_response_body,
+)
+from .gemini import (
+    sse_chunk as gemini_sse_chunk,
+)
+from .gemini import (
+    to_openai_messages as gemini_to_openai_messages,
+)
+from .gemini import (
+    to_openai_tool_choice as gemini_to_openai_tool_choice,
+)
+from .gemini import (
+    to_openai_tools as gemini_to_openai_tools,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -906,9 +936,12 @@ def _check_auth(request: Request) -> None:
     auth = request.headers.get("authorization", "")
     if auth.startswith("Bearer "):
         candidates.append(auth[len("Bearer "):].strip())
-    api_key = request.headers.get("x-api-key", "").strip()
-    if api_key:
-        candidates.append(api_key)
+    # The Google SDKs carry the key in their own header: the Gemini
+    # client (Antigravity's CLI) sends x-goog-api-key and nothing else.
+    for header in ("x-api-key", "x-goog-api-key", "x-goog-user-project"):
+        api_key = request.headers.get(header, "").strip()
+        if api_key:
+            candidates.append(api_key)
     provided = next((value for value in candidates if value), "")
     if not provided:
         METRICS.auth_failures.inc()
@@ -2693,6 +2726,140 @@ def create_app(
                 raise HTTPException(status_code=413, detail=_overflow_detail()) from e
             logger.exception("Anthropic messages completion failed")
             raise HTTPException(status_code=500, detail=str(e)) from e
+
+    @app.post("/v1beta/models/{model}:generateContent")
+    @app.post("/v1beta/models/{model}:streamGenerateContent")
+    async def gemini_generate_content(
+        model: str, req: GeminiGenerateContentRequest, request: Request,
+    ) -> Response:
+        """The Gemini API, for Antigravity's CLI.
+
+        Antigravity (``agy``) does not speak the OpenAI API: it speaks
+        the Gemini one, and it asks for ``/v1beta/models/<model>:
+        generateContent`` with ``contents`` and a
+        ``systemInstruction``. The request is translated to the shape
+        the engine speaks and the answer back into Gemini's.
+
+        The model in the path is the client's idea of it; the daemon
+        serves the model it actually has, the same rule the OpenAI and
+        Anthropic routes follow.
+        """
+        wedged = _backend_wedged()
+        if wedged:
+            raise HTTPException(status_code=503, detail=wedged)
+        active_model = _served_model_id()
+        model_name = active_model or model
+        messages = gemini_to_openai_messages(req)
+        messages = await _inline_images(messages)
+        tools = gemini_to_openai_tools(req.tools)
+        tool_choice = gemini_to_openai_tool_choice(req.toolConfig)
+        template_kwargs = gemini_chat_template_kwargs(req, default_reasoning)
+        reasoning_mode = (
+            default_reasoning if template_kwargs.get("enable_thinking") else "off"
+        )
+        max_tokens = _resolve_max_tokens(
+            gemini_max_output_tokens(req, 4096), reasoning=reasoning_mode,
+        )
+        temperature, sampling = _resolve_sampling(
+            temperature=(req.generationConfig or {}).get("temperature"),
+            top_p=(req.generationConfig or {}).get("topP"),
+        )
+        estimate = _prefill_estimate(messages, model_name)
+        _warn_slow_prefill(estimate)
+
+        streaming = request.url.path.endswith(":streamGenerateContent")
+        if streaming:
+            async def event_stream() -> Any:
+                try:
+                    items = engine.serve_chat_stream(
+                        messages,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                        max_slots=_resolve_max_slots(2),
+                        chat_template_kwargs=template_kwargs,
+                        tools=tools,
+                        tool_choice=tool_choice,
+                        sampling=sampling,
+                    )
+                    items = _record_stream_prefill(items, model_name)
+                    async for item in items:
+                        kind = item.get("kind")
+                        if kind == "delta":
+                            yield gemini_sse_chunk(
+                                gemini_chunk_body(item.get("delta", ""), model_name)
+                            )
+                        elif kind == "reasoning":
+                            yield gemini_sse_chunk(
+                                gemini_chunk_body(
+                                    item.get("delta", "") or item.get("text", ""),
+                                    model_name, thought=True,
+                                )
+                            )
+                        elif kind == "result":
+                            result = item.get("result")
+                            if result is not None:
+                                yield gemini_sse_chunk(
+                                    gemini_response_body(result, model_name)
+                                )
+                except Exception as e:
+                    logger.exception("Gemini streaming failed")
+                    yield gemini_sse_chunk(gemini_error_body(str(e)))
+
+            return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+        try:
+            result = await _run_engine(
+                engine.serve_chat,
+                messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                max_slots=_resolve_max_slots(2),
+                chat_template_kwargs=template_kwargs,
+                tools=tools,
+                tool_choice=tool_choice,
+                sampling=sampling,
+            )
+            tap.record(
+                endpoint="generateContent",
+                model=model_name,
+                result=result,
+                messages=messages,
+                effort=None,
+                session_id=None,
+                params={
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                    "sampling": sampling,
+                    "chat_template_kwargs": template_kwargs,
+                },
+            )
+            _record_prefill_rate(model_name, result)
+            body = gemini_response_body(result, model_name)
+            prefill = _measured_prefill(result)
+            if prefill:
+                body["toki_prefill"] = prefill
+            return JSONResponse(body)
+        except Exception as e:
+            if _context_overflow_status(e):
+                raise HTTPException(status_code=413, detail=_overflow_detail()) from e
+            logger.exception("Gemini completion failed")
+            raise HTTPException(status_code=500, detail=str(e)) from e
+
+    @app.get("/v1beta/models")
+    async def gemini_models() -> Response:
+        """The model list, in Gemini's shape.
+
+        The Gemini SDK asks for it before a turn; a client that gets a
+        404 there treats the endpoint as broken.
+        """
+        active_model = _served_model_id()
+        return JSONResponse({
+            "models": [{
+                "name": f"models/{active_model}" if active_model else "models/default",
+                "displayName": active_model or "default",
+                "supportedGenerationMethods": ["generateContent", "streamGenerateContent"],
+            }],
+        })
 
     @app.post("/anthropic/v1/messages/count_tokens")
     @app.post("/v1/messages/count_tokens")

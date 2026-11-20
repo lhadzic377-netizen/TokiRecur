@@ -518,7 +518,7 @@ def test_sync_cli_configs_writes_all(env, with_pulled_model, monkeypatch):
     spec = with_pulled_model["laguna"]
     monkeypatch.setenv("CODEX_HOME", str(env / "codex-home"))
     paths = ctl.sync_cli_configs(spec)
-    assert len(paths) == 18
+    assert len(paths) == 19
     for p in paths.values():
         assert Path(p).exists()
         if os.name == "posix":
@@ -561,6 +561,11 @@ def test_sync_cli_configs_writes_all(env, with_pulled_model, monkeypatch):
     assert goose_cfg["GOOSE_MODEL"] == spec.model_id
     pool = yaml.safe_load(paths["pool"].read_text())
     assert pool["pool"]["api_url"] == f"{spec.daemon_url}/v1"
+    agy = json.loads(paths["antigravity"].read_text())
+    assert agy["modelProvider"] == "gemini"
+    assert agy["customModelsConfig"]["customModels"]["tokirecur"]["modelName"] == (
+        f"gemini-api://{spec.model_id}"
+    )
 
 
 def test_new_client_config_writers_bind_active_model(env, with_pulled_model, monkeypatch):
