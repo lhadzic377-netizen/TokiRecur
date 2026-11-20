@@ -6473,6 +6473,13 @@ def _write_omp_roles(models_path: Path, spec: ModelSpec) -> None:
         return
 
 
+#: Clients whose API exists only on the daemon. codex speaks the
+#: Responses API, which llama-server does not serve; antigravity speaks
+#: the Gemini API, which lives on the daemon's /v1beta route. A raw
+#: provider for either would fail every request.
+DAEMON_ONLY_CLIENTS = frozenset({"codex", "antigravity"})
+
+
 def _client_modes_path(root: Path | None = None) -> Path:
     return (root or STATE_ROOT) / "client-modes.json"
 

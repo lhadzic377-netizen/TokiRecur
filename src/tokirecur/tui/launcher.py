@@ -36,6 +36,7 @@ from ..adapters import (
     active_mode as active_adapter_mode,
 )
 from ..ctl import (
+    DAEMON_ONLY_CLIENTS,
     load_registry,
     model_file_missing,
     model_status,
@@ -750,8 +751,9 @@ class LauncherApp(App[dict | None]):
     def action_toggle_mode(self) -> None:
         """m: cycle the highlighted client's inference mode raw <-> managed.
 
-        codex is pinned to managed: its Responses API shim only exists on
-        the daemon, so a raw provider would fail every request.
+        codex and antigravity are pinned to managed: codex's Responses
+        API shim and antigravity's Gemini route exist only on the daemon,
+        so a raw provider would fail every request.
         """
         if self.focus_pane != "launchers":
             self.action_back()
@@ -763,7 +765,7 @@ class LauncherApp(App[dict | None]):
         if not app.model_binding:
             self.notify(f"{app.title}: uses its own provider configuration", timeout=3)
             return
-        if app.client == "codex":
+        if app.client in DAEMON_ONLY_CLIENTS:
             self.notify(
                 f"{app.title}: always uses the daemon (managed)", timeout=3
             )
@@ -1025,7 +1027,10 @@ class LauncherApp(App[dict | None]):
                 mode_tag = " · Anthropic API"
             elif app.model_binding:
                 mode = self._client_modes.get(app.client, "managed")
-                mode_tag = " · daemon" if app.client == "codex" else f" · {mode}"
+                mode_tag = (
+                    " · daemon" if app.client in DAEMON_ONLY_CLIENTS
+                    else f" · {mode}"
+                )
             reason = unavailable_reason(app)
             if active:
                 row = Text(self._GUT, end="")

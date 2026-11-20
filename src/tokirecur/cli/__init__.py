@@ -1613,10 +1613,17 @@ def model_mode(client: str, mode: str) -> None:
     """Set one client's inference path.
 
     managed = through the toki daemon (context truth + KV recycling;
-    required by codex, which speaks the Responses API the daemon shims).
+    required by codex, which speaks the Responses API, and antigravity,
+    which speaks the Gemini API - both exist only on the daemon).
     raw = straight to llama-server (no daemon in the path).
     """
-    from ..ctl import write_client_mode
+    from ..ctl import DAEMON_ONLY_CLIENTS, write_client_mode
+    if mode == "raw" and client in DAEMON_ONLY_CLIENTS:
+        click.echo(
+            f"client '{client}' always routes through the daemon "
+            f"(its API exists only there)", err=True,
+        )
+        raise SystemExit(1)
     write_client_mode(client, mode)
     click.echo(f"client '{client}' -> {mode} (applied on next sync/stack start)")
 

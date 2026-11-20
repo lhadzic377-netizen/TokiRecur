@@ -39,6 +39,53 @@ def test_apps_bind_to_pinned_model():
     ]
 
 
+def test_antigravity_row_says_it_routes_through_the_daemon(tmp_path, monkeypatch):
+    """Antigravity's API exists only on the daemon.
+
+    The Gemini route lives on the daemon, not on llama-server, so the
+    row says "daemon" and never "raw" - even if a raw mode was written
+    for the client.
+    """
+    monkeypatch.setattr(ctl, "STATE_ROOT", tmp_path / "state")
+    ctl.write_client_mode("antigravity", "raw")
+
+    async def run_app():
+        app = LauncherApp()
+        async with app.run_test(size=(100, 40)) as pilot:
+            await pilot.pause()
+            app.launch_idx = next(
+                i for i, a in enumerate(LAUNCH_APPS) if a.key == "antigravity"
+            )
+            await pilot.pause()
+            lines = [str(line) for line in app._render_launchers(80)]
+        return lines
+
+    lines = asyncio.run(run_app())
+    assert any("Launch Antigravity" in line for line in lines)
+    assert any("· daemon" in line for line in lines)
+    assert not any("· raw" in line for line in lines)
+
+
+def test_antigravity_mode_key_refuses_raw(tmp_path, monkeypatch):
+    """`m` on Antigravity says it is pinned, and does not store raw."""
+    monkeypatch.setattr(ctl, "STATE_ROOT", tmp_path / "state")
+    ctl.write_client_mode("antigravity", "managed")
+
+    async def run_app():
+        app = LauncherApp()
+        async with app.run_test(size=(100, 40)) as pilot:
+            await pilot.pause()
+            app.launch_idx = next(
+                i for i, a in enumerate(LAUNCH_APPS) if a.key == "antigravity"
+            )
+            await pilot.pause()
+            await pilot.press("m")
+            await pilot.pause()
+        return ctl.client_mode("antigravity")
+
+    assert asyncio.run(run_app()) == "managed"
+
+
 def test_launcher_warns_when_restart_pending_marker_present(tmp_path, monkeypatch):
     """install.sh writes ``~/.local/state/tokirecur/restart-pending``
     before killing any running toki TUI. If a fresh launch starts

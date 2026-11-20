@@ -304,6 +304,19 @@ def test_the_gemini_route_accepts_the_goog_api_key(tmp_path, monkeypatch):
     assert bad.status_code == 401
 
 
+def test_the_mode_command_refuses_raw(tmp_path, monkeypatch):
+    """A raw provider would fail every turn: say so, do not store it."""
+    from click.testing import CliRunner
+
+    from tokirecur.cli import cli
+
+    monkeypatch.setattr(ctl, "STATE_ROOT", tmp_path / "state")
+    result = CliRunner().invoke(cli, ["model", "mode", "antigravity", "raw"])
+    assert result.exit_code != 0
+    assert "always routes through the daemon" in result.output
+    assert ctl.client_mode("antigravity") == "managed"
+
+
 def test_antigravity_is_synced_with_the_rest(env, model, monkeypatch):
     monkeypatch.setattr(ctl, "daemon_reachable", lambda spec: True)
     monkeypatch.setenv("TOKI_ANTIGRAVITY_CONFIG", str(

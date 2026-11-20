@@ -212,7 +212,7 @@ async def test_picking_a_theme_in_the_settings_repaints_the_launcher(
         await pilot.pause()
         select = app.screen.query_one("#settings-choice-select", Select)
         values = {value for _, value in select._options}
-        assert "gta6" in values
+        assert {"gta6", "antigravity"} <= values
         assert len(values) == len(art.THEMES)
 
         before = app.screen.styles.background
