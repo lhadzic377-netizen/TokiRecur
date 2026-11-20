@@ -24,6 +24,7 @@ from rich.table import Table
 from . import winproc
 from .adapters import active_mode, active_mode_id
 from .ctl import (
+    ANTIGRAVITY_MODEL_KEY,
     _effective_ctx,
     _resolve_mode,
     auth_token,
@@ -421,8 +422,12 @@ def launch_cmd(interface: str, client: str, spec: Any | None) -> dict:
             # pool opens the ACP client session with no arguments.
             return {"argv": ["pool"], "detach": False, "url": None, "env": env}
         if client == "antigravity":
-            # agy opens its session with no arguments.
-            return {"argv": ["agy"], "detach": False, "url": None, "env": env}
+            # The custom model is selected by its key. Without --model
+            # the CLI reads `model` from its settings as an alias name,
+            # does not find one, and falls back to a hosted Gemini model
+            # with a warning; the flag resolves the custom model.
+            return {"argv": ["agy", "--model", ANTIGRAVITY_MODEL_KEY],
+                    "detach": False, "url": None, "env": env}
         if client == "minimax":
             # MiniMax Code addresses a BYOK provider as
             # custom_provider:<id>/<model>; a bare model id would resolve

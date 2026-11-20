@@ -102,7 +102,7 @@ def test_the_launch_plan_names_the_gemini_endpoint(monkeypatch):
         "ctx_size": 262144,
     })()
     plan = launch_cmd("chat", "antigravity", spec)
-    assert plan["argv"] == ["agy"]
+    assert plan["argv"] == ["agy", "--model", "tokirecur"]
     assert plan["env"]["GOOGLE_GEMINI_BASE_URL"] == "http://127.0.0.1:8811"
     assert plan["env"]["GEMINI_API_KEY"]
 

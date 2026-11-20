@@ -163,7 +163,7 @@ def test_new_client_launch_plans_pin_the_selected_model(monkeypatch):
                     f"custom_provider:tokirecur/{spec.model_id}"],
         "goose": ["goose"],
         "pool": ["pool"],
-        "antigravity": ["agy"],
+        "antigravity": ["agy", "--model", "tokirecur"],
     }
     for key, argv in expected.items():
         plan = launch_cmd("chat", key, spec)

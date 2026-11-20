@@ -50,6 +50,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   three are in the settings pane's theme list like every other theme.
 
 ### Fixed
+- **Antigravity starts on the local model, not a hosted fallback.**
+  The CLI reads `model` from its settings file as an alias name, and
+  "tokirecur" is not one - so a plain `agy` start resolves it to a
+  hosted Gemini model and says the model "is no longer available".
+  The launcher names the custom model on the command line
+  (`agy --model tokirecur`), which selects it without the warning.
 - **A client whose API lives on the daemon cannot be told to go
   raw.** codex speaks the Responses API and antigravity the Gemini
   API, and both routes exist only on the daemon. Those launcher rows
