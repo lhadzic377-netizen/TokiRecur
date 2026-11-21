@@ -1995,6 +1995,40 @@ def create_app(
         })
         return output
 
+    def _reasoning_item_done_events(resp_id: str, created: int, rs_id: str,
+                                    reasoning: str) -> list[str]:
+        """The three events that close a reasoning output item.
+
+        Kept in one place because the item has to be closed before the
+        assistant message opens (the order the Responses API uses) and
+        again at the end of the stream if no message followed.
+        """
+        def event(name: str, payload: dict) -> str:
+            payload.setdefault("type", name)
+            return f"event: {name}\ndata: {_json.dumps(payload)}\n\n"
+
+        return [
+            event("response.reasoning_summary_text.done", {
+                "id": resp_id, "object": "response", "created_at": created,
+                "item_id": rs_id, "output_index": 0, "summary_index": 0,
+                "text": reasoning,
+                "summary": [{"type": "summary_text", "text": reasoning}],
+            }),
+            event("response.reasoning_summary_part.done", {
+                "id": resp_id, "object": "response", "created_at": created,
+                "item_id": rs_id, "output_index": 0, "summary_index": 0,
+                "part": {"type": "summary_text", "text": reasoning},
+            }),
+            event("response.output_item.done", {
+                "id": resp_id, "object": "response", "created_at": created,
+                "output_index": 0,
+                "item": {"id": rs_id, "type": "reasoning",
+                         "status": "completed",
+                         "summary": [{"type": "summary_text",
+                                      "text": reasoning}]},
+            }),
+        ]
+
     async def _stream_responses(req: ResponsesRequest) -> Any:
         """Responses-API SSE event stream over the chat pipeline.
 
@@ -2054,6 +2088,7 @@ def create_app(
         # the assistant message.
         msg_started = False
         rs_started = False
+        rs_closed = False
         msg_index = 0
 
         finish_reason: str | None = None
@@ -2091,6 +2126,12 @@ def create_app(
                     if not msg_started:
                         msg_started = True
                         msg_index = 1 if rs_started else 0
+                        if rs_started and not rs_closed:
+                            rs_closed = True
+                            for ev in _reasoning_item_done_events(
+                                    resp_id, created, rs_id,
+                                    "".join(reasoning_parts)):
+                                yield ev
                         yield event("response.output_item.added", {
                             "id": resp_id, "object": "response",
                             "created_at": created,
@@ -2198,26 +2239,11 @@ def create_app(
 
         text = "".join(text_parts)
         reasoning = "".join(reasoning_parts)
-        if reasoning:
-            yield event("response.reasoning_summary_text.done", {
-                "id": resp_id, "object": "response", "created_at": created,
-                "item_id": rs_id, "output_index": 0, "summary_index": 0,
-                "text": reasoning,
-                "summary": [{"type": "summary_text", "text": reasoning}],
-            })
-            yield event("response.reasoning_summary_part.done", {
-                "id": resp_id, "object": "response", "created_at": created,
-                "item_id": rs_id, "output_index": 0, "summary_index": 0,
-                "part": {"type": "summary_text", "text": reasoning},
-            })
-            yield event("response.output_item.done", {
-                "id": resp_id, "object": "response", "created_at": created,
-                "output_index": 0,
-                "item": {"id": rs_id, "type": "reasoning",
-                         "status": "completed",
-                         "summary": [{"type": "summary_text",
-                                      "text": reasoning}]},
-            })
+        if reasoning and not rs_closed:
+            rs_closed = True
+            for ev in _reasoning_item_done_events(
+                    resp_id, created, rs_id, reasoning):
+                yield ev
         if text and not msg_started:
             msg_started = True
             msg_index = 1 if rs_started else 0
