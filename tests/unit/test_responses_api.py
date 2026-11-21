@@ -426,6 +426,49 @@ class TestResponsesStream:
                      if e == "response.reasoning_summary_text.delta"]
         assert summaries == ["hmm"]
 
+    def test_reasoning_uses_a_real_reasoning_item(self):
+        """Codex only renders reasoning that belongs to a reasoning item.
+
+        The reasoning deltas used to ride on the assistant message item,
+        so codex dropped them and the turn looked like it was running
+        without producing anything.
+        """
+        backend = FakeBackend(stream_chunks=[
+            {"kind": "reasoning", "delta": "hmm"},
+            {"kind": "delta", "delta": "answer"},
+            {"kind": "result", "result": _base_result(
+                text="answer", reasoning="hmm"),
+            },
+        ])
+        with TestClient(_make_daemon(backend)) as client:
+            r = client.post("/v1/responses", json={
+                "model": "m", "input": "q", "stream": True,
+            })
+        events = sse_pairs(r.text)
+        names = [e for e, _ in events]
+        assert "response.reasoning_summary_part.added" in names
+        assert "response.reasoning_summary_text.done" in names
+        assert "response.reasoning_summary_part.done" in names
+        added = [p["item"] for e, p in events
+                 if e == "response.output_item.added"
+                 and p["item"]["type"] == "reasoning"]
+        assert len(added) == 1
+        rs_id = added[0]["id"]
+        deltas = [p for e, p in events
+                  if e == "response.reasoning_summary_text.delta"]
+        assert deltas and all(d["item_id"] == rs_id for d in deltas)
+        assert deltas[0]["delta"] == "hmm"
+        assert deltas[0]["summary_index"] == 0
+        done = [p for e, p in events
+                if e == "response.output_item.done"
+                and p["item"]["type"] == "reasoning"]
+        assert done and done[0]["item"]["summary"][0]["text"] == "hmm"
+        # the assistant message follows the reasoning item
+        msg = [p for e, p in events
+               if e == "response.output_item.added"
+               and p["item"]["type"] == "message"]
+        assert msg and msg[0]["output_index"] == 1
+
     def test_engine_error_yields_failed_event(self):
         class ExplodingBackend(FakeBackend):
             async def complete_openai_stream(self, messages, **kw):

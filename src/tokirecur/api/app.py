@@ -2028,6 +2028,7 @@ def create_app(
         )
         resp_id = f"resp-{int(time.time() * 1000)}"
         msg_id = f"msg-{resp_id}"
+        rs_id = f"rs-{resp_id}"
         created = int(time.time())
 
         def event(name: str, payload: dict) -> str:
@@ -2045,17 +2046,15 @@ def create_app(
             "id": resp_id, "object": "response", "created_at": created,
             "status": "in_progress", "model": req.model,
         })
-        yield event("response.output_item.added", {
-            "id": resp_id, "object": "response", "created_at": created,
-            "output_index": 0,
-            "item": {"id": msg_id, "type": "message", "role": "assistant",
-                     "status": "in_progress", "content": []},
-        })
-        yield event("response.content_part.added", {
-            "id": resp_id, "object": "response", "created_at": created,
-            "item_id": msg_id, "output_index": 0, "content_index": 0,
-            "part": {"type": "output_text", "text": "", "annotations": []},
-        })
+        # Codex renders a reasoning block only when the stream carries a
+        # real reasoning output item; reasoning deltas attached to the
+        # message item are dropped by its parser and the turn looks like
+        # "running but not outputting". Items are therefore emitted lazily,
+        # in the order the OpenAI Responses API uses: reasoning first, then
+        # the assistant message.
+        msg_started = False
+        rs_started = False
+        msg_index = 0
 
         finish_reason: str | None = None
         result: Any = None
@@ -2089,24 +2088,62 @@ def create_app(
                 kind = item["kind"]
                 if kind == "delta":
                     text_parts.append(item["delta"])
+                    if not msg_started:
+                        msg_started = True
+                        msg_index = 1 if rs_started else 0
+                        yield event("response.output_item.added", {
+                            "id": resp_id, "object": "response",
+                            "created_at": created,
+                            "output_index": msg_index,
+                            "item": {"id": msg_id, "type": "message",
+                                     "role": "assistant",
+                                     "status": "in_progress", "content": []},
+                        })
+                        yield event("response.content_part.added", {
+                            "id": resp_id, "object": "response",
+                            "created_at": created,
+                            "item_id": msg_id, "output_index": msg_index,
+                            "content_index": 0,
+                            "part": {"type": "output_text", "text": "",
+                                     "annotations": []},
+                        })
                     yield event("response.output_text.delta", {
                         "id": resp_id, "object": "response",
                         "created_at": created,
-                        "item_id": msg_id, "output_index": 0,
+                        "item_id": msg_id, "output_index": msg_index,
                         "content_index": 0, "delta": item["delta"],
                     })
                 elif kind == "reasoning":
                     reasoning_parts.append(item["delta"])
+                    if not rs_started:
+                        rs_started = True
+                        yield event("response.output_item.added", {
+                            "id": resp_id, "object": "response",
+                            "created_at": created,
+                            "output_index": 0,
+                            "item": {"id": rs_id, "type": "reasoning",
+                                     "summary": []},
+                        })
+                        yield event("response.reasoning_summary_part.added", {
+                            "id": resp_id, "object": "response",
+                            "created_at": created,
+                            "item_id": rs_id, "output_index": 0,
+                            "summary_index": 0,
+                            "part": {"type": "summary_text", "text": ""},
+                        })
                     yield event("response.reasoning_summary_text.delta", {
                         "id": resp_id, "object": "response",
                         "created_at": created,
-                        "item_id": msg_id, "output_index": 0,
+                        "item_id": rs_id, "output_index": 0,
+                        "summary_index": 0,
+                        "delta": item["delta"],
                         "summary": [{"type": "summary_text",
                                      "text": item["delta"]}],
                     })
                 elif kind == "tool_calls":
+                    tool_base = 1 if rs_started else 0
                     for chunk in item["tool_calls"]:
-                        idx = chunk.get("index", 0)
+                        idx = chunk.get("index", 0) + tool_base
                         state = tool_state.setdefault(idx, {
                             "call_id": chunk.get("id"),
                             "name": (chunk.get("function") or {}).get("name"),
@@ -2161,24 +2198,62 @@ def create_app(
 
         text = "".join(text_parts)
         reasoning = "".join(reasoning_parts)
-        yield event("response.output_text.done", {
-            "id": resp_id, "object": "response", "created_at": created,
-            "item_id": msg_id, "output_index": 0, "content_index": 0,
-            "text": text,
-        })
-        yield event("response.content_part.done", {
-            "id": resp_id, "object": "response", "created_at": created,
-            "item_id": msg_id, "output_index": 0, "content_index": 0,
-            "part": {"type": "output_text", "text": text, "annotations": []},
-        })
-        yield event("response.output_item.done", {
-            "id": resp_id, "object": "response", "created_at": created,
-            "output_index": 0,
-            "item": {"id": msg_id, "type": "message",
-                     "status": "completed", "role": "assistant",
-                     "content": [{"type": "output_text", "text": text,
-                                  "annotations": []}]},
-        })
+        if reasoning:
+            yield event("response.reasoning_summary_text.done", {
+                "id": resp_id, "object": "response", "created_at": created,
+                "item_id": rs_id, "output_index": 0, "summary_index": 0,
+                "text": reasoning,
+                "summary": [{"type": "summary_text", "text": reasoning}],
+            })
+            yield event("response.reasoning_summary_part.done", {
+                "id": resp_id, "object": "response", "created_at": created,
+                "item_id": rs_id, "output_index": 0, "summary_index": 0,
+                "part": {"type": "summary_text", "text": reasoning},
+            })
+            yield event("response.output_item.done", {
+                "id": resp_id, "object": "response", "created_at": created,
+                "output_index": 0,
+                "item": {"id": rs_id, "type": "reasoning",
+                         "status": "completed",
+                         "summary": [{"type": "summary_text",
+                                      "text": reasoning}]},
+            })
+        if text and not msg_started:
+            msg_started = True
+            msg_index = 1 if rs_started else 0
+            yield event("response.output_item.added", {
+                "id": resp_id, "object": "response", "created_at": created,
+                "output_index": msg_index,
+                "item": {"id": msg_id, "type": "message", "role": "assistant",
+                         "status": "in_progress", "content": []},
+            })
+            yield event("response.content_part.added", {
+                "id": resp_id, "object": "response", "created_at": created,
+                "item_id": msg_id, "output_index": msg_index,
+                "content_index": 0,
+                "part": {"type": "output_text", "text": "", "annotations": []},
+            })
+        if msg_started:
+            yield event("response.output_text.done", {
+                "id": resp_id, "object": "response", "created_at": created,
+                "item_id": msg_id, "output_index": msg_index,
+                "content_index": 0, "text": text,
+            })
+            yield event("response.content_part.done", {
+                "id": resp_id, "object": "response", "created_at": created,
+                "item_id": msg_id, "output_index": msg_index,
+                "content_index": 0,
+                "part": {"type": "output_text", "text": text,
+                         "annotations": []},
+            })
+            yield event("response.output_item.done", {
+                "id": resp_id, "object": "response", "created_at": created,
+                "output_index": msg_index,
+                "item": {"id": msg_id, "type": "message",
+                         "status": "completed", "role": "assistant",
+                         "content": [{"type": "output_text", "text": text,
+                                      "annotations": []}]},
+            })
 
         tool_calls = result.tool_calls or []
         for idx, tc in enumerate(tool_calls):
@@ -2199,13 +2274,6 @@ def create_app(
                          or f"call_{idx}_{resp_id}",
                          "name": function.get("name") or "",
                          "arguments": function.get("arguments") or ""},
-            })
-
-        if reasoning:
-            yield event("response.reasoning_summary_text.done", {
-                "id": resp_id, "object": "response", "created_at": created,
-                "item_id": msg_id, "output_index": 0,
-                "summary": [{"type": "summary_text", "text": reasoning}],
             })
 
         usage = {
