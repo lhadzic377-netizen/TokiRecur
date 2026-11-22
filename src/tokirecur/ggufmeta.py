@@ -86,6 +86,11 @@ class GgufMeta:
     n_head_kv: int | None = None
     context_length: int | None = None
     rope: GgufRope = GgufRope()
+    #: ``general.architecture`` — the llama.cpp architecture name the
+    #: file asks for ("qwen4exp", "inkling2_loop", ...). A build that
+    #: predates the architecture's upstream merge refuses the file with
+    #: "unknown model architecture", so the name is worth carrying.
+    architecture: str | None = None
 
     @property
     def complete(self) -> bool:
@@ -315,6 +320,7 @@ def _read_gguf_meta(path: Path | str) -> GgufMeta:
                         if isinstance(rope.get("beta_slow"), (int, float)) else None
                     ),
                 ),
+                architecture=arch,
             )
     except (OSError, struct.error, UnicodeDecodeError, ValueError,
             MemoryError, OverflowError):

@@ -281,7 +281,10 @@ def test_pick_asset_never_picks_runtime_archive_alone():
 
 def test_rocm_env_defaults():
     env = _rocm_env(None)
-    assert env == {"GGML_CUDA_ENABLE_UNIFIED_MEMORY": "1"}
+    # No CUDA knob: the HIP backend reads GGML_CUDA_ENABLE_UNIFIED_MEMORY
+    # too, and with it on an AMD box answers with repeated garbage.
+    assert "GGML_CUDA_ENABLE_UNIFIED_MEMORY" not in env
+    assert env == {}
 
 
 def test_rocm_env_with_gfx():

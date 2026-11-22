@@ -2700,7 +2700,16 @@ def _detect_gfx_version() -> str | None:
 
 
 def _rocm_env(gfx: str | None) -> dict[str, str]:
-    env = {"GGML_CUDA_ENABLE_UNIFIED_MEMORY": "1"}
+    """Environment for a ROCm build.
+
+    No CUDA knobs here. ``GGML_CUDA_ENABLE_UNIFIED_MEMORY`` belongs to
+    the CUDA backend, but the HIP backend reads the same name and
+    enables a unified-memory path that silently corrupts inference on
+    some AMD GPUs: the server answers, the tokens are repeated garbage
+    and the reply comes back empty. The ROCm build already uses unified
+    memory, so the variable only has a way to hurt.
+    """
+    env: dict[str, str] = {}
     if gfx:
         env["HSA_OVERRIDE_GFX_VERSION"] = gfx
     return env

@@ -6,6 +6,46 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.23] - 2026-11-22
+
+### Fixed
+- **Reasoning reaches codex again.** The Responses stream carried the
+  model's reasoning as deltas attached to the assistant *message* item,
+  and codex's parser drops those: the model thought, the turn looked
+  empty, and nothing was on screen. The stream now opens a real
+  reasoning item (index 0) with a summary part, sends the
+  spec-shaped `reasoning_summary_text.delta` events (`delta` plus
+  `summary_index`, addressed to the reasoning item), closes that item
+  - before the assistant message opens, the order the Responses API
+  uses - and then emits the message as index 1. Tool calls move past
+  the reasoning item. A turn that thinks out loud is now visible while
+  it happens.
+- **A ROCm install no longer carries a CUDA knob.** The ROCm setup
+  wrote `GGML_CUDA_ENABLE_UNIFIED_MEMORY=1` into the model's
+  environment. That variable belongs to the CUDA backend, but the HIP
+  backend reads the same name and turns on a unified-memory path that
+  silently corrupts inference on some AMD GPUs: the server answers,
+  every token is repeated garbage, and the reply comes back empty -
+  with nothing in the logs to explain it. The variable is gone from
+  new installs, and the registry repair takes it out of the entries
+  that older installs already wrote (only when the model's build is
+  ROCm, so a CUDA box keeps the knob it wants).
+- **The registry repair no longer throws away a pinned build.** A
+  model that pins its own `llama-server` - because it needs a
+  different llama.cpp, or a locally tuned one - lost that pin the
+  next time the repair ran, and silently started on the default build
+  instead. Repairing the environment now leaves the pinned binary
+  alone.
+- **A model the installed build cannot load says so.** A llama.cpp
+  build only knows the architectures that existed when it was compiled.
+  Inkling 2 Mini asks for `inkling2_loop`, which arrived upstream in
+  ggml-org/llama.cpp#32694; a build from before that merge dies
+  inside the server with "unknown model architecture", which reads
+  like a truncated download and sends people hunting for the wrong
+  file. The launcher now refuses before the process starts, naming the
+  architecture the GGUF asks for and the two ways out: a newer
+  llama.cpp release, or a rebuild from source.
+
 ## [0.3.22] - 2026-11-20
 
 ### Added

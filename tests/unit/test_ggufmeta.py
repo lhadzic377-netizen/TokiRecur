@@ -49,7 +49,7 @@ def test_reads_core_metadata(tmp_path):
         "qwen2.context_length": 32768,
     })
     meta = read_gguf_meta(p)
-    assert meta == GgufMeta(1024, 16, 16, 8, 32768)
+    assert meta == GgufMeta(1024, 16, 16, 8, 32768, architecture="qwen2")
     assert meta.complete
 
 
@@ -158,7 +158,7 @@ def test_unknown_architecture_falls_back_to_llama(tmp_path):
         "llama.context_length": 4096,
     })
     meta = read_gguf_meta(p)
-    assert meta == GgufMeta(512, 8, 8, 8, 4096)
+    assert meta == GgufMeta(512, 8, 8, 8, 4096, architecture="unknownarch")
 
 
 def test_missing_context_length_is_none(tmp_path):

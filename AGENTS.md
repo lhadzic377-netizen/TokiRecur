@@ -18,6 +18,26 @@
   llama.cpp master (commit b94041a98) for this box. llama.cpp ships Linux
   ROCm assets again as of ROCm 10.0 (b12024); rebuild with
   `./scripts/build_llama_cpp.sh` (LLAMA_CPP_SRC + LLAMA_CPP_BLD overridable).
+- **Do not put `GGML_CUDA_ENABLE_UNIFIED_MEMORY=1` on a ROCm model.** The
+  HIP backend reads that CUDA name too; with it on, this box answered with
+  repeated garbage tokens and an empty message, silently. It is a CUDA knob
+  for the CUDA build only - 0.3.23 drops it from new ROCm installs and
+  removes it from registries that older installs wrote.
+- **Inkling 2 Mini needs a build that knows `inkling2_loop`** (llama.cpp
+  PR #32694, merged 2026-11-20). The loop-capable build for this box is
+  `~/.local/state/tokirecur/bin-inkling/llama-server` (upstream master
+  29b52d3, gfx1151 + UMA); the registry entry pins it. `toki` refuses to
+  start a model whose architecture the installed build does not know, and
+  says which architecture the GGUF asks for.
+- **Inkling on this iGPU is slow by nature, not by misconfiguration:** it is
+  a looped transformer (24 physical layers, the 12-layer core runs 3x per
+  token = 48 layer evaluations per token, 128 experts with 8 active).
+  Measured on the 8060S: prefill ~260 tok/s at 7k tokens falling to
+  ~100 tok/s at 69k, decode ~7 tok/s, GPU pegged at 100%. codex sends
+  ~63k tokens per turn, so the first turn after a restart costs 8-11
+  minutes; the KV prefix is cached after that (follow-ups evaluate only
+  the new tokens), so do not restart the stack between turns. Bigger
+  batches (`-b`/`-ub`) and a smaller context do not move it.
 - To smoke-test chat end-to-end without touching the running daemon, start a
   throwaway one from the repo:
   `nohup .venv/bin/toki serve --host 127.0.0.1 --port 8799 --backend-url http://127.0.0.1:8094 >/tmp/opencode/toki-serve-smoke.log 2>&1 &`

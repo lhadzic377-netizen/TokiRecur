@@ -4478,6 +4478,36 @@ def warn_other_models(spec: ModelSpec) -> None:
             continue
 
 
+def _check_arch(spec: ModelSpec) -> None:
+    """Refuse to start a model the installed llama-server cannot load.
+
+    A llama.cpp build only knows the architectures that existed when it
+    was compiled. A model that needs a newer one - Inkling 2 Mini asks
+    for `inkling2_loop`, added upstream in ggml-org/llama.cpp#32694 -
+    dies inside the server with "unknown model architecture", which
+    reads like a broken download and sends people hunting for a
+    truncated file. Say it here, with the way out.
+    """
+    binary = _resolve_binary(spec)
+    try:
+        from ..arch import arch_support_hint, binary_supports_arch
+        from ..ggufmeta import read_gguf_meta
+
+        arch = read_gguf_meta(spec.gguf).architecture
+    except Exception:
+        return
+    if binary_supports_arch(binary, arch) is not False:
+        return
+    raise RuntimeError(
+        f"{spec.name}: the installed llama-server cannot load this model.\n"
+        f"  the GGUF asks for the '{arch}' architecture and the build at\n"
+        f"  {binary} does not know it ({arch_support_hint(arch)}).\n"
+        "  fix: install a newer llama.cpp build -\n"
+        "       toki model install-llama --tag <newer-tag>\n"
+        "    or rebuild it from source: ./scripts/build_llama_cpp.sh"
+    )
+
+
 def start_model(spec: ModelSpec, wait: bool = True) -> None:
     """Bring up the model's llama-server + daemon (idempotent)."""
     state = spec.state_dir()
@@ -4530,6 +4560,7 @@ def start_model(spec: ModelSpec, wait: bool = True) -> None:
         resolve_gguf_path(spec)  # raises a one-command hint when missing
         _check_ram(spec)
         _check_draft(spec)
+        _check_arch(spec)
         ctx, kv, parallel = _fit_plan(spec)
         if ctx < spec.ctx_size or kv != spec.kv or parallel != spec.parallel:
             logger.warning(
@@ -4800,6 +4831,44 @@ def remove_model(
     }
 
 
+#: Backend probe results, keyed by binary path. The probe shells out to
+#: ldd, so the answer is remembered for the life of the process.
+_BINARY_BACKEND_CACHE: dict[str, str | None] = {}
+
+
+def _binary_backend(binary: str) -> str | None:
+    """The backend a llama-server build uses, cached per path."""
+    if binary in _BINARY_BACKEND_CACHE:
+        return _BINARY_BACKEND_CACHE[binary]
+    try:
+        from .. import diagnose
+
+        backend = diagnose.binary_backend(binary)
+    except Exception:
+        backend = None
+    _BINARY_BACKEND_CACHE[binary] = backend
+    return backend
+
+
+def _heal_rocm_env(spec: ModelSpec, fallback_binary: str) -> dict[str, str] | None:
+    """Drop the CUDA unified-memory knob from a ROCm model's env.
+
+    ``GGML_CUDA_ENABLE_UNIFIED_MEMORY`` belongs to the CUDA backend, but
+    the HIP backend reads the same name. With it on, some AMD GPUs
+    answer with repeated garbage and an empty message instead of the
+    model's text - silently, with nothing in the logs. Older installs
+    wrote that variable into the registry; this removes it again.
+    """
+    env = dict(spec.env or {})
+    if "GGML_CUDA_ENABLE_UNIFIED_MEMORY" not in env:
+        return None
+    binary = spec.binary if spec.binary and spec.binary != "llama-server" else fallback_binary
+    if _binary_backend(binary) != "ROCm":
+        return None
+    env.pop("GGML_CUDA_ENABLE_UNIFIED_MEMORY", None)
+    return env
+
+
 def backfill_binary_env(specs: list[ModelSpec] | None = None) -> list[str]:
     """Rewrite any non-default registry entry missing `binary`/`env`
     to inherit the machine's tuned build (ROCm build + HSA vars)
@@ -4847,10 +4916,19 @@ def backfill_binary_env(specs: list[ModelSpec] | None = None) -> list[str]:
             continue
         needs_binary = not s.binary or s.binary == "llama-server"
         needs_env = not s.env
-        if needs_binary or needs_env:
+        healed_env = _heal_rocm_env(s, binary)
+        if needs_binary or needs_env or healed_env is not None:
             new_raw = dict(s.raw)
-            new_raw["binary"] = binary
-            new_raw["env"] = dict(env)
+            if healed_env is not None:
+                new_raw["env"] = healed_env
+            # A pinned binary is the user's choice (a model that needs a
+            # different llama.cpp build, a locally tuned one). Repairing
+            # the env must not throw that choice away - it used to, and
+            # the model silently started on a build that cannot load it.
+            if needs_binary:
+                new_raw["binary"] = binary
+            if needs_env:
+                new_raw["env"] = dict(env)
             new_raw.setdefault("source", "pulled")
             # Mirror load_registry's defaults so ModelSpec(**raw) accepts it.
             new_raw.setdefault("label", new_raw["name"])
@@ -4861,7 +4939,8 @@ def backfill_binary_env(specs: list[ModelSpec] | None = None) -> list[str]:
             new_raw.setdefault("model_id", new_raw["name"])
             new_raw.setdefault("extra_args", [])
             new_s = ModelSpec(raw=new_raw, **new_raw)
-            if new_s.binary != s.binary or dict(new_s.env) != dict(s.env):
+            if (new_s.binary != s.binary or dict(new_s.env) != dict(s.env)
+                    or healed_env is not None):
                 updated.append(s.name)
             new_specs.append(new_s)
         else:
