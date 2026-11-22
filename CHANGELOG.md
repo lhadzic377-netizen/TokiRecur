@@ -6,7 +6,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.3.24] - 2026-11-22
+## [0.3.23] - 2026-11-22
 
 ### Fixed
 - **A harness that walks away no longer keeps the GPU generating.** Killed
@@ -39,9 +39,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   generating on that slot, so it is not a cancellation primitive - the
   streaming path cancels by closing the HTTP connection instead.
 
-## [0.3.23] - 2026-11-22
-
-### Fixed
 - **Reasoning reaches codex again.** The Responses stream carried the
   model's reasoning as deltas attached to the assistant *message* item,
   and codex's parser drops those: the model thought, the turn looked
