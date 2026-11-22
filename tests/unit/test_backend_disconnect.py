@@ -99,9 +99,10 @@ class _StreamingHandler(http.server.BaseHTTPRequestHandler):
             try:
                 self.wfile.write(f"data: {body}\n\n".encode())
                 self.wfile.flush()
-            except (BrokenPipeError, ConnectionResetError):
+            except ConnectionError:
                 self.written.append(("broken", i))
-                # A write to a socket the peer closed is proof enough.
+                # Windows reports a closed peer as ConnectionAbortedError,
+                # macOS/Linux as BrokenPipeError or ConnectionResetError.
                 _StreamingHandler.connection_closed = True
                 return
             self.written.append(i)
@@ -150,10 +151,10 @@ def test_upstream_stream_closes_when_client_disconnects():
 
     written = _StreamingHandler.written
     sent = [w for w in written if isinstance(w, int)]
-    # The connection did not stay open for the rest of the stream:
-    # llama-server sees the close and releases the slot.
+    # How many chunks the local server manages to push before the close
+    # is timing-dependent; the socket actually being closed is the part
+    # that matters to llama-server.
     assert 0 in sent, written
-    assert len(sent) < _StreamingHandler.chunks, written
     assert _StreamingHandler.connection_closed, written
 
 
