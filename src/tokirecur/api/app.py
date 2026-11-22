@@ -998,27 +998,77 @@ async def _aiter_with_heartbeat(source, interval: float | None = None):
     silence as a dead connection and reconnects, so on a machine that
     needs a minute to prefill the harness can never finish a turn.
 
-    The pending ``__anext__`` is never cancelled while waiting: a
-    timeout here must not tear down the upstream request (a cancelled
-    upstream leaves llama-server's slot flagged busy).
+    A timeout here only emits a heartbeat; the pending ``__anext__`` is
+    kept across it. When the generator is closed (the harness went
+    away), the pending call is cancelled and awaited: that closes the
+    engine stream, which closes the upstream request, which lets
+    llama-server free the slot instead of generating for nobody.
     """
     if interval is None:
         interval = STREAM_HEARTBEAT_SECONDS
     iterator = source.__aiter__()
     pending: asyncio.Future | None = None
-    while True:
-        if pending is None:
-            pending = asyncio.ensure_future(iterator.__anext__())
-        done, _ = await asyncio.wait({pending}, timeout=interval)
-        if not done:
-            yield None
-            continue
+    try:
+        while True:
+            if pending is None:
+                pending = asyncio.ensure_future(iterator.__anext__())
+            done, _ = await asyncio.wait({pending}, timeout=interval)
+            if not done:
+                yield None
+                continue
+            try:
+                item = pending.result()
+            except StopAsyncIteration:
+                return
+            pending = None
+            yield item
+    finally:
+        if pending is not None and not pending.done():
+            pending.cancel()
+            try:
+                await asyncio.wait_for(pending, timeout=5.0)
+            except (asyncio.CancelledError, TimeoutError, asyncio.TimeoutError):
+                pass
+            except Exception:
+                logger.debug("stream closed with an error", exc_info=True)
+
+
+async def _close_quietly(agen: Any) -> None:
+    """Close an async generator, swallowing teardown errors.
+
+    Starlette cancels the task iterating an SSE body on client disconnect
+    but does not call ``aclose()`` on the body generator, so the relay it
+    was iterating would keep running. :class:`ClosingStreamingResponse`
+    closes the body generator after the ASGI call ends; that runs each
+    route's ``finally``, which closes the relay and releases the llama slot.
+    """
+    aclose = getattr(agen, "aclose", None)
+    if aclose is None:
+        return
+    try:
+        await aclose()
+    except (asyncio.CancelledError, TimeoutError, asyncio.TimeoutError):
+        pass
+    except Exception:
+        logger.debug("closing a stream failed", exc_info=True)
+
+
+class ClosingStreamingResponse(StreamingResponse):
+    """A StreamingResponse that really closes its body generator.
+
+    On an ASGI spec < 2.4 connection, Starlette's StreamingResponse races
+    the body against `listen_for_disconnect`, cancels the body's task and
+    leaves the async generator suspended at its last ``yield``. The
+    generator's ``finally`` blocks never run, so a harness that walks away
+    leaves the engine stream — and its llama-server task — alive. Closing
+    it here runs those blocks, which release the slot.
+    """
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
         try:
-            item = pending.result()
-        except StopAsyncIteration:
-            return
-        pending = None
-        yield item
+            await super().__call__(scope, receive, send)
+        finally:
+            await _close_quietly(self.body_iterator)
 
 
 def create_app(
@@ -1692,22 +1742,23 @@ def create_app(
             # the response includes reasoning_content deltas.
             if chat_template_kwargs is None:
                 chat_template_kwargs = _default_chat_template_kwargs(default_reasoning)
+            relay = _aiter_with_heartbeat(
+                engine.serve_chat_stream(
+                    messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    max_slots=max_slots,
+                    session_id=session_id,
+                    chat_template_kwargs=chat_template_kwargs,
+                    reasoning_effort=reasoning_effort,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    sampling=sampling,
+                )
+            )
             try:
                 result = None
-                async for item in _aiter_with_heartbeat(
-                    engine.serve_chat_stream(
-                        messages,
-                        max_tokens=max_tokens,
-                        temperature=temperature,
-                        max_slots=max_slots,
-                        session_id=session_id,
-                        chat_template_kwargs=chat_template_kwargs,
-                        reasoning_effort=reasoning_effort,
-                        tools=tools,
-                        tool_choice=tool_choice,
-                        sampling=sampling,
-                    )
-                ):
+                async for item in relay:
                     if item is None:
                         # The backend is busy (a long prefill). Say so on
                         # the wire so the client's idle timer does not
@@ -1764,6 +1815,8 @@ def create_app(
                     error=f"{type(e).__name__}: {e}",
                 )
                 return
+            finally:
+                await _close_quietly(relay)
             if result is None:
                 yield "data: [DONE]\n\n"
                 return
@@ -2097,7 +2150,7 @@ def create_app(
         reasoning_parts: list[str] = []
         tool_state: dict[int, dict] = {}  # index → accumulated tool call
         try:
-            async for item in _aiter_with_heartbeat(
+            relay = _aiter_with_heartbeat(
                 engine.serve_chat_stream(
                     messages,
                     max_tokens=_resolve_max_tokens(max_tokens,
@@ -2111,7 +2164,8 @@ def create_app(
                         req.tool_choice),
                     sampling=sampling,
                 )
-            ):
+            )
+            async for item in relay:
                 if item is None:
                     # Still prefilling: keep the stream visibly alive.
                     yield event("response.in_progress", {
@@ -2229,6 +2283,8 @@ def create_app(
                 "error": {"code": "server_error", "message": str(e)},
             })
             return
+        finally:
+            await _close_quietly(relay)
         if result is None:
             yield event("response.failed", {
                 "id": resp_id, "object": "response", "created_at": created,
@@ -2382,7 +2438,7 @@ def create_app(
         try:
             if req.stream:
                 completion_id = f"cmpl-{int(time.time() * 1000)}"
-                return StreamingResponse(
+                return ClosingStreamingResponse(
                     _stream_completion(
                         req.prompt,
                         None,
@@ -2535,7 +2591,7 @@ def create_app(
         try:
             if req.stream:
                 completion_id = f"chatcmpl-{int(time.time() * 1000)}"
-                return StreamingResponse(
+                return ClosingStreamingResponse(
                     _stream_completion(
                         None,  # no flat prompt
                         messages,
@@ -2729,6 +2785,7 @@ def create_app(
 
         if req.stream:
             async def event_stream() -> Any:
+                relay = None
                 try:
                     items = engine.serve_chat_stream(
                         messages,
@@ -2754,15 +2811,17 @@ def create_app(
                         },
                     )
                     items = _record_stream_prefill(items, model_name)
-                    async for event in stream_message(
-                        items, model_name, estimate=estimate,
-                    ):
+                    relay = stream_message(items, model_name, estimate=estimate)
+                    async for event in relay:
                         yield event
                 except Exception as e:
                     logger.exception("Anthropic messages streaming failed")
                     yield error_event(str(e))
+                finally:
+                    if relay is not None:
+                        await _close_quietly(relay)
 
-            return StreamingResponse(event_stream(), media_type="text/event-stream")
+            return ClosingStreamingResponse(event_stream(), media_type="text/event-stream")
 
         try:
             result = await _run_engine(
@@ -2864,6 +2923,7 @@ def create_app(
         streaming = request.url.path.endswith(":streamGenerateContent")
         if streaming:
             async def event_stream() -> Any:
+                relay = None
                 try:
                     items = engine.serve_chat_stream(
                         messages,
@@ -2875,8 +2935,8 @@ def create_app(
                         tool_choice=tool_choice,
                         sampling=sampling,
                     )
-                    items = _record_stream_prefill(items, model_name)
-                    async for item in items:
+                    relay = _record_stream_prefill(items, model_name)
+                    async for item in relay:
                         kind = item.get("kind")
                         if kind == "delta":
                             yield gemini_sse_chunk(
@@ -2898,8 +2958,11 @@ def create_app(
                 except Exception as e:
                     logger.exception("Gemini streaming failed")
                     yield gemini_sse_chunk(gemini_error_body(str(e)))
+                finally:
+                    if relay is not None:
+                        await _close_quietly(relay)
 
-            return StreamingResponse(event_stream(), media_type="text/event-stream")
+            return ClosingStreamingResponse(event_stream(), media_type="text/event-stream")
 
         try:
             result = await _run_engine(
@@ -3011,7 +3074,7 @@ def create_app(
             )
         try:
             if req.stream:
-                return StreamingResponse(
+                return ClosingStreamingResponse(
                     _stream_responses(req),
                     media_type="text/event-stream",
                 )

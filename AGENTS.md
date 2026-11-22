@@ -79,3 +79,28 @@
 - Log quirk: some llama.cpp builds (e.g. custom Clang b10008) suppress
   device_info at `-lv 3`; the launcher then falls back to the build-backend
   label ("log terse (build: ROCm)").
+
+## Streaming / slot lifecycle
+
+- llama-server reads **`id_slot`**, not `slot_id`. Sending `slot_id` is
+  silently ignored and the server auto-assigns a slot. `backend/__init__.py`
+  uses `id_slot` in every completion payload; do not rename it back.
+- llama-server cancels a generation when its HTTP client's socket closes,
+  which is how an abandoned harness turn is stopped. The streaming path
+  therefore uses a **dedicated `httpx.AsyncClient` per request**: a shared
+  pooled client kept the socket open after producer cancellation and the
+  task ran to `max_tokens` with nobody reading it. Closing that client is
+  the cancel primitive; `POST /slots/{id}?action=erase` (`clear_slot`) is
+  only a KV reset and is queued behind any task still running on that slot
+  (`?action=clear` is invalid, HTTP 400).
+- Starlette's `StreamingResponse` cancels the body task on ASGI spec < 2.4
+  disconnect but does not `aclose()` the body generator. The daemon uses
+  `ClosingStreamingResponse`, which closes it; each SSE route then closes
+  its relay in a `finally`, `_aiter_with_heartbeat` cancels its pending
+  `__anext__`, and `serve_chat_stream` releases the slot and closes the
+  upstream stream. All four layers must stay intact, or a disconnect
+  leaves a task generating into a queue nobody consumes.
+- The three-abort smoke test (from the repo `.venv`, daemon on 8848 with a
+  backend on 8149) is in `/tmp/opencode/abort-test.py`: abort a streaming
+  chat after the first chunk, poll `/slots`, expect every slot free within
+  ~0.25s, then send a normal follow-up. Measured 0.25s on 2026-11-22.

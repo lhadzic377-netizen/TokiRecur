@@ -135,9 +135,7 @@ class TestBackendStreaming:
 
 class TestBackendSlotManagement:
     def test_clear_slot_returns_result(self, backend):
-        """clear_slot is a no-op (upstream llama-server doesn't support
-        ?action=clear). The actual slot reset happens on the next
-        request via cache_prompt=False."""
+        """clear_slot erases the slot server-side (?action=erase)."""
         backend.complete_native(
             "Long prompt for testing slot clearing. " * 20,
             slot_id=0,

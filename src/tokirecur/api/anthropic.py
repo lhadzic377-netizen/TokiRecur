@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any
 
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
 
 
 class AnthropicMessagesRequest(BaseModel):
@@ -331,6 +334,12 @@ async def _with_keepalive(
     finally:
         if not task.done():
             task.cancel()
+            try:
+                await asyncio.wait_for(task, timeout=5.0)
+            except (asyncio.CancelledError, TimeoutError, asyncio.TimeoutError):
+                pass
+            except Exception:
+                logger.debug("keepalive pump closed with an error", exc_info=True)
 
 
 async def stream_message(

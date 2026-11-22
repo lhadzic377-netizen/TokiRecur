@@ -6,6 +6,39 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.24] - 2026-11-22
+
+### Fixed
+- **A harness that walks away no longer keeps the GPU generating.** Killed
+  coding-agent clients left their requests streaming into llama-server
+  with nobody reading: each abandoned turn ran to its full token budget
+  (measured ~2k tokens, ~90s on Inkling) and pinned a slot. Two of them
+  wedged every harness behind the same pair of slots - health checks
+  stayed green, completions queued forever, and only a stack restart
+  recovered. Three things were wrong at once: the shared, pooled httpx
+  client kept the upstream TCP socket open when its producer was
+  cancelled, so llama-server never saw the disconnect; Starlette's
+  `StreamingResponse` cancels the body task on disconnect but leaves its
+  async generator suspended at the last `yield`, so the route's cleanup
+  never ran; and the engine left its slot claimed when finalization was
+  skipped. The streaming path now uses a client dedicated to one request
+  (cancelling it closes the socket), every SSE route closes its relay
+  through a `ClosingStreamingResponse`, and the engine releases its slot
+  bookkeeping on cancellation or backend failure. Measured on the pinned
+  build: a slot is free 0.25s after the client aborts, three aborts in a
+  row leave both slots usable, and the next turn answers normally.
+- **Slot routing uses the field llama-server actually reads.** Toki sent
+  `slot_id` in every completion payload, but llama-server reads
+  `id_slot`; it silently ignored the routing decision and auto-assigned
+  a slot. That defeated prefix reuse and made a later slot reset hit a
+  different slot than the one the engine meant. All completion payloads
+  now send `id_slot`.
+- **`clear_slot` calls the endpoint llama-server supports.** `?action=clear`
+  is rejected with HTTP 400 ("Invalid action"); `?action=erase` is the
+  real KV reset. Note that an erase is queued behind a task still
+  generating on that slot, so it is not a cancellation primitive - the
+  streaming path cancels by closing the HTTP connection instead.
+
 ## [0.3.23] - 2026-11-22
 
 ### Fixed

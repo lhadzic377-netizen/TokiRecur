@@ -640,7 +640,16 @@ class RecyclingEngine:
         )
 
         # Send the request via the supplied backend_call.
-        backend_result = backend_call(slot_id, cache_prompt)
+        try:
+            backend_result = backend_call(slot_id, cache_prompt)
+        except BaseException:
+            # A failed call never reaches _finalize_request, which is
+            # where the slot is normally released. Release it here or
+            # the slot stays claimed (and avoided) for the daemon's
+            # lifetime.
+            with self._state_lock:
+                self._busy_slots.discard(slot_id)
+            raise
 
         return self._finalize_request(
             tokenize_text=tokenize_text,
@@ -705,7 +714,7 @@ class RecyclingEngine:
         )
 
         backend_result: dict[str, Any] | None = None
-        async for item in self.backend.complete_openai_stream(
+        upstream = self.backend.complete_openai_stream(
             messages,
             slot_id=slot_id,
             max_tokens=max_tokens,
@@ -716,45 +725,74 @@ class RecyclingEngine:
             tools=tools,
             tool_choice=tool_choice,
             sampling=sampling,
-        ):
-            if item.get("kind") == "delta":
-                yield {"kind": "delta", "delta": item.get("delta", "")}
-            elif item.get("kind") == "reasoning":
-                yield {"kind": "reasoning", "delta": item.get("delta", "")}
-            elif item.get("kind") == "tool_calls":
-                yield {"kind": "tool_calls", "tool_calls": item.get("tool_calls", [])}
-            elif item.get("kind") == "finish":
-                yield {"kind": "finish", "finish_reason": item.get("finish_reason")}
-            else:
-                backend_result = item.get("result", {})
-
-        if backend_result is None:
-            backend_result = {
-                "text": "",
-                "tool_calls": None,
-                "finish_reason": None,
-                "tokens_generated": 0,
-                "prefill_tokens": len(new_tokens),
-                "ttft_ms": 0.0,
-                "total_ms": (time.perf_counter() - started) * 1000.0,
-                "prefill_tokens_per_sec": 0.0,
-            }
-
-        # Finalizing writes the index (SQLite) and may query llama-server
-        # for a free pool slot — both blocking, so keep them off the loop.
-        result = await asyncio.to_thread(
-            self._finalize_request,
-            tokenize_text=routing_text,
-            new_tokens=new_tokens,
-            new_embedding=new_embedding,
-            slot_id=slot_id,
-            reuse_depth=reuse_depth,
-            spilled=spilled,
-            session_id=session_id,
-            backend_result=backend_result,
-            started=started,
-            cache_id=cache_id,
         )
+        try:
+            async for item in upstream:
+                if item.get("kind") == "delta":
+                    yield {"kind": "delta", "delta": item.get("delta", "")}
+                elif item.get("kind") == "reasoning":
+                    yield {"kind": "reasoning", "delta": item.get("delta", "")}
+                elif item.get("kind") == "tool_calls":
+                    yield {"kind": "tool_calls", "tool_calls": item.get("tool_calls", [])}
+                elif item.get("kind") == "finish":
+                    yield {"kind": "finish", "finish_reason": item.get("finish_reason")}
+                else:
+                    backend_result = item.get("result", {})
+
+            if backend_result is None:
+                backend_result = {
+                    "text": "",
+                    "tool_calls": None,
+                    "finish_reason": None,
+                    "tokens_generated": 0,
+                    "prefill_tokens": len(new_tokens),
+                    "ttft_ms": 0.0,
+                    "total_ms": (time.perf_counter() - started) * 1000.0,
+                    "prefill_tokens_per_sec": 0.0,
+                }
+
+            # Finalizing writes the index (SQLite) and may query llama-server
+            # for a free pool slot — both blocking, so keep them off the loop.
+            result = await asyncio.to_thread(
+                self._finalize_request,
+                tokenize_text=routing_text,
+                new_tokens=new_tokens,
+                new_embedding=new_embedding,
+                slot_id=slot_id,
+                reuse_depth=reuse_depth,
+                spilled=spilled,
+                session_id=session_id,
+                backend_result=backend_result,
+                started=started,
+                cache_id=cache_id,
+            )
+        except BaseException:
+            # The harness disconnected, the backend failed, or the turn
+            # was cancelled: _finalize_request did not run, so release
+            # the slot here instead of leaving it claimed forever.
+            with self._state_lock:
+                self._busy_slots.discard(slot_id)
+                # The prefix this engine thought the slot held is gone:
+                # the generation was cancelled mid-turn.
+                self._slot_history.pop(slot_id, None)
+                self._slot_context_tokens.pop(slot_id, None)
+            # Close the upstream stream first. Cancelling this generator
+            # does not close the generator it was iterating; without
+            # this the backend's producer task keeps reading llama's
+            # tokens into a queue nobody consumes, and the dedicated
+            # HTTP client's socket stays open, so llama-server never
+            # sees the disconnect that cancels the task.
+            aclose = getattr(upstream, "aclose", None)
+            if aclose is not None:
+                try:
+                    await aclose()
+                except (asyncio.CancelledError, TimeoutError, asyncio.TimeoutError):
+                    pass
+                except Exception:
+                    logger.debug(
+                        "closing the upstream stream failed", exc_info=True,
+                    )
+            raise
         yield {"kind": "result", "result": result}
 
     def _init_slot_state(self) -> None:

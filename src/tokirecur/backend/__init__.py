@@ -220,15 +220,6 @@ def _merge_sampling(payload: dict, sampling: dict | None) -> dict:
     return payload
 
 
-def _swallow_task_result(task: asyncio.Task[Any]) -> None:
-    """Retrieve a finished task's exception so asyncio does not warn that
-    it was never retrieved — the task outlives its consumer on purpose."""
-    try:
-        task.exception()
-    except asyncio.CancelledError:
-        pass
-
-
 #: How long the daemon waits for llama-server before giving up.
 #:
 #: It has to outlast the slowest client, not the average one. Claude
@@ -606,35 +597,21 @@ class LlamaServerBackend(LlamaBackend):
         return {"n_past": 0, "model_id": model_id, "vocab_size": 152064}
 
     def clear_slot(self, slot_id: int) -> dict[str, Any]:
-        """Force-clear a slot's KV state.
+        """Erase a slot's KV state on llama-server.
 
-        llama-server does not expose an endpoint to clear a slot's
-        in-memory KV cache (POST /slots/{id}?action=clear returns 501
-        on current builds). The only way to reset a slot's KV is to
-        send a request with cache_prompt=false, which forces a fresh
-        prefill and overwrites the existing KV state.
+        ``POST /slots/{id}?action=erase`` drops the slot's KV state.
+        Note that the erase is queued behind a task still generating on
+        that slot, so it is not a cancellation primitive: the streaming
+        path cancels a task by closing its dedicated HTTP client instead.
 
-        This method returns success without doing anything — the actual
-        reset happens on the next call to complete() with the same
-        slot_id and cache_prompt=False. Callers should track which
-        slots are "stale" via engine bookkeeping and send the next
-        request with cache_prompt=False.
+        Returns llama-server's reply (``n_erased`` tokens).
         """
-        # Try the endpoint anyway in case future llama-server versions
-        # support it; report the result for diagnostics.
         try:
-            body = self._post(
-                f"/slots/{slot_id}?action=clear", {"slot_id": slot_id}
-            )
+            body = self._post(f"/slots/{slot_id}?action=erase", {"slot_id": slot_id})
             return {"cleared": True, "body": body, "method": "endpoint"}
-        except Exception:
-            # Endpoint not supported — caller must use cache_prompt=false
-            # on the next request to reset the slot.
-            return {
-                "cleared": False,
-                "method": "noop",
-                "note": "next request must use cache_prompt=False",
-            }
+        except Exception as e:
+            logger.warning("clear_slot(%d) failed: %s", slot_id, e)
+            return {"cleared": False, "method": "endpoint", "error": str(e)}
 
     def list_slots(self) -> list[dict[str, Any]]:
         """Return the list of slots and their current state."""
@@ -672,7 +649,7 @@ class LlamaServerBackend(LlamaBackend):
             "n_predict": max_tokens,
             "temperature": temperature,
             "stream": False,
-            "slot_id": slot_id if slot_id is not None else 0,
+            "id_slot": slot_id if slot_id is not None else 0,
             "cache_prompt": cache_prompt,
         }
         _merge_sampling(payload, sampling)
@@ -732,7 +709,7 @@ class LlamaServerBackend(LlamaBackend):
             "n_predict": max_tokens,
             "temperature": temperature,
             "stream": False,
-            "slot_id": slot_id,
+            "id_slot": slot_id,
             "cache_prompt": cache_prompt,
         }
         _merge_sampling(payload, sampling)
@@ -810,7 +787,7 @@ class LlamaServerBackend(LlamaBackend):
             "max_tokens": max_tokens,
             "temperature": temperature,
             "stream": False,
-            "slot_id": slot_id,
+            "id_slot": slot_id,
             "cache_prompt": cache_prompt,
         }
         _merge_sampling(payload, sampling)
@@ -913,13 +890,16 @@ class LlamaServerBackend(LlamaBackend):
 
         The upstream HTTP stream is owned by a producer task, not by this
         generator. A harness that goes away mid-turn (timeout, Ctrl+C, an
-        aborted tool call) cancels this generator — and a cancelled httpx
-        stream closes the connection, which llama-server reads as "cancel
-        this task". It then leaves the slot flagged busy *forever*, so
-        after two such cancellations the whole server is wedged: health
-        checks stay green and every later request hangs until someone
-        restarts the backend. Letting the producer finish lets the task
-        complete and the slot be released.
+        aborted tool call) closes this generator and the producer with it:
+        the cancelled httpx stream closes the upstream connection, and
+        llama-server aborts the task and frees the slot (verified on the
+        build this repo pins — the slot is released within a second).
+
+        Letting the producer run on instead would keep the GPU busy for
+        the whole remaining ``max_tokens`` budget after nobody is left to
+        read it. A 32k-token turn at iGPU decode speed is most of an hour
+        per abandoned request, and two of them starve every other
+        harness behind the saturated slots.
         """
         messages = _normalize_messages(messages)
         payload = {
@@ -928,7 +908,7 @@ class LlamaServerBackend(LlamaBackend):
             "temperature": temperature,
             "stream": True,
             "stream_options": {"include_usage": True},
-            "slot_id": slot_id,
+            "id_slot": slot_id,
             "cache_prompt": cache_prompt,
         }
         _merge_sampling(payload, sampling)
@@ -957,8 +937,10 @@ class LlamaServerBackend(LlamaBackend):
             # across delta chunks.
             tool_calls_by_index: dict[int, dict] = {}
             try:
-                client = self._stream_client()
-                async with client.stream(
+                async with httpx.AsyncClient(
+                        timeout=httpx.Timeout(self.timeout, connect=10.0),
+                ) as client:
+                    async with client.stream(
                         "POST",
                         f"{self.base_url}/v1/chat/completions",
                         json=payload,
@@ -1069,9 +1051,15 @@ class LlamaServerBackend(LlamaBackend):
                 yield item
         except BaseException:
             # The client went away (CancelledError from a disconnect,
-            # GeneratorExit from aclose()). Let the producer keep
-            # draining upstream so llama-server finishes the task and
-            # releases the slot instead of leaving it wedged.
-            producer.add_done_callback(_swallow_task_result)
+            # GeneratorExit from aclose()). Cancel the producer so the
+            # upstream request closes and llama-server frees the slot
+            # instead of generating for nobody.
+            producer.cancel()
+            try:
+                await asyncio.wait_for(producer, timeout=5.0)
+            except (asyncio.CancelledError, TimeoutError, asyncio.TimeoutError):
+                pass
+            except Exception:
+                logger.debug("producer failed while closing", exc_info=True)
             raise
 
