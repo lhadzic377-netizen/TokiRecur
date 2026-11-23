@@ -155,7 +155,7 @@ def create_dashboard_app(*, reports_dir: Path) -> FastAPI:
     async def root() -> str:
         template = TEMPLATE_DIR / "index.html"
         if template.exists():
-            return template.read_text()
+            return template.read_text(encoding="utf-8")
         return "<h1>Toki Recur Dashboard</h1><p>Template not found.</p>"
 
     if STATIC_DIR.exists():
@@ -168,7 +168,7 @@ def create_dashboard_app(*, reports_dir: Path) -> FastAPI:
             it carried the house palette in its own file. It is the
             same palette now, so the theme reaches the browser too.
             """
-            css = themed_css((STATIC_DIR / "style.css").read_text())
+            css = themed_css((STATIC_DIR / "style.css").read_text(encoding="utf-8"))
             return HTMLResponse(css, media_type="text/css")
 
         app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")

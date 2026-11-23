@@ -542,7 +542,8 @@ def create_web_app(
             from ..tui import art
 
             css = art.themed_root(
-                (STATIC_DIR / "style.css").read_text(), web_variables()
+                (STATIC_DIR / "style.css").read_text(encoding="utf-8"),
+                web_variables(),
             )
             return Response(css, media_type="text/css")
 

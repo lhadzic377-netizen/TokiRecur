@@ -91,6 +91,17 @@ class PublicServer:
             f"Model                 {self.model}",
         ))
 
+    def endpoints_text(self) -> str:
+        """Every route the public origin serves, one per line."""
+        return "\n".join((
+            f"  OpenAI chat       POST {self.openai_base}/chat/completions",
+            f"  OpenAI responses  POST {self.openai_base}/responses",
+            f"  Anthropic         POST {self.anthropic_base}/v1/messages",
+            f"  Google generate   POST {self.google_base}/models/{self.model}:generateContent",
+            f"  Google stream     POST {self.google_base}/models/"
+            f"{self.model}:streamGenerateContent",
+        ))
+
     # -- lifecycle --------------------------------------------------------
 
     def alive(self) -> bool:

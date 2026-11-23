@@ -27,6 +27,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   screen: a key hint in the footer is read once and forgotten, and the
   row is the thing that can be found again. Arrow to it and press Enter.
 
+### Added
+- **`toki public-server`: the public origin, without the screen.** The
+  same quick tunnel the launcher's "Public server" row starts, run from
+  a shell: it prints the base URLs, the API key, the model id and every
+  route the hostname serves, then holds the tunnel open until Ctrl-C.
+  It refuses to start when the active model is not serving, so a dead
+  port is reported as such instead of as a hostname that hangs.
+
 ### Fixed
 - **A theme now changes everything.** Switching a theme repainted the
   panes toki draws in Python and left the rest of the screen in

@@ -452,7 +452,7 @@ def stylesheet() -> str:
     """
     from pathlib import Path
 
-    return Path(__file__).with_name("theme.tcss").read_text()
+    return Path(__file__).with_name("theme.tcss").read_text(encoding="utf-8")
 
 
 #: The CSS variables the stylesheets use that Textual has no name for.

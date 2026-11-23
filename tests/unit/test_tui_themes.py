@@ -138,7 +138,7 @@ def test_the_dashboard_paints_every_slot(theme_file):
 
     theme_file.write_text("gta6\n")
 
-    css = themed_css((STATIC_DIR / "style.css").read_text())
+    css = themed_css((STATIC_DIR / "style.css").read_text(encoding="utf-8"))
     pal = art.palette()
     assert f"--bg: {pal['BG']};" in css
     assert f"--accent: {pal['YELLOW']};" in css
@@ -164,7 +164,10 @@ def test_the_web_surface_paints_every_slot(theme_file):
     from tokirecur.web.server import STATIC_DIR, web_variables
 
     theme_file.write_text("gta6\n")
-    css = art.themed_root((STATIC_DIR / "style.css").read_text(), web_variables())
+    css = art.themed_root(
+        (STATIC_DIR / "style.css").read_text(encoding="utf-8"),
+        web_variables(),
+    )
     pal = art.palette()
 
     assert f"--bg-primary: {pal['BG']};" in css

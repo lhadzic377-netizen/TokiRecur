@@ -87,7 +87,7 @@ def test_the_stylesheet_covers_the_house_palette():
     """
     import re
 
-    raw = (Path(art.__file__).with_name("theme.tcss")).read_text()
+    raw = (Path(art.__file__).with_name("theme.tcss")).read_text(encoding="utf-8")
     house = {v.lower() for v in art.DEFAULT_PALETTE.values()}
     for hexcode in {h.lower() for h in re.findall(r"#[0-9a-f]{6}", raw)}:
         assert hexcode in house, hexcode
@@ -176,13 +176,18 @@ def test_the_dashboard_stylesheet_follows_the_theme():
     response = client.get("/static/style.css")
     assert response.status_code == 200
     css = response.text
-    if art.THEME == art.DEFAULT_THEME:
-        # The house style is what the file already says.
-        assert art.DEFAULT_PALETTE["YELLOW"].lower() in css
-    else:
-        # No house colour is left in the file the browser gets.
-        for slot in art.DEFAULT_PALETTE:
-            assert art.DEFAULT_PALETTE[slot].lower() not in css
+    pal = art.palette()
+    # The palette, by name: every colour the browser gets is the theme's.
+    assert f"--bg: {pal['BG']};" in css
+    assert f"--accent: {pal['YELLOW']};" in css
+    assert f"--text: {pal['TEXT']};" in css
+    assert f"--good: {pal['GREEN']};" in css
+    # Where the theme differs from the house style, the house colour is
+    # gone. A theme may keep a house colour on purpose (openclaw's
+    # ground is the house black), so this is a "differs" check and not
+    # a "shares no colour at all" one.
+    if pal["YELLOW"].lower() != art.DEFAULT_PALETTE["YELLOW"].lower():
+        assert art.DEFAULT_PALETTE["YELLOW"].lower() not in css.lower()
 
 
 def test_the_settings_panel_lists_the_themes():

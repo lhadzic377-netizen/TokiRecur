@@ -131,11 +131,14 @@ on port 443. `p` in the launcher opens a public-server screen, Enter starts a
 credentials for the OpenAI, Anthropic and Google generative AI routes plus the
 daemon's bearer token. Closing the screen stops the tunnel; the hostname is
 random and the key is required, so the public route is only as public as the
-credential makes it.
+credential makes it. The same thing runs from a shell - `toki public-server` -
+for when the screen is not the thing at hand: it prints the credentials and
+every route, then holds the tunnel open until Ctrl-C.
 
 Three of them reach the model their own way. **goose** reads a provider from `~/.config/goose/custom_providers/tokirecur.json` and picks it with `GOOSE_PROVIDER` and `GOOSE_MODEL` in `config.yaml`; its `base_url` is the full request path (goose appends nothing to it) and its key is read from the `TOKI_AUTH_TOKEN` environment variable, so no secret is written to disk. **pool** only speaks to an OpenAI-compatible endpoint in standalone mode, and only the environment selects that mode - the launcher starts it with `POOLSIDE_STANDALONE_BASE_URL`, `POOLSIDE_API_KEY`, `POOLSIDE_STANDALONE_MODEL` and `POOLSIDE_STANDALONE_CONTEXT_LENGTH`, and `~/.config/poolside/settings.yaml` keeps the saved API URL next to the user's own agent servers. **Antigravity** (`agy`) speaks the Gemini API rather than the OpenAI one - it asks for `/v1beta/models/<model>:generateContent` - so the daemon serves that route too, and the CLI is pointed at it with a custom model in `~/.gemini/antigravity-cli/settings.json` and `GOOGLE_GEMINI_BASE_URL` in the environment.
 
 ```bash
+toki public-server                        # public HTTPS origin + credentials
 toki tui                                  # raw / cached / compare: Ctrl+1 / 2 / 3
 toki web --port 7778 --tls-cert cert.pem  # HTTPS + wss
 toki diff --system "<long system>" "<prompt>"   # one-shot raw/cached A/B
@@ -286,6 +289,12 @@ toki theme                # list them, and say which one is in force
 toki theme claude         # switch the whole box to it
 toki theme default        # back to the house style
 ```
+
+A theme reaches every surface: the launcher's panes, its dialogs and
+dropdowns, the chat TUI's panels, the benchmark dashboard and the web
+surface. The palette is Textual's own theme, so its design tokens
+(`$primary`, `$panel`, `$boost`) are the palette's, and the stylesheets
+name variables instead of colours.
 
 `TOKI_THEME=claude toki` applies a theme for one run only. The choice is
 remembered, so the next launcher starts in it. A theme switched from the

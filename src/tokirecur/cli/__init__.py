@@ -187,6 +187,61 @@ def theme(name: str | None) -> None:
     click.echo("start the launcher again to see it")
 
 
+@cli.command("public-server")
+@click.option("--port", type=int, default=None,
+              help="Daemon port to expose (default: the active model's).")
+@click.option("--model", default=None,
+              help="Model id to advertise (default: the active model's).")
+def public_server(port: int | None, model: str | None) -> None:
+    """Expose the daemon at a public HTTPS URL and print the credentials.
+
+    A quick tunnel: a random hostname on port 443 that forwards to the
+    local daemon, with the daemon's bearer token as the credential.
+    It is the same thing the launcher's "Public server" row does, for
+    the times the screen is not the thing at hand - pasting the
+    credentials into another app's custom-endpoint form, for one.
+
+    The hostname lives as long as this command does: Ctrl-C stops it.
+    """
+    import time as _time
+
+    from ..ctl import auth_token, daemon_reachable, load_registry, read_active
+    from ..public_server import PublicServerError, start_public_server
+
+    specs = {s.name: s for s in load_registry()}
+    active = read_active()
+    spec = specs.get(active) if active else None
+    daemon_port = port or (spec.daemon_port if spec else None)
+    if daemon_port is None:
+        raise SystemExit(
+            "error: no model in the registry - run `toki model list` first"
+        )
+    if spec is not None and port is None and not daemon_reachable(spec):
+        raise SystemExit(
+            f"error: {spec.name} is not serving - start it with "
+            f"`toki model use {spec.name}`"
+        )
+    model_id = model or (spec.model_id if spec else active or "")
+    try:
+        server = start_public_server(daemon_port, auth_token(), model_id)
+    except PublicServerError as e:
+        raise SystemExit(f"error: {e}") from None
+    click.echo(server.credentials_text())
+    click.echo("")
+    click.echo(server.endpoints_text())
+    click.echo("")
+    click.echo(f"live at {server.url}")
+    click.echo("ctrl-c stops the tunnel.")
+    try:
+        while True:
+            _time.sleep(1)
+    except KeyboardInterrupt:
+        click.echo("")
+        click.echo("stopping the tunnel ...")
+        server.stop()
+        click.echo("stopped.")
+
+
 @cli.command()
 @click.option(
     "--backend-url", default="http://127.0.0.1:8080",
