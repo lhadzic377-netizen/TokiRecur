@@ -23,6 +23,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   quitting toki) stops the tunnel, and every request still needs the key.
   The screen starts nothing on open - an outbound tunnel is a deliberate
   act - and says so when `cloudflared` is missing or the daemon is down.
+  It is also a **row in the launcher list**, under the apps and always on
+  screen: a key hint in the footer is read once and forgotten, and the
+  row is the thing that can be found again. Arrow to it and press Enter.
 
 ## [0.3.23] - 2026-11-22
 

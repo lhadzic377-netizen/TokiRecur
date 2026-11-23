@@ -9,7 +9,7 @@ from textual.widgets import Static
 
 from tokirecur import ctl
 from tokirecur.public_server import PublicServer
-from tokirecur.tui.launcher import LauncherApp, PublicServerScreen
+from tokirecur.tui.launcher import LAUNCH_APPS, LauncherApp, PublicServerScreen
 
 URL = "https://griffin-designing-sold-polls.trycloudflare.com"
 
@@ -54,6 +54,28 @@ def _fake_starter(seen: dict, factory=TrackedServer):
         seen.update(port=port, api_key=api_key, model=model)
         return factory(url=URL, api_key=api_key, model=model, port=port)
     return starter
+
+
+async def test_the_public_server_is_a_row_in_the_list():
+    """A footer hint is read once; the row is what people look for."""
+    app = LauncherApp()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        pane = str(app.query_one("#pane", Static).render())
+        assert "Public server" in pane
+
+
+async def test_arrowing_to_the_last_row_and_pressing_enter_opens_it():
+    app = LauncherApp()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        for _ in range(len(LAUNCH_APPS)):
+            await pilot.press("down")
+        await pilot.pause()
+        assert app.launch_idx == len(LAUNCH_APPS)
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, PublicServerScreen)
 
 
 async def test_p_opens_the_public_server_screen():

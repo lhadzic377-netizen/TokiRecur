@@ -52,6 +52,14 @@ from . import art, brand
 # launch window changes; the running server can't honour the new
 # value). Mirrors ctl._RESTART_REQUIRED_FIELDS — kept here so the
 # launcher doesn't have to import a private symbol.
+# The public server is listed in the launcher, below the apps. It is not
+# an app: Enter opens the screen that starts the tunnel.
+PUBLIC_ROW_TITLE = "Public server"
+PUBLIC_ROW_DESCRIPTION = (
+    "expose this machine's daemon at a public HTTPS URL "
+    "(OpenAI, Anthropic, Google generative AI)"
+)
+
 _RESTART_REQUIRED_FIELDS = frozenset({
     "ctx_size", "kv", "parallel", "binary", "gguf",
     "llama_port", "daemon_port", "adapter_mode",
@@ -349,7 +357,8 @@ class LauncherApp(App[dict | None]):
 
     def action_move(self, delta: int) -> None:
         if self.focus_pane == "launchers":
-            self.launch_idx = (self.launch_idx + delta) % len(LAUNCH_APPS)
+            # One more row than there are apps: the public server.
+            self.launch_idx = (self.launch_idx + delta) % (len(LAUNCH_APPS) + 1)
         elif self.focus_pane == "models":
             variants = self._variants()
             if not variants:
@@ -893,6 +902,11 @@ class LauncherApp(App[dict | None]):
         if self.focus_pane == "settings":
             self.action_edit_setting()
             return
+        if self.focus_pane == "launchers" and self.launch_idx == len(LAUNCH_APPS):
+            # The public server is listed with the apps, so Enter on it
+            # has to do what the row says rather than launch something.
+            self.action_public_server()
+            return
         app = LAUNCH_APPS[self.launch_idx]
         if self.focus_pane == "models" and self.specs:
             # Enter in the model picker pins and returns to the launcher.
@@ -1078,7 +1092,26 @@ class LauncherApp(App[dict | None]):
                 out.append(row)
         if end < len(LAUNCH_APPS):
             out.append(Text(f"{self._GUT}↓ more", style="dim"))
+        out.append(Text(self._GUT, style="dim"))
+        out.extend(self._render_public_row())
         return out
+
+    def _render_public_row(self) -> list[Text]:
+        """The public server, listed under the apps and always on screen.
+
+        A key hint in the footer is a thing people read once. This is the
+        thing they have to be able to find: it is a row in the list, at
+        the end of it, and it stays there however far the list is
+        scrolled.
+        """
+        active = self.launch_idx == len(LAUNCH_APPS)
+        row = Text(self._GUT, end="")
+        if active:
+            row.append("▌ ", style=f"bold {art.YELLOW}")
+            row.append(PUBLIC_ROW_TITLE, style=f"bold {art.YELLOW}")
+            return [row, Text(self._GUT + PUBLIC_ROW_DESCRIPTION, style="dim")]
+        row.append(PUBLIC_ROW_TITLE, style=art.MUTED)
+        return [row]
 
     def _variants(self) -> list[Any]:
         """The models a person can pick: each model, then its variants."""
