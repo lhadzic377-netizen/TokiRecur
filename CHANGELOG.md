@@ -6,6 +6,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.24] - 2026-11-23
+
+### Added
+- **`p` in the launcher: a public HTTPS origin for this machine.** The
+  custom-endpoint form in other apps (arkenOS among them) refuses a
+  loopback base URL - it wants a public HTTPS URL on port 443 - so the
+  one thing it cannot be given is the daemon it should talk to. `p` opens
+  a public-server screen; Enter starts a `cloudflared` quick tunnel to
+  the pinned model's daemon and the screen then shows the credentials for
+  all three surfaces on that hostname: OpenAI (`/v1/chat/completions`,
+  `/v1/responses`), Anthropic (`/v1/messages`) and Google generative AI
+  (`/v1beta/models/<id>:generateContent` and `:streamGenerateContent`),
+  plus the daemon's bearer token and model id. `c` copies the block. The
+  hostname is random and dies with the process; closing the screen (or
+  quitting toki) stops the tunnel, and every request still needs the key.
+  The screen starts nothing on open - an outbound tunnel is a deliberate
+  act - and says so when `cloudflared` is missing or the daemon is down.
+
 ## [0.3.23] - 2026-11-22
 
 ### Fixed

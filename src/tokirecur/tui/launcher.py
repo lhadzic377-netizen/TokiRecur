@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -155,11 +156,16 @@ class LauncherApp(App[dict | None]):
         Binding("left", "back", "Back", show=False, priority=True),
         Binding("tab", "switch", "Tab", priority=True),
         Binding("space", "pin", "Pin"),
-        Binding("escape", "quit_app", "Quit", priority=True),
+        Binding("escape", "quit_app", "Quit"),
         Binding("ctrl+c", "quit_app", "Quit", show=False, priority=True),
         Binding("q", "quit_app", "quit", show=False, priority=True),
         Binding("s", "settings", "Settings", priority=True),
         Binding("m", "toggle_mode", "Mode", priority=True),
+        # Not priority: the settings text editor must be able to type a
+        # "p" without the app opening the public-server screen underneath
+        # it. Nothing on the main pane consumes the key, so it still fires
+        # there.
+        Binding("p", "public_server", "Public"),
         Binding("ctrl+t", "toggle_tap", "Record", priority=True),
     ]
 
@@ -926,6 +932,23 @@ class LauncherApp(App[dict | None]):
         else:
             self.exit({"interface": app.interface, "client": app.client, "model": model})
 
+    def action_public_server(self) -> None:
+        """Offer the pinned model's daemon at a public HTTPS origin.
+
+        The credentials are for other apps that refuse a loopback base
+        URL, so the screen opens on an explanation and starts nothing
+        until Enter: a tunnel is an outbound connection to Cloudflare and
+        should be a deliberate act.
+        """
+        spec = next((s for s in self.specs if s.name == self.pinned), None)
+        if spec is None:
+            self.notify(
+                "pin a model first — the tunnel exposes its daemon",
+                timeout=4, severity="warning",
+            )
+            return
+        self.push_screen(PublicServerScreen(self.pinned, spec))
+
     def action_quit_app(self) -> None:
         # Escape from settings/models goes back to the launcher list,
         # not out of the app. Only quit when we're on the main pane.
@@ -1004,7 +1027,7 @@ class LauncherApp(App[dict | None]):
             line.append("    ", style="dim")
             line.append("● rec", style=f"bold {art.RED}")
         line.append("    ", style="dim")
-        line.append("1-9 jump · m mode · ctrl+t rec · enter launch · esc quit",
+        line.append("1-9 jump · m mode · p public · ctrl+t rec · enter launch · esc quit",
                     style="dim")
         return line
 
@@ -1302,7 +1325,7 @@ class LauncherApp(App[dict | None]):
         elif self.focus_pane == "settings":
             hint = "↑/↓ field · enter edit · esc back · q quit"
         else:
-            hint = "1-9 jump · ↑/↓ navigate · enter launch · s settings · esc quit"
+            hint = "1-9 jump · ↑/↓ navigate · enter launch · s settings · p public · esc quit"
         return Text(self._GUT + hint, style="dim")
 
 
@@ -1683,6 +1706,214 @@ class SettingsChoiceScreen(ModalScreen[str | None]):
 
     def action_cancel(self) -> None:
         self.dismiss(None)
+
+
+class PublicServerScreen(ModalScreen[None]):
+    """Public HTTPS credentials for the daemon behind the pinned model.
+
+    ``p`` opens this; Enter starts a cloudflared quick tunnel and the
+    screen then lists what a client needs: one public hostname, the
+    daemon's bearer token, and the OpenAI, Anthropic and Google paths that
+    hostname serves. Closing the screen stops the tunnel — the public
+    route exists only while this screen does.
+    """
+
+    BINDINGS = [
+        Binding("escape", "close", "Close", show=False, priority=True),
+        Binding("enter", "start", "Start", show=False),
+        Binding("c", "copy_credentials", "Copy", show=False),
+        Binding("u", "copy_url", "Copy URL", show=False),
+    ]
+
+    DEFAULT_CSS = """
+    PublicServerScreen {
+        align: center middle;
+    }
+    #public-dialog {
+        width: 92;
+        height: auto;
+        max-height: 92%;
+        padding: 1 2;
+        background: $boost;
+        border: round $primary;
+    }
+    #public-body {
+        width: 100%;
+        height: auto;
+    }
+    """
+
+    def __init__(
+        self,
+        model_name: str,
+        spec: Any,
+        *,
+        starter: Callable[..., Any] | None = None,
+    ) -> None:
+        """``starter`` is injectable so a test never dials Cloudflare."""
+        super().__init__()
+        self._model_name = model_name
+        self._spec = spec
+        self._starter = starter
+        self._state = "idle"  # idle | starting | live | error
+        self._server: Any | None = None
+        self._error: str | None = None
+        self._warned = False
+
+    # -- compose / state --------------------------------------------------
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="public-dialog"):
+            yield Static(self._body_text(), id="public-body", markup=False)
+
+    def _repaint(self) -> None:
+        try:
+            self.query_one("#public-body", Static).update(self._body_text())
+        except Exception:
+            pass
+
+    def _body_text(self) -> Text:
+        out = Text(end="")
+        if self._state == "live" and self._server is not None:
+            self._render_live(out)
+        elif self._state == "starting":
+            out.append("PUBLIC SERVER\n\n", style=f"bold {art.YELLOW}")
+            out.append("  opening a cloudflared quick tunnel …\n", style=art.YELLOW)
+            out.append(self._target_line(), style="dim")
+            out.append("\n\n  a fresh hostname every time; this takes a few seconds\n",
+                       style="dim")
+        elif self._state == "error":
+            out.append("PUBLIC SERVER\n\n", style=f"bold {art.YELLOW}")
+            out.append(f"  {self._error}\n", style=art.RED)
+            out.append("\n  enter retry · esc close\n", style="dim")
+        else:
+            out.append("PUBLIC SERVER\n\n", style=f"bold {art.YELLOW}")
+            out.append("  Expose this machine's daemon at a public HTTPS URL.\n",
+                       style="dim")
+            out.append("  Another app's custom-endpoint form refuses 127.0.0.1;\n"
+                       "  a quick tunnel gives it a public hostname on 443.\n\n",
+                       style="dim")
+            out.append(self._target_line(), style="")
+            out.append("\n\n  enter  start the tunnel\n"
+                       "  esc    close\n\n", style="dim")
+            out.append("  only requests carrying the API key get through\n", style="dim")
+        return out
+
+    def _target_line(self) -> str:
+        port = getattr(self._spec, "daemon_port", "?")
+        return f"  model  {self._model_name}\n  daemon 127.0.0.1:{port}"
+
+    def _render_live(self, out: Text) -> None:
+        srv = self._server
+        out.append("PUBLIC SERVER  ", style=f"bold {art.YELLOW}")
+        out.append("● live\n", style=f"bold {art.GREEN}")
+        out.append(self._target_line() + "\n\n", style="dim")
+        out.append(f"  {srv.url}\n\n", style=f"bold {art.YELLOW}")
+
+        def row(label: str, value: str) -> None:
+            out.append(f"  {label:<20}", style="dim")
+            out.append(value + "\n", style="")
+
+        row("Base URL (OpenAI)", srv.openai_base)
+        row("Base URL (Anthropic)", srv.anthropic_base)
+        row("Base URL (Google)", srv.google_base)
+        row("API key", srv.api_key)
+        row("Model", srv.model)
+        out.append("\n  endpoints\n", style="dim")
+        row("OpenAI chat", f"POST {srv.openai_base}/chat/completions")
+        row("OpenAI responses", f"POST {srv.openai_base}/responses")
+        row("Anthropic messages", f"POST {srv.anthropic_base}/v1/messages")
+        row("Google generate", f"POST {srv.google_base}/models/{srv.model}:generateContent")
+        row("Google stream", f"POST {srv.google_base}/models/{srv.model}:streamGenerateContent")
+        out.append("\n  c copy credentials · u copy URL · esc close (stops tunnel)\n",
+                   style="dim")
+        out.append("  anyone with the key can use this machine while it is open\n",
+                   style="dim")
+
+    # -- actions ----------------------------------------------------------
+
+    def action_start(self) -> None:
+        if self._state in ("starting", "live"):
+            return
+        if self._spec is None:
+            self._state = "error"
+            self._error = "no model pinned — pick one with → first"
+            self._repaint()
+            return
+        self._state = "starting"
+        self._error = None
+        self._repaint()
+        self.run_worker(self._open_tunnel, thread=True, exclusive=True)
+
+    def _open_tunnel(self) -> None:
+        try:
+            from ..ctl import auth_token, daemon_reachable
+            from ..public_server import PublicServerError, start_public_server
+
+            if not daemon_reachable(self._spec):
+                raise PublicServerError(
+                    f"{self._model_name}: the daemon is not answering on "
+                    f"127.0.0.1:{self._spec.daemon_port} — start the model "
+                    "first (Enter on the launcher)"
+                )
+            starter = self._starter or start_public_server
+            server = starter(
+                port=self._spec.daemon_port,
+                api_key=auth_token(),
+                model=getattr(self._spec, "model_id", "") or self._model_name,
+            )
+        except Exception as e:  # shown to the person, not logged
+            self.app.call_from_thread(self._fail, str(e))
+            return
+        self.app.call_from_thread(self._ready, server)
+
+    def _ready(self, server: Any) -> None:
+        if not self.is_attached:
+            server.stop()
+            return
+        self._server = server
+        self._state = "live"
+        self._repaint()
+        self.app.copy_to_clipboard(server.credentials_text())
+        self.app.notify(
+            f"public server live: {server.url} — credentials copied",
+            timeout=6,
+        )
+
+    def _fail(self, message: str) -> None:
+        if not self.is_attached:
+            return
+        self._state = "error"
+        self._error = message
+        self._repaint()
+
+    def action_copy_credentials(self) -> None:
+        if self._server is None:
+            return
+        self.app.copy_to_clipboard(self._server.credentials_text())
+        self.app.notify("credentials copied", timeout=3)
+
+    def action_copy_url(self) -> None:
+        if self._server is None:
+            return
+        self.app.copy_to_clipboard(self._server.url)
+        self.app.notify("public URL copied", timeout=3)
+
+    def action_close(self) -> None:
+        self._stop_tunnel()
+        self.dismiss(None)
+
+    def _stop_tunnel(self) -> None:
+        server = self._server
+        if server is None:
+            return
+        self._server = None
+        threading.Thread(target=server.stop, daemon=True).start()
+
+    def on_unmount(self) -> None:
+        # The screen can also go away because the app is quitting; the
+        # tunnel must not outlive it.
+        self._stop_tunnel()
 
 
 _SETTINGS_ROWS_CACHE: dict[tuple, tuple[tuple[str, str, str], ...]] = {}

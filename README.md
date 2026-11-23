@@ -124,6 +124,15 @@ Three frontends over one daemon. The API is what agents actually talk to.
 
 The launcher starts Toki Chat, OpenCode, MiMo Code, MiniMax Code, Hermes, OpenClaw, Codex, Qwen Code, Factory Droid, Cline CLI, DeepSeek Harness, Grok Build, Kilo Code, Pi, GitHub Copilot CLI, Kimi Code, OMP, Goose, Pool, Antigravity and Claude Code, all pinned to the active model. OpenAI-compatible clients use the daemon's OpenAI route; Claude Code uses the local Anthropic-compatible `/anthropic/v1/messages` route with an owner-only settings override. The override carries the local token as `ANTHROPIC_AUTH_TOKEN` — not as `ANTHROPIC_API_KEY`, because Claude Code sends an API key only after it has approved it, and falls back to another credential when it has not: on a machine with a cloud provider configured, that credential belongs to that provider and the local daemon answers 401 for it. Qwen Code 1.0 is written through its `providers` section and launched with `qwen --model tokirecur/<model>`; the pre-1.0 `modelProviders` section and the `--openai-base-url` / `--auth-type` flags are kept for the releases that still read them.
 
+Some apps are configured by hand rather than by the launcher, and their
+custom-endpoint forms refuse `127.0.0.1`: they want a public HTTPS base URL
+on port 443. `p` in the launcher opens a public-server screen, Enter starts a
+`cloudflared` quick tunnel to the pinned model's daemon, and it prints the
+credentials for the OpenAI, Anthropic and Google generative AI routes plus the
+daemon's bearer token. Closing the screen stops the tunnel; the hostname is
+random and the key is required, so the public route is only as public as the
+credential makes it.
+
 Three of them reach the model their own way. **goose** reads a provider from `~/.config/goose/custom_providers/tokirecur.json` and picks it with `GOOSE_PROVIDER` and `GOOSE_MODEL` in `config.yaml`; its `base_url` is the full request path (goose appends nothing to it) and its key is read from the `TOKI_AUTH_TOKEN` environment variable, so no secret is written to disk. **pool** only speaks to an OpenAI-compatible endpoint in standalone mode, and only the environment selects that mode - the launcher starts it with `POOLSIDE_STANDALONE_BASE_URL`, `POOLSIDE_API_KEY`, `POOLSIDE_STANDALONE_MODEL` and `POOLSIDE_STANDALONE_CONTEXT_LENGTH`, and `~/.config/poolside/settings.yaml` keeps the saved API URL next to the user's own agent servers. **Antigravity** (`agy`) speaks the Gemini API rather than the OpenAI one - it asks for `/v1beta/models/<model>:generateContent` - so the daemon serves that route too, and the CLI is pointed at it with a custom model in `~/.gemini/antigravity-cli/settings.json` and `GOOGLE_GEMINI_BASE_URL` in the environment.
 
 ```bash
