@@ -27,6 +27,10 @@ settings pane repaints the launcher without a restart.
 from __future__ import annotations
 
 import os
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from textual.theme import Theme
 
 # ── The house palette ───────────────────────────────────────────────
 
@@ -391,6 +395,18 @@ def _mix(a: str, b: str, t: float) -> str:
     return "#" + "".join(f"{c:02x}" for c in out)
 
 
+def shade(slot: str, toward: str = "TEXT", amount: float = 0.1) -> str:
+    """A palette colour moved toward another one.
+
+    The web surfaces need shades the palette does not name - a raised
+    surface, a soft tint of a status colour - and they have to move
+    with the theme, so they are mixed from the palette rather than
+    written down.
+    """
+    pal = palette()
+    return _mix(pal[slot], pal[toward], amount)
+
+
 def gradient(stops: tuple[str, ...], steps: int) -> list[str]:
     """``steps`` colours from the first stop to the last.
 
@@ -422,16 +438,119 @@ TAGLINE = "recycled-prefill LLM stack · AMD Ryzen AI"
 def stylesheet() -> str:
     """The Textual stylesheet for the active theme.
 
-    ``theme.tcss`` is written in the house palette; the colours are
-    swapped for the active theme's, so a theme reaches the widgets that
-    are styled in CSS as well as the ones styled in Python.
+    ``theme.tcss`` is written in variables, not in colours: the palette
+    arrives as Textual's own design tokens (see ``textual_theme``), so
+    the file is the same for every theme and no colour is ever frozen
+    into it.
+
+    It used to be the other way round - the house palette's hexes were
+    swapped for the theme's, one slot at a time. Two slots share a hex
+    in the house palette (the accent and the sun, the text and the
+    chrome, the amber and the sand, the blue and the sea), so the first
+    slot to be replaced won and the second never landed: GTA VI's sun
+    and sea never reached the stylesheet at all.
     """
     from pathlib import Path
 
-    raw = Path(__file__).with_name("theme.tcss").read_text()
-    for slot, value in palette().items():
-        raw = raw.replace(DEFAULT_PALETTE[slot].lower(), value.lower())
-    return raw
+    return Path(__file__).with_name("theme.tcss").read_text()
+
+
+#: The CSS variables the stylesheets use that Textual has no name for.
+_VARIABLE_SLOTS = {
+    "muted": "MUTED",
+    "border": "BORDER",
+    "border-hi": "BORDER_HI",
+    "accent-dim": "YELLOW_DIM",
+    "info": "BLUE",
+    "sky": "SKY",
+    "sun": "SUN",
+    "sand": "SAND",
+    "sea": "SEA",
+    "chrome": "CHROME",
+}
+
+
+def theme_variables() -> dict[str, str]:
+    """Our palette as the CSS variables the stylesheets resolve.
+
+    Textual has names for the design tokens it owns ($primary, $boost,
+    $panel ...); these are the slots it has no name for - the muted
+    text, the two borders, the dim accent, the scene colours.
+    """
+    pal = palette()
+    return {name: pal[slot] for name, slot in _VARIABLE_SLOTS.items()}
+
+
+def themed_root(css: str, variables: dict[str, str]) -> str:
+    """Paint a stylesheet's ``:root`` variables in the active palette.
+
+    ``variables`` maps a CSS variable name to a palette slot (``"BG"``)
+    or to a colour of its own. Only the named variables are touched, so
+    a stylesheet keeps its radii, shadows and transitions.
+
+    The web surfaces used to be swapped hex by hex, which cannot work:
+    two slots share a hex in the house palette, so the first swap won
+    and the second never landed.
+    """
+    import re
+
+    pal = palette()
+    for name, value in variables.items():
+        color = pal.get(value, value)
+        css = re.sub(
+            rf"(--{re.escape(name.lstrip('-'))}\s*:\s*)[^;]+;",
+            rf"\g<1>{color};",
+            css,
+            count=1,
+        )
+    return css
+
+
+def textual_theme() -> Theme:
+    """The active palette as a Textual theme.
+
+    Textual's own theme ("textual-dark") owns $primary, $boost, $panel
+    and every other design token, and it is what a widget, a dialog, a
+    dropdown and a scrollbar wear. Painting the launcher in Python and
+    leaving those in Textual's house colours is why a theme switch
+    changed half the screen: this is what makes the other half follow.
+    """
+    from textual.theme import Theme
+
+    pal = palette()
+    return Theme(
+        name=f"toki-{_active_theme_name()}",
+        primary=pal["YELLOW"],
+        secondary=pal["AMBER"],
+        warning=pal["AMBER"],
+        error=pal["RED"],
+        success=pal["GREEN"],
+        accent=pal["PURPLE"],
+        foreground=pal["TEXT"],
+        background=pal["BG"],
+        surface=pal["SURFACE"],
+        panel=pal["SURFACE"],
+        # The boosted surface is the one a dialog sits on: a shade above
+        # the surface, the way Textual's boost is above its panel.
+        boost=_mix(pal["SURFACE"], pal["TEXT"], 0.12),
+        dark=True,
+        variables=theme_variables(),
+    )
+
+
+class ThemedApp:
+    """Mixin for the Textual apps: their tokens follow toki's palette.
+
+    Textual asks the app for its CSS variables when it builds the
+    stylesheet, and takes them from ``current_theme``. Overriding that
+    property is the whole trick: the app is born wearing the palette,
+    and a theme switch reaches the widgets, the dialogs and the
+    dropdowns - the parts a stylesheet written by hand never touches.
+    """
+
+    @property
+    def current_theme(self) -> Theme:  # type: ignore[override]
+        return textual_theme()
 
 
 def retheme(app: object, css: str) -> None:
@@ -441,6 +560,12 @@ def retheme(app: object, css: str) -> None:
     text it read. Replacing the class attribute is not enough - the
     stylesheet still holds the colours it was built with - so the
     source is replaced too and the stylesheet re-parsed.
+
+    The variables are refreshed as well: they are the palette the
+    stylesheet resolves ($primary, $boost, $panel and the rest), and
+    they were resolved when the app was built. Without this, a theme
+    switched at runtime repaints the parts painted in Python and leaves
+    every widget in the old theme's colours.
     """
     import inspect
 
@@ -456,4 +581,10 @@ def retheme(app: object, css: str) -> None:
         read_from=(app_path, f"{cls.__name__}.CSS"),
         is_default_css=False,
     )
+    variables = getattr(app, "get_css_variables", None)
+    if callable(variables):
+        try:
+            stylesheet_.set_variables(variables())
+        except Exception:
+            pass
     app.refresh_css()  # type: ignore[attr-defined]

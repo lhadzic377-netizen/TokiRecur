@@ -48,16 +48,35 @@ def test_gta_vi_is_a_theme_not_an_edition():
 
 
 def test_the_stylesheet_follows_the_palette(monkeypatch, tmp_path):
+    """The stylesheet names variables; the palette resolves them.
+
+    It used to carry the house palette's hexes and have them swapped
+    for the theme's, which cannot work for the slots that share a hex
+    (the accent and the sun, the text and the chrome): the first swap
+    won and the second never landed. Now no colour is frozen into the
+    file, and every slot - the shared ones included - is a variable of
+    its own.
+    """
     # The environment wins over the file, so a run with TOKI_THEME set
     # would not see the file's theme at all.
     monkeypatch.delenv("TOKI_THEME", raising=False)
     monkeypatch.setenv("TOKI_THEME_FILE", str(tmp_path / "theme"))
     (tmp_path / "theme").write_text("gta6\n")
     css = art.stylesheet()
-    assert art.THEMES["gta6"]["YELLOW"].lower() in css
-    assert art.THEMES["gta6"]["BG"].lower() in css
-    # The house accent is gone.
-    assert art.DEFAULT_PALETTE["YELLOW"].lower() not in css
+    variables = art.theme_variables()
+    assert variables["sun"].lower() == art.THEMES["gta6"]["SUN"].lower()
+    assert variables["sand"].lower() == art.THEMES["gta6"]["SAND"].lower()
+    assert variables["sea"].lower() == art.THEMES["gta6"]["SEA"].lower()
+    assert variables["muted"].lower() == art.THEMES["gta6"]["MUTED"].lower()
+    # No colour is frozen into the stylesheet: neither the house one
+    # nor the theme's.
+    assert art.DEFAULT_PALETTE["YELLOW"].lower() not in css.lower()
+    assert art.THEMES["gta6"]["YELLOW"].lower() not in css.lower()
+    # The Textual tokens - the ones every widget, dialog and dropdown
+    # wears - are the palette's too.
+    theme = art.textual_theme()
+    assert theme.primary.lower() == art.THEMES["gta6"]["YELLOW"].lower()
+    assert theme.background.lower() == art.THEMES["gta6"]["BG"].lower()
 
 
 def test_the_stylesheet_covers_the_house_palette():

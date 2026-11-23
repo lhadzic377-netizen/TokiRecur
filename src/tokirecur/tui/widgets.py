@@ -350,7 +350,7 @@ class StatusBar(Static):
            row the border ate the content and nothing was drawn. */
         dock: none;
         height: 2;
-        background: $boost;
+        background: $surface;
         color: $text;
         padding: 0 1;
     }

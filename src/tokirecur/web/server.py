@@ -21,7 +21,7 @@ from urllib.parse import urlparse
 
 import httpx
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from tokirecur import cache_prompt_enabled
@@ -208,6 +208,38 @@ def _host_allowed(host: str | None, extra: frozenset[str] | set[str]) -> bool:
         name = name.split(":", 1)[0]
     return name.lower() in {h.lower() for h in LOCAL_HOSTS} | {
         h.lower() for h in extra
+    }
+
+
+def web_variables() -> dict[str, str]:
+    """The palette, in the names the web stylesheet uses.
+
+    The slots the palette names are given by name; the ones it does
+    not (a raised surface, a soft tint of a status colour) are mixed
+    from it, so they move with the theme too.
+    """
+    from ..tui import art
+
+    return {
+        "--bg-primary": "BG",
+        "--bg-secondary": "SURFACE",
+        "--bg-tertiary": art.shade("BG", "SURFACE", 0.5),
+        "--bg-elevated": art.shade("SURFACE", "TEXT", 0.08),
+        "--border": "BORDER",
+        "--border-strong": "BORDER_HI",
+        "--text-primary": "TEXT",
+        "--text-secondary": "MUTED",
+        "--text-tertiary": art.shade("MUTED", "BG", 0.4),
+        "--accent": "YELLOW",
+        "--accent-soft": "AMBER",
+        "--raw": "RED",
+        "--raw-soft": art.shade("RED", "BG", 0.18),
+        "--cached": "GREEN",
+        "--cached-soft": art.shade("GREEN", "BG", 0.18),
+        "--compare": "PURPLE",
+        "--compare-soft": art.shade("PURPLE", "BG", 0.18),
+        "--user": "AMBER",
+        "--user-soft": art.shade("AMBER", "BG", 0.18),
     }
 
 
@@ -498,6 +530,22 @@ def create_web_app(
                 pass
 
     if STATIC_DIR.exists():
+
+        @app.get("/static/style.css")
+        async def themed_style() -> Response:
+            """The stylesheet, painted in the active theme.
+
+            The web surface carried the house palette in its own file.
+            Its colours are now painted from the palette by name, so a
+            theme reaches the browser as well as the terminal.
+            """
+            from ..tui import art
+
+            css = art.themed_root(
+                (STATIC_DIR / "style.css").read_text(), web_variables()
+            )
+            return Response(css, media_type="text/css")
+
         app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     return app
 

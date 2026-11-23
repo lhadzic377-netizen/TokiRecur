@@ -2913,7 +2913,9 @@ def _interactive_pick_model(
                 f"ctx={ctx}  :{spec.llama_port}/:{spec.daemon_port}{suffix}"
             ),
         )
-    console.print(Panel(table, title="model", border_style="#b8860b", expand=False))
+    from ..tui import art
+
+    console.print(Panel(table, title="model", border_style=art.AMBER, expand=False))
     while True:
         raw = Prompt.ask("choose", default="1")
         if raw in ("q", "quit", "exit"):
@@ -2948,7 +2950,9 @@ def _interactive_pick_workload() -> str | None:
         # Build the workload just to read its description.
         hint = WORKLOADS[name]().description
         table.add_row(f"{i})", name, hint)
-    console.print(Panel(table, title="workload", border_style="#b8860b", expand=False))
+    from ..tui import art
+
+    console.print(Panel(table, title="workload", border_style=art.AMBER, expand=False))
     while True:
         raw = Prompt.ask("choose", default="1")
         if raw in ("q", "quit", "exit"):

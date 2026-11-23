@@ -75,28 +75,34 @@ _SYNC_ONLY_FIELDS = frozenset({"max_tokens", "model_id", "reasoning"})
 
 
 def _launcher_css() -> str:
-    """The launcher's stylesheet, built from the active palette."""
-    return f"""
-Screen {{
-    background: {art.BG};
-    color: {art.TEXT};
-}}
+    """The launcher's stylesheet.
 
-#pane {{
+    Colours are variables, not hexes: the palette arrives through
+    Textual's design tokens, so this file is the same for every theme
+    and a theme switch reaches the panes and the footer without
+    rewriting the stylesheet.
+    """
+    return """
+Screen {
+    background: $background;
+    color: $text;
+}
+
+#pane {
     width: 100%;
     height: 1fr;
-    color: {art.MUTED};
+    color: $muted;
     padding: 0;
-}}
+}
 
-#footer {{
+#footer {
     dock: bottom;
     height: 1;
-    background: {art.BG};
-    color: {art.MUTED};
-    border-top: round {art.BORDER_HI};
+    background: $background;
+    color: $muted;
+    border-top: round $border-hi;
     padding: 0 1;
-}}
+}
 """
 
 
@@ -127,7 +133,7 @@ def _visible_rows(app: Any, reserve: int) -> int:
     return max(3, height - reserve)
 
 
-class LauncherApp(App[dict | None]):
+class LauncherApp(art.ThemedApp, App[dict | None]):
     """Keyboard-driven launcher: pick an app, pin a model, Enter to run."""
 
     TITLE = "Toki Recur launcher"
@@ -1504,7 +1510,7 @@ class SettingsEditScreen(ModalScreen[str | None]):
         width: 70;
         height: auto;
         padding: 1 2;
-        background: $boost;
+        background: $panel;
         border: round $primary;
     }
     #settings-dialog Label {
@@ -1579,7 +1585,7 @@ class ConfirmRestartScreen(ModalScreen[bool]):
         width: 70;
         height: auto;
         padding: 1 2;
-        background: $boost;
+        background: $panel;
         border: round $warning;
     }
     #confirm-dialog Label {
@@ -1647,7 +1653,7 @@ class SettingsChoiceScreen(ModalScreen[str | None]):
         width: 70;
         height: auto;
         padding: 1 2;
-        background: $boost;
+        background: $panel;
         border: round $primary;
     }
     #settings-choice-dialog Label {
@@ -1767,7 +1773,7 @@ class PublicServerScreen(ModalScreen[None]):
         height: auto;
         max-height: 92%;
         padding: 1 2;
-        background: $boost;
+        background: $panel;
         border: round $primary;
     }
     #public-body {

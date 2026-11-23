@@ -1,8 +1,14 @@
-/* Toki Recur TUI — black + yellow, monospace, semantic status colors */
+/* Toki Recur TUI — themed by variables, not by colours.
+ *
+ * Every colour here is a variable: Textual's own design tokens
+ * ($background, $surface, $text, $primary, $border) plus the slots
+ * Textual has no name for ($muted, $border-hi, $accent-dim). They are
+ * resolved from the active palette, so this file is the same for every
+ * theme and no colour is ever frozen into it. */
 
 Screen {
-    background: #000000;
-    color: #f0ece0;
+    background: $background;
+    color: $text;
 }
 
 #main-area {
@@ -12,20 +18,20 @@ Screen {
 #chat-container {
     height: 1fr;
     padding: 1 2;
-    background: #000000;
+    background: $background;
 }
 
 #chat {
     height: 1fr;
-    background: #000000;
-    border: round #2b2b2b;
+    background: $background;
+    border: round $border;
     padding: 0 1;
-    scrollbar-color: #3d3d3d #000000;
+    scrollbar-color: $border-hi $background;
     scrollbar-size-vertical: 1;
 }
 
 #chat:focus-within {
-    border: round #2b2b2b;
+    border: round $border-hi;
 }
 
 #bottom-panel {
@@ -33,37 +39,37 @@ Screen {
        both be placed at the bottom edge and would overlap. */
     dock: bottom;
     height: 5;
-    background: #121212;
+    background: $surface;
 }
 
 #input {
     dock: none;
     margin: 0 1;
-    background: #121212;
-    border: round #3d3d3d;
+    background: $surface;
+    border: round $border-hi;
     height: 3;
 }
 
 #input:focus {
-    border: round #ffd60a;
+    border: round $primary;
 }
 
 #sidebar {
-    background: #121212;
-    border-right: round #3d3d3d;
+    background: $surface;
+    border-right: round $border-hi;
     width: 22;
 }
 
 #info {
-    background: #121212;
-    border-left: round #3d3d3d;
+    background: $surface;
+    border-left: round $border-hi;
 }
 
 #status-bar {
     dock: none;
-    background: #000000;
-    color: #9a967f;
-    border-top: round #3d3d3d;
+    background: $background;
+    color: $muted;
+    border-top: round $border-hi;
     /* Two rows, not one: the border-top takes a row of its own, and a
        height of 1 left the content box with nothing to draw in — the
        whole footer (mode, session, hit rate) had been rendering as an

@@ -44,6 +44,36 @@ def _text(value, default: str = "") -> str:
     return str(value)
 
 
+#: The dashboard's CSS variables, in the palette's slots. The browser
+#: gets its colours from this block and nowhere else, so a theme
+#: reaches every rule that uses them.
+DASHBOARD_VARS: dict[str, str] = {
+    "--bg": "BG",
+    "--bg-card": "SURFACE",
+    "--border": "BORDER",
+    "--text": "TEXT",
+    "--text-dim": "MUTED",
+    "--accent": "YELLOW",
+    "--good": "GREEN",
+    "--bad": "RED",
+    "--neutral": "PURPLE",
+}
+
+
+def themed_css(css: str) -> str:
+    """The dashboard's stylesheet, painted in the active palette.
+
+    The colours live in one ``:root`` block and each one is painted
+    from the palette by name. It used to be done by swapping the house
+    palette's hexes one slot at a time, which cannot work: two slots
+    share a hex in the house palette (the accent and the sun, the text
+    and the chrome), so the first swap won and the second never landed.
+    """
+    from ..tui import art
+
+    return art.themed_root(css, DASHBOARD_VARS)
+
+
 def create_dashboard_app(*, reports_dir: Path) -> FastAPI:
     """Build a FastAPI app serving the dashboard."""
     app = FastAPI(title="Toki Recur Dashboard")
@@ -138,13 +168,7 @@ def create_dashboard_app(*, reports_dir: Path) -> FastAPI:
             it carried the house palette in its own file. It is the
             same palette now, so the theme reaches the browser too.
             """
-            from ..tui import art
-
-            css = (STATIC_DIR / "style.css").read_text()
-            for slot, value in art.PALETTE.items():
-                css = css.replace(
-                    art.DEFAULT_PALETTE[slot].lower(), value.lower()
-                )
+            css = themed_css((STATIC_DIR / "style.css").read_text())
             return HTMLResponse(css, media_type="text/css")
 
         app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")

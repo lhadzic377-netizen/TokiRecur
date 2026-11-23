@@ -30,7 +30,7 @@ from .widgets import (
 )
 
 
-class TokiApp(App):
+class TokiApp(art.ThemedApp, App):
     """Production TUI chat client for Toki Recur."""
 
     # The stylesheet is generated from the active theme, so a theme

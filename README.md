@@ -291,6 +291,14 @@ toki theme default        # back to the house style
 remembered, so the next launcher starts in it. A theme switched from the
 settings pane repaints the launcher where it stands - no restart.
 
+A theme reaches everything: the panes toki paints by hand, the dialogs
+and dropdowns Textual paints, the chat TUI's panels, the benchmark
+dashboard and the web surface. The palette is Textual's own theme, so
+its design tokens (`$primary`, `$panel`, `$boost`) are the palette's,
+and the stylesheets name variables instead of colours - which is also
+why a slot that shares a hex with another (the accent and the sun, the
+text and the chrome) still gets its own colour.
+
 The palette slots keep their names whatever the theme (`YELLOW` is the
 primary accent), so a theme is a palette and not a rename.
 

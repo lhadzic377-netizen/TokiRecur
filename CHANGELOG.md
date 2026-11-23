@@ -27,6 +27,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   screen: a key hint in the footer is read once and forgotten, and the
   row is the thing that can be found again. Arrow to it and press Enter.
 
+### Fixed
+- **A theme now changes everything.** Switching a theme repainted the
+  panes toki draws in Python and left the rest of the screen in
+  Textual's house colours: the dialogs, the dropdowns, the chat
+  panels, the status bar and the scrollbars all wore `textual-dark`
+  whatever the theme was. Textual owns those as *design tokens*
+  (`$primary`, `$boost`, `$panel`), and nothing was feeding it the
+  palette - the apps now take their theme from it, so every widget
+  follows. Two more things came with it. The stylesheets swapped the
+  house palette's hexes one slot at a time, and two slots share a hex
+  (the accent and the sun, the text and the chrome, the amber and the
+  sand), so the first swap won and the second never landed: GTA VI's
+  sun and sea never reached the CSS at all. And `toki web` served its
+  stylesheet from its own file, so a theme never reached the browser.
+  The stylesheets now name variables and the palette resolves them, in
+  the terminal, in the chat TUI, in the benchmark dashboard and on the
+  web.
+
 ## [0.3.23] - 2026-11-22
 
 ### Fixed

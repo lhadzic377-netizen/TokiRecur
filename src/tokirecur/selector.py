@@ -466,7 +466,9 @@ def _pick(title: str, options: list[tuple[str, str]], default: str | None = None
     for i, (label, hint) in enumerate(options, 1):
         suffix = "  [green]<- active[/green]" if label == default else ""
         table.add_row(f"{i})", label, hint + suffix)
-    console.print(Panel(table, title=title, border_style="#b8860b", expand=False))
+    from .tui import art
+
+    console.print(Panel(table, title=title, border_style=art.AMBER, expand=False))
     while True:
         raw = Prompt.ask("choose", default=str(default_index(options, default)) if default else "")
         if raw in ("q", "quit", "exit"):
