@@ -27,6 +27,13 @@ class AnthropicMessagesRequest(BaseModel):
     output_config: dict[str, Any] | None = None
     context_management: dict[str, Any] | None = None
     metadata: dict[str, Any] | None = None
+    # MemT native memory (the memt-native-memory branch of llama.cpp):
+    # which memory state to read, whether to write this turn into it
+    # when the reply ends normally, and documents to write into it
+    # before generating.
+    memory_id: str | None = None
+    memory_commit: bool | None = None
+    memory_documents: list[str] | None = None
 
 
 def _text(value: Any) -> str:

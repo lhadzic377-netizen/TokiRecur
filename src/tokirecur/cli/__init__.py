@@ -2819,6 +2819,274 @@ def _probe_gpu_device(
         return ""
 
 
+def _converter_python() -> str:
+    """The interpreter that can run llama.cpp's converter.
+
+    The converter imports ``gguf`` (and, for a HF checkpoint,
+    ``transformers``). The toki venv has transformers but not gguf; the
+    system python usually has both, because the branch ships the
+    requirements for it. So the interpreter is chosen by what can
+    actually import them, not by what happens to be running.
+    """
+    import subprocess
+    import sys
+
+    candidates = [sys.executable, "python3", "python"]
+    for candidate in candidates:
+        try:
+            probe = subprocess.run(
+                [candidate, "-c", "import gguf"],
+                timeout=60, check=False,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if probe.returncode == 0:
+            return candidate
+    return sys.executable
+
+
+@model.command("register")
+@click.argument("gguf")
+@click.option("--name", default=None,
+              help="Registry name for the model.")
+@click.option("--label", default=None, help="Label shown in the launcher.")
+@click.option("--ctx-size", type=int, default=None,
+              help="Context size to register (default: auto).")
+@click.option("--binary", default=None,
+              help="llama-server to use (default: the one the other "
+                   "models use). A MemT model needs the branch's build.")
+def register_model(gguf: str, name: str | None, label: str | None,
+                   ctx_size: int | None, binary: str | None) -> None:
+    """Register a GGUF that is already on this machine.
+
+    For a model that was converted here rather than pulled - the MemT
+    models, whose memory weights must stay at Q8_0, which a published
+    GGUF would not.
+    """
+    from ..ctl import register_local_gguf
+
+    try:
+        spec = register_local_gguf(
+            gguf, name=name, label=label, ctx_size=ctx_size, binary=binary,
+        )
+    except (FileNotFoundError, ValueError) as e:
+        raise SystemExit(f"error: {e}") from None
+    click.echo(f"registered {spec.name}: {spec.gguf}")
+    click.echo(f"  ports: llama {spec.llama_port}, daemon {spec.daemon_port}")
+    if spec.memt:
+        from ..arch import binary_supports_memt
+
+        if binary_supports_memt(spec.binary) is False:
+            click.echo(
+                "  this model has MemT native memory and the binary it "
+                "points at cannot load it -\n  build the branch: "
+                "toki model build-memt"
+            )
+        else:
+            click.echo("  native memory: MemT (the branch's build is in place)")
+    click.echo(f"  start it with: toki model use {spec.name}")
+
+
+@model.command("build-memt")
+@click.option("--fork", default=None,
+              help="GitHub fork to build (default: Brishen/llama.cpp).")
+@click.option("--branch", default=None,
+              help="Branch to build (default: memt-native-memory).")
+@click.option("--backend", default="cpu",
+              type=click.Choice(["cpu", "cuda", "rocm", "vulkan"]),
+              help="Backend to build. The MemT memory itself is CPU and "
+                   "CUDA; a ROCm or Vulkan build runs the memory on the "
+                   "CPU.")
+@click.option("--jobs", default=None, type=int,
+              help="Parallel build jobs (default: the CPU count).")
+@click.option("--to", "dest", default=None,
+              help="Install directory (default: the toki state bin-memt "
+                   "dir).")
+@click.option("--name", default=None,
+              help="Registry model to point at the built binary.")
+@click.option("--dry-run", is_flag=True, default=False,
+              help="Print the commands and stop.")
+def build_memt(fork: str | None, branch: str | None, backend: str,
+               jobs: int | None, dest: str | None, name: str | None,
+               dry_run: bool) -> None:
+    """Build a llama-server that can load MemT memory weights.
+
+    MemT models carry memory weights that upstream llama.cpp does not
+    know, so the server refuses the file. The memory lives in the
+    ``memt-native-memory`` branch of Brishen/llama.cpp - current
+    upstream plus one commit - and this builds it from source into its
+    own directory, beside the other per-build llama-server copies.
+
+    The build takes a while (llama.cpp is large); the output lands in
+    ``~/.local/state/tokirecur/bin-memt``.
+    """
+    import os
+    import shutil
+    import subprocess
+
+    from ..memt import MEMT_BRANCH, MEMT_FORK, build_steps, memt_build_dir
+
+    fork = fork or MEMT_FORK
+    branch = branch or MEMT_BRANCH
+    jobs = jobs or (os.cpu_count() or 4)
+    from ..ctl import STATE_ROOT
+
+    source_dir = STATE_ROOT / "src" / f"llama.cpp-{branch}"
+    dest_dir = Path(dest) if dest else memt_build_dir()
+
+    steps = build_steps(
+        source_dir, fork=fork, branch=branch, backend=backend, jobs=jobs,
+    )
+    for step in steps:
+        if step[0] == "git" and source_dir.exists():
+            # Already cloned: the branch is on disk, so there is nothing
+            # to fetch and a second clone would only fail.
+            click.echo(f"reusing {source_dir}")
+            continue
+        click.echo("$ " + " ".join(step))
+        if dry_run:
+            continue
+        try:
+            subprocess.run(step, check=True)
+        except FileNotFoundError as e:
+            raise SystemExit(f"error: {e}") from None
+        except subprocess.CalledProcessError as e:
+            raise SystemExit(f"error: command failed ({e.returncode})") from None
+    if dry_run:
+        click.echo(f"would install into {dest_dir}")
+        return
+
+    # cmake writes the executables next to the source (llama.cpp's own
+    # output directory), not into the build directory.
+    built = next(
+        (d for d in (source_dir / "bin", source_dir / "build" / "bin")
+         if d.is_dir() and any(d.glob("llama-server"))),
+        None,
+    )
+    if built is None:
+        raise SystemExit(
+            f"error: the build produced no llama-server in "
+            f"{source_dir / 'bin'} or {source_dir / 'build' / 'bin'}"
+        )
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    copied = []
+    for entry in sorted(built.iterdir()):
+        if not entry.is_file():
+            continue
+        if not (
+            entry.name.startswith("llama")
+            or entry.name.startswith("lib")
+            or entry.name.endswith(".dll")
+        ):
+            continue
+        shutil.copy2(entry, dest_dir / entry.name)
+        copied.append(entry.name)
+    if "llama-server" not in copied:
+        raise SystemExit(f"error: no llama-server in {built}")
+    binary = dest_dir / "llama-server"
+    click.echo(f"installed {binary} ({len(copied)} files)")
+
+    from ..arch import binary_supports_memt
+
+    if binary_supports_memt(str(binary)) is False:
+        click.echo(
+            "warning: the build does not carry the MemT memory type - "
+            "check that the branch was cloned correctly",
+            err=True,
+        )
+    else:
+        click.echo("verified: the build carries the MemT memory type")
+
+    if name:
+        from ..ctl import set_binary
+
+        try:
+            set_binary(name, str(binary))
+        except KeyError as e:
+            raise SystemExit(f"error: {e.args[0]}") from None
+        click.echo(f"model '{name}' now uses {binary}")
+
+
+@model.command("convert-memt")
+@click.argument("checkpoint")
+@click.option("--name", default=None,
+              help="Registry name for the converted model.")
+@click.option("--out", "out_file", default=None,
+              help="Output GGUF path (default: beside the models dir).")
+@click.option("--quant", default="Q4_K_M",
+              help="Quantization for the backbone weights.")
+@click.option("--memt-type", default="q8_0",
+              help="Quantization for the memory weights (they stay at "
+                   "Q8_0: 4-bit memory weights lose what they are for).")
+@click.option("--source-dir", default=None,
+              help="The cloned memt branch (default: the one build-memt "
+                   "cloned).")
+@click.option("--ctx-size", type=int, default=None,
+              help="Context size to register (default: auto).")
+@click.option("--dry-run", is_flag=True, default=False,
+              help="Print the commands and stop.")
+def convert_memt(checkpoint: str, name: str | None, out_file: str | None,
+                 quant: str, memt_type: str, source_dir: str | None,
+                 ctx_size: int | None, dry_run: bool) -> None:
+    """Convert a MemT checkpoint into a GGUF, and register it.
+
+    A MemT model is not pulled as a GGUF: the checkpoint is converted
+    here with the branch's own converter (upstream's does not know the
+    memory tensors) and quantized with the memory weights pinned to
+    Q8_0, because they are the thing that remembers.
+
+    Needs the branch built first: ``toki model build-memt``.
+    """
+    import subprocess
+
+    from ..ctl import STATE_ROOT, register_local_gguf
+    from ..memt import MEMT_BRANCH, convert_steps, memt_build_dir
+
+    source = Path(source_dir) if source_dir else (
+        STATE_ROOT / "src" / f"llama.cpp-{MEMT_BRANCH}"
+    )
+    converter = source / "convert_hf_to_gguf.py"
+    if not converter.exists():
+        raise SystemExit(
+            f"error: no converter at {converter}\n"
+            f"  build the branch first: toki model build-memt"
+        )
+    quantizer = memt_build_dir() / "llama-quantize"
+    if not quantizer.exists():
+        quantizer = source / "build" / "bin" / "llama-quantize"
+    if not quantizer.exists():
+        raise SystemExit(
+            f"error: no llama-quantize at {quantizer}\n"
+            f"  build the branch first: toki model build-memt"
+        )
+    out = Path(out_file) if out_file else (
+        STATE_ROOT / "models" / f"{name or Path(checkpoint).name}.gguf"
+    )
+    out.parent.mkdir(parents=True, exist_ok=True)
+    steps = convert_steps(
+        converter, quantizer, Path(checkpoint), out,
+        python=_converter_python(), quant=quant, memt_type=memt_type,
+    )
+    for step in steps:
+        click.echo("$ " + " ".join(step))
+        if dry_run:
+            continue
+        try:
+            subprocess.run(step, check=True)
+        except FileNotFoundError as e:
+            raise SystemExit(f"error: {e}") from None
+        except subprocess.CalledProcessError as e:
+            raise SystemExit(f"error: command failed ({e.returncode})") from None
+    if dry_run:
+        return
+
+    spec = register_local_gguf(out, name=name, ctx_size=ctx_size)
+    click.echo(f"registered {spec.name}: {spec.gguf}")
+    click.echo(f"  ports: llama {spec.llama_port}, daemon {spec.daemon_port}")
+    click.echo(f"  start it with: toki model use {spec.name}")
+
+
 @model.command("install-llama")
 @click.option("--tag", default=None,
               help="llama.cpp release tag to install, e.g. b6400 "

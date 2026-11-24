@@ -38,6 +38,10 @@ class GeminiGenerateContentRequest(BaseModel):
     generationConfig: dict[str, Any] | None = None
     safetySettings: list[dict[str, Any]] | None = None
     cachedContent: str | None = None
+    # MemT native memory (the memt-native-memory branch of llama.cpp).
+    memory_id: str | None = None
+    memory_commit: bool | None = None
+    memory_documents: list[str] | None = None
 
 
 def _text(value: Any) -> str:

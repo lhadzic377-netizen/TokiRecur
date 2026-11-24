@@ -1206,6 +1206,8 @@ class LauncherApp(art.ThemedApp, App[dict | None]):
                     row.append(" [no projector]", style=f"bold {art.RED}")
                 elif vision_ok:
                     row.append(" [vision]", style=f"dim {art.AMBER}")
+                if getattr(spec, "memt", False):
+                    row.append(" [memt]", style=f"dim {art.BLUE}")
                 if adapter_stale:
                     row.append(f" [{adapter_id} missing]",
                                style=f"bold {art.RED}")
@@ -1232,6 +1234,8 @@ class LauncherApp(art.ThemedApp, App[dict | None]):
                     row.append(" [no projector]", style=f"bold {art.RED}")
                 elif vision_ok:
                     row.append(" [vision]", style=f"dim {art.AMBER}")
+                if getattr(spec, "memt", False):
+                    row.append(" [memt]", style=f"dim {art.BLUE}")
                 if adapter_stale:
                     row.append(f" [{adapter_id} missing]",
                                style=f"bold {art.RED}")

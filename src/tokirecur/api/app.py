@@ -37,7 +37,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel, Field
 
 from .. import tap
-from ..backend import _normalize_messages
+from ..backend import MEMORY_ACTIONS, _normalize_messages
 from ..core.recycling import (
     LlamaBackend,
     RecyclingEngine,
@@ -741,6 +741,13 @@ class CompletionRequest(BaseModel):
     session_id: str | None = None
     skip_cache: bool = False
     stream: bool = False
+    # MemT native memory: the memory state to read, whether to write
+    # this turn into it, and documents to write into it first. Only a
+    # llama-server built from the memt-native-memory branch knows
+    # these; without them the model is the plain backbone.
+    memory_id: str | None = None
+    memory_commit: bool | None = None
+    memory_documents: list[str] | None = None
 
 
 class CompletionResponse(BaseModel):
@@ -806,6 +813,14 @@ class ChatCompletionRequest(BaseModel):
     # contains visible content instead of internal reasoning tokens.
     # Other models ignore this field.
     chat_template_kwargs: dict | None = None
+    # MemT native memory (the memt-native-memory branch of llama.cpp):
+    # which memory state to read, whether to write this turn into it
+    # when the reply ends normally, and documents to write into it
+    # before generating. A server without the branch rejects unknown
+    # fields, so they are only sent when the client used them.
+    memory_id: str | None = None
+    memory_commit: bool | None = None
+    memory_documents: list[str] | None = None
 
 
 class ResponsesItem(BaseModel):
@@ -1241,6 +1256,59 @@ def create_app(
     async def cache_reset() -> dict:
         engine.reset_state()
         return {"status": "reset"}
+
+    # ── MemT native memory ───────────────────────────────────────────
+    #
+    # The memt-native-memory branch of llama.cpp keeps memory states in
+    # RAM, addressed by id. A request names the state it wants to read
+    # (memory_id), may write its own turns into it (memory_commit) and
+    # may write documents into it first (memory_documents). Without a
+    # memory_id the model is the plain backbone.
+    #
+    # The endpoints below are the branch's own: GET /memory lists the
+    # states, POST /memory/{id}?action=save|restore|erase saves,
+    # restores or erases one (save and restore need --slot-save-path).
+    # A build without the branch answers 404, and the daemon says so
+    # instead of pretending the memory is empty.
+
+    @app.get("/memory")
+    async def memory_list() -> dict:
+        """The memory states llama-server holds, by id."""
+        result = await asyncio.to_thread(backend.memory_list)
+        if not result.get("supported"):
+            return {
+                "supported": False,
+                "memories": None,
+                "error": result.get("error"),
+                "hint": (
+                    "this llama-server has no MemT memory - it was built "
+                    "without the memt-native-memory branch of llama.cpp"
+                ),
+            }
+        return {"supported": True, "memories": result.get("memories")}
+
+    @app.post("/memory/{memory_id}")
+    async def memory_action(memory_id: str, action: str = "erase") -> dict:
+        """Save, restore or erase one memory state."""
+        if action not in MEMORY_ACTIONS:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"unknown action '{action}' "
+                    f"(one of: {', '.join(MEMORY_ACTIONS)})"
+                ),
+            )
+        result = await asyncio.to_thread(backend.memory_action, memory_id, action)
+        if not result.get("ok"):
+            return {
+                "ok": False,
+                "error": result.get("error"),
+                "hint": (
+                    "this llama-server has no MemT memory - it was built "
+                    "without the memt-native-memory branch of llama.cpp"
+                ),
+            }
+        return {"ok": True, "body": result.get("body")}
 
     @app.get("/v1/health/llama")
     async def health_llama() -> dict:
@@ -1685,6 +1753,9 @@ def create_app(
         tools: list | None = None,
         tool_choice: str | dict | None = None,
         sampling: dict | None = None,
+        memory_id: str | None = None,
+        memory_commit: bool | None = None,
+        memory_documents: list[str] | None = None,
     ) -> Any:
         """Generator that yields SSE-formatted OpenAI chunks.
 
@@ -1754,6 +1825,9 @@ def create_app(
                     tools=tools,
                     tool_choice=tool_choice,
                     sampling=sampling,
+                    memory_id=memory_id,
+                    memory_commit=memory_commit,
+                    memory_documents=memory_documents,
                 )
             )
             try:
@@ -2450,6 +2524,9 @@ def create_app(
                         completion_id,
                         is_chat=False,
                         sampling=sampling,
+                        memory_id=req.memory_id,
+                        memory_commit=req.memory_commit,
+                        memory_documents=req.memory_documents,
                     ),
                     media_type="text/event-stream",
                 )
@@ -2461,6 +2538,9 @@ def create_app(
                 max_slots=_resolve_max_slots(req.max_slots),
                 session_id=req.session_id,
                 sampling=sampling,
+                memory_id=req.memory_id,
+                memory_commit=req.memory_commit,
+                memory_documents=req.memory_documents,
             )
             # Record metrics.
             state = engine.slot_state()
@@ -2607,6 +2687,9 @@ def create_app(
                         tools=req.tools,
                         tool_choice=req.tool_choice,
                         sampling=sampling,
+                        memory_id=req.memory_id,
+                        memory_commit=req.memory_commit,
+                        memory_documents=req.memory_documents,
                     ),
                     media_type="text/event-stream",
                 )
@@ -2626,6 +2709,9 @@ def create_app(
                 tools=req.tools,
                 tool_choice=req.tool_choice,
                 sampling=sampling,
+                memory_id=req.memory_id,
+                memory_commit=req.memory_commit,
+                memory_documents=req.memory_documents,
             )
             state = engine.slot_state()
             slot_ctx = next(
@@ -2797,6 +2883,9 @@ def create_app(
                         tools=tools,
                         tool_choice=tool_choice,
                         sampling=sampling,
+                        memory_id=getattr(req, "memory_id", None),
+                        memory_commit=getattr(req, "memory_commit", None),
+                        memory_documents=getattr(req, "memory_documents", None),
                     )
                     items = _tap_anthropic_stream(
                         items,
@@ -2835,6 +2924,9 @@ def create_app(
                 tools=tools,
                 tool_choice=tool_choice,
                 sampling=sampling,
+                memory_id=getattr(req, "memory_id", None),
+                memory_commit=getattr(req, "memory_commit", None),
+                memory_documents=getattr(req, "memory_documents", None),
             )
             state = engine.slot_state()
             slot_ctx = next(
@@ -2934,6 +3026,9 @@ def create_app(
                         tools=tools,
                         tool_choice=tool_choice,
                         sampling=sampling,
+                        memory_id=getattr(req, "memory_id", None),
+                        memory_commit=getattr(req, "memory_commit", None),
+                        memory_documents=getattr(req, "memory_documents", None),
                     )
                     relay = _record_stream_prefill(items, model_name)
                     async for item in relay:
@@ -2975,6 +3070,9 @@ def create_app(
                 tools=tools,
                 tool_choice=tool_choice,
                 sampling=sampling,
+                memory_id=getattr(req, "memory_id", None),
+                memory_commit=getattr(req, "memory_commit", None),
+                memory_documents=getattr(req, "memory_documents", None),
             )
             tap.record(
                 endpoint="generateContent",

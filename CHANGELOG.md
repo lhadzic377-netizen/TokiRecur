@@ -6,6 +6,37 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.25] - 2026-11-24
+
+### Added
+- **MemT native memory.** A MemT model carries memory weights - tensors
+  named `blk.*.memt_*` beside the backbone - that upstream llama.cpp
+  does not know, so the server refuses the file. The memory lives in the
+  `memt-native-memory` branch of Brishen/llama.cpp (current upstream
+  plus one commit, with the memory on CPU and CUDA), and toki now
+  speaks it end to end:
+
+  - the daemon carries the branch's request fields - `memory_id` (the
+    memory state to read), `memory_commit` (write this turn's messages
+    into it when the reply ends normally) and `memory_documents`
+    (documents to write into it before generating) - through the OpenAI,
+    Anthropic and Gemini routes, and only when the client used them, so
+    an ordinary build never sees an unknown field;
+  - the memory states themselves are reachable: `GET /memory` lists
+    them, `POST /memory/{id}?action=save|restore|erase` saves, restores
+    or erases one (save and restore need `--slot-save-path`);
+  - `toki model build-memt` builds the branch from source into its own
+    directory beside the other per-build llama-server copies, and
+    `toki model convert-memt` converts a checkpoint with the branch's
+    own converter and quantizes it with the memory weights pinned to
+    Q8_0 (4-bit memory weights lose what they are for) and registers it
+    like any other model; `toki model register` does the same for a
+    GGUF that is already on the machine;
+  - a model with a memory wears a `[memt]` tag in the launcher;
+  - a MemT model on a build that cannot load it is refused *before* the
+    server starts, with the way out - upstream's "unknown tensor type"
+    reads like a corrupt download, and it is not one.
+
 ## [0.3.24] - 2026-11-23
 
 ### Added

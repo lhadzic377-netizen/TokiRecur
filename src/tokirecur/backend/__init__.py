@@ -243,6 +243,35 @@ def backend_timeout() -> float:
     return DEFAULT_BACKEND_TIMEOUT
 
 
+#: The memory actions the MemT branch's llama-server understands.
+MEMORY_ACTIONS = ("save", "restore", "erase")
+
+
+def _merge_memory(
+    payload: dict,
+    memory_id: str | None,
+    memory_commit: bool | None,
+    memory_documents: list[str] | None,
+) -> None:
+    """Put the MemT native-memory fields into a llama-server payload.
+
+    The fields are the ``memt-native-memory`` branch's: ``memory_id``
+    names the memory state to read, ``memory_commit`` writes this
+    request's turns into it when the reply ends normally, and
+    ``memory_documents`` writes documents into it before generating.
+
+    They are only sent when the caller used them. A build without the
+    branch rejects an unknown field, and a client that never mentions
+    memory should not have to know the branch exists.
+    """
+    if memory_id:
+        payload["memory_id"] = memory_id
+    if memory_commit is not None:
+        payload["memory_commit"] = bool(memory_commit)
+    if memory_documents:
+        payload["memory_documents"] = list(memory_documents)
+
+
 class LlamaServerBackend(LlamaBackend):
     """HTTP backend against llama-server (upstream).
 
@@ -596,6 +625,39 @@ class LlamaServerBackend(LlamaBackend):
             model_id = "unknown"
         return {"n_past": 0, "model_id": model_id, "vocab_size": 152064}
 
+    def memory_list(self) -> dict[str, Any]:
+        """The memory states llama-server holds, by id.
+
+        Only the MemT branch's llama-server has them. An upstream build
+        answers 404, and the caller turns that into "this build has no
+        memory" rather than into an error the person has to decode.
+        """
+        try:
+            body = self._get("/memory")
+            return {"memories": body, "supported": True}
+        except Exception as e:
+            logger.warning("memory_list failed: %s", e)
+            return {"memories": None, "supported": False, "error": str(e)}
+
+    def memory_action(self, memory_id: str, action: str) -> dict[str, Any]:
+        """Save, restore or erase one memory state.
+
+        ``POST /memory/{id}?action=save|restore|erase``. Save and
+        restore read and write the slot-save directory, so the server
+        needs ``--slot-save-path``; erase only forgets the state.
+        """
+        if action not in MEMORY_ACTIONS:
+            raise ValueError(
+                f"unknown memory action {action!r} "
+                f"(one of: {', '.join(MEMORY_ACTIONS)})"
+            )
+        try:
+            body = self._post(f"/memory/{memory_id}?action={action}", {})
+            return {"ok": True, "body": body}
+        except Exception as e:
+            logger.warning("memory_action(%s, %s) failed: %s", memory_id, action, e)
+            return {"ok": False, "error": str(e)}
+
     def clear_slot(self, slot_id: int) -> dict[str, Any]:
         """Erase a slot's KV state on llama-server.
 
@@ -632,6 +694,9 @@ class LlamaServerBackend(LlamaBackend):
         cached_n_past: int = 0,
         cache_prompt: bool = True,
         sampling: dict | None = None,
+        memory_id: str | None = None,
+        memory_commit: bool | None = None,
+        memory_documents: list[str] | None = None,
     ) -> dict[str, Any]:
         """Run a completion. If `cached_n_past > 0` and the caller has
         already loaded a saved KV state into this slot, the server still
@@ -653,6 +718,7 @@ class LlamaServerBackend(LlamaBackend):
             "cache_prompt": cache_prompt,
         }
         _merge_sampling(payload, sampling)
+        _merge_memory(payload, memory_id, memory_commit, memory_documents)
         started = time.perf_counter()
         r = self._client.post(
             f"{self.base_url}/completion",
@@ -686,6 +752,9 @@ class LlamaServerBackend(LlamaBackend):
         temperature: float = 0.0,
         cache_prompt: bool = True,
         sampling: dict | None = None,
+        memory_id: str | None = None,
+        memory_commit: bool | None = None,
+        memory_documents: list[str] | None = None,
     ) -> dict[str, Any]:
         """Run a completion that relies on llama-server's IN-MEMORY
         slot cache (no save/restore round-trip through disk).
@@ -713,6 +782,7 @@ class LlamaServerBackend(LlamaBackend):
             "cache_prompt": cache_prompt,
         }
         _merge_sampling(payload, sampling)
+        _merge_memory(payload, memory_id, memory_commit, memory_documents)
         started = time.perf_counter()
         r = self._client.post(
             f"{self.base_url}/completion",
@@ -750,6 +820,9 @@ class LlamaServerBackend(LlamaBackend):
         tools: list | None = None,
         tool_choice: str | dict | None = None,
         sampling: dict | None = None,
+        memory_id: str | None = None,
+        memory_commit: bool | None = None,
+        memory_documents: list[str] | None = None,
     ) -> dict[str, Any]:
         """Run a chat completion via llama-server's OpenAI-compatible
         endpoint (``/v1/chat/completions``).
@@ -797,6 +870,7 @@ class LlamaServerBackend(LlamaBackend):
                 payload["tool_choice"] = tool_choice
         if chat_template_kwargs:
             payload["chat_template_kwargs"] = chat_template_kwargs
+        _merge_memory(payload, memory_id, memory_commit, memory_documents)
         if reasoning_effort:
             # llama-server reads this field itself and hands it to the chat
             # template, so the model steers its own reasoning depth. Sending
@@ -870,6 +944,9 @@ class LlamaServerBackend(LlamaBackend):
         tools: list | None = None,
         tool_choice: str | dict | None = None,
         sampling: dict | None = None,
+        memory_id: str | None = None,
+        memory_commit: bool | None = None,
+        memory_documents: list[str] | None = None,
     ):
         """Stream a chat completion via llama-server's OpenAI-compatible
         endpoint (``/v1/chat/completions`` with ``stream: True``).
@@ -918,6 +995,7 @@ class LlamaServerBackend(LlamaBackend):
                 payload["tool_choice"] = tool_choice
         if chat_template_kwargs:
             payload["chat_template_kwargs"] = chat_template_kwargs
+        _merge_memory(payload, memory_id, memory_commit, memory_documents)
         if reasoning_effort:
             payload["reasoning_effort"] = reasoning_effort
         started = time.perf_counter()

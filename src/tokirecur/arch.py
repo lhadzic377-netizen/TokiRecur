@@ -74,6 +74,44 @@ def _contains_bytes(path: Path, needle: bytes) -> bool:
         return False
 
 
+def binary_supports_memt(binary: str | None) -> bool | None:
+    """Whether the build can load MemT memory weights.
+
+    Upstream llama.cpp has never heard of the MemT tensor type, so a
+    build that cannot load one says so in its own binary: the branch's
+    ggml carries the memory type name, upstream does not. The check is
+    a search for that name in the binary and the libraries beside it -
+    the same trick :func:`binary_supports_arch` uses for architectures.
+
+    ``None`` means "cannot tell": the binary is missing or unreadable,
+    and a refusal on a guess would be worse than letting the server try.
+    """
+    if not binary:
+        return None
+    path = Path(binary)
+    if not path.exists():
+        return None
+    candidates = _libraries_for(path)
+    # The branch's llama library names the memory in several places -
+    # the attention's "attn_memt", the per-block weights
+    # ("blk.%d.memt_f"), the graph input ("llm_graph_input_memt") and
+    # the quantized form of the memory type ("memt_q8_0"). Any of them
+    # says the build knows the memory; upstream says none of them.
+    needles = (b"attn_memt", b"llm_graph_input_memt", b"memt_q8_0",
+               b"memt_decay_bias")
+    for candidate in candidates:
+        if any(_contains_bytes(candidate, needle) for needle in needles):
+            return True
+    # No llama library beside the wrapper: the type may live in a
+    # library this check cannot see, so there is no opinion to give.
+    if not any(c.name.startswith("libllama") or c.name.startswith("llama")
+               for c in candidates[1:]):
+        return None
+    # The libraries are there and none of them knows the memory type:
+    # this is an upstream build.
+    return False
+
+
 def binary_supports_arch(binary: str | None, arch: str | None) -> bool | None:
     """Whether the build at ``binary`` knows the GGUF architecture ``arch``.
 

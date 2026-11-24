@@ -277,6 +277,60 @@ The daemon's `/v1/chat/completions` is OpenAI-compatible and tool-calling capabl
 
 Grades: A+ ≥ 90, A ≥ 80, B ≥ 70, C ≥ 60, D ≥ 50, F < 50. Workloads range from `realistic_mixed` (201 prompts across five traffic types) and `stress_adversarial` (301 adversarial prompts) to `agent_long_context`, `rag_chunks`, `mixed` and `no_overlap`.
 
+## MemT native memory
+
+A MemT model carries *memory weights* - tensors named `blk.*.memt_*`
+beside the backbone - and upstream llama.cpp does not know that tensor
+type, so the server refuses the file. The memory lives in the
+`memt-native-memory` branch of [Brishen/llama.cpp](https://github.com/Brishen/llama.cpp)
+(current upstream plus one commit, with the memory on CPU and CUDA),
+and toki speaks it:
+
+```bash
+toki model build-memt --backend cpu      # build the branch into ~/.local/state/tokirecur/bin-memt
+toki model convert-memt <checkpoint-dir> --name memt-1.0-nano
+toki model register <file.gguf> --name memt-1.0-nano \
+    --binary ~/.local/state/tokirecur/bin-memt/llama-server   # for a GGUF you already have
+toki model use memt-1.0-nano
+```
+
+A model with a memory wears a `[memt]` tag in the launcher, and a model
+whose llama-server cannot load it is refused before the server starts -
+with the way out, because upstream's "unknown tensor type" reads like a
+corrupt download.
+
+The checkpoint is converted with the branch's own converter (upstream's
+does not know the memory tensors) and quantized with the memory weights
+pinned to **Q8_0** - they are the thing that remembers, and 4-bit memory
+weights lose that.
+
+The daemon carries the branch's request fields through every route it
+speaks, and only when the client used them:
+
+```jsonc
+// POST /v1/chat/completions  (same fields on /v1/messages and the Gemini route)
+{
+  "messages": [{"role": "user", "content": "I have a kitten named memmy who loves shrimp."}],
+  "memory_id": "alice",        // the memory state to read
+  "memory_commit": true,       // write this turn's messages into it when the reply ends normally
+  "memory_documents": ["..."],  // documents to write into it before generating
+}
+```
+
+The memory states themselves live in RAM, addressed by id:
+
+```bash
+curl localhost:8787/memory                       # what the server holds
+curl -X POST "localhost:8787/memory/alice?action=save"     # save (needs --slot-save-path)
+curl -X POST "localhost:8787/memory/alice?action=restore"  # restore
+curl -X POST "localhost:8787/memory/alice?action=erase"    # forget it
+```
+
+Without a `memory_id` the model behaves as the plain backbone. A MemT
+model on a build that cannot load it is refused before the server
+starts, with the way out - upstream's "unknown tensor type" reads like a
+corrupt download, and it is not one.
+
 ## Themes
 
 The launcher, the chat TUI, the CLI and the web dashboard share one

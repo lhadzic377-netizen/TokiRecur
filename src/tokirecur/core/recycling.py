@@ -223,6 +223,29 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
     return dot / ((na ** 0.5) * (nb ** 0.5))
 
 
+def _memory_kwargs(
+    memory_id: str | None,
+    memory_commit: bool | None,
+    memory_documents: list[str] | None,
+) -> dict:
+    """The MemT memory fields, but only the ones the caller used.
+
+    A build without the memt-native-memory branch rejects an unknown
+    field, so a request that never mentions memory must not mention it
+    to the server either - and a backend that does not know about
+    memory should not have to learn a new keyword argument to keep
+    working.
+    """
+    out: dict = {}
+    if memory_id:
+        out["memory_id"] = memory_id
+    if memory_commit is not None:
+        out["memory_commit"] = bool(memory_commit)
+    if memory_documents:
+        out["memory_documents"] = list(memory_documents)
+    return out
+
+
 class RecyclingEngine:
     """The 5-step algorithm in object form.
 
@@ -300,6 +323,9 @@ class RecyclingEngine:
         session_id: str | None = None,
         max_context_tokens: int | None = None,
         sampling: dict | None = None,
+        memory_id: str | None = None,
+        memory_commit: bool | None = None,
+        memory_documents: list[str] | None = None,
     ) -> RecyclingResult:
         """Run the recycling algorithm using llama-server's IN-MEMORY
         slot cache instead of explicit save/restore.
@@ -358,6 +384,7 @@ class RecyclingEngine:
                 temperature=temperature,
                 cache_prompt=cache_prompt,
                 sampling=sampling,
+                **_memory_kwargs(memory_id, memory_commit, memory_documents),
             ),
             tokenize_text=prompt,
             max_tokens=max_tokens,
@@ -377,6 +404,9 @@ class RecyclingEngine:
         session_id: str | None = None,
         max_context_tokens: int | None = None,
         chat_template_kwargs: dict | None = None,
+        memory_id: str | None = None,
+        memory_commit: bool | None = None,
+        memory_documents: list[str] | None = None,
         reasoning_effort: str | None = None,
         tools: list | None = None,
         tool_choice: str | dict | None = None,
@@ -422,6 +452,7 @@ class RecyclingEngine:
                 tools=tools,
                 tool_choice=tool_choice,
                 sampling=sampling,
+                **_memory_kwargs(memory_id, memory_commit, memory_documents),
             ),
             tokenize_text=routing_text,
             max_tokens=max_tokens,
@@ -674,6 +705,9 @@ class RecyclingEngine:
         session_id: str | None = None,
         max_context_tokens: int | None = None,
         chat_template_kwargs: dict | None = None,
+        memory_id: str | None = None,
+        memory_commit: bool | None = None,
+        memory_documents: list[str] | None = None,
         reasoning_effort: str | None = None,
         tools: list | None = None,
         tool_choice: str | dict | None = None,
@@ -725,6 +759,7 @@ class RecyclingEngine:
             tools=tools,
             tool_choice=tool_choice,
             sampling=sampling,
+            **_memory_kwargs(memory_id, memory_commit, memory_documents),
         )
         try:
             async for item in upstream:

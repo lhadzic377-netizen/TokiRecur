@@ -450,6 +450,12 @@ class ModelSpec:
     # `--reasoning off` to llama-server for templates that honor it
     # (stock Qwen3.5); ignored by templates that hard-code thinking.
     reasoning: str = "auto"
+    # True when the model carries MemT native memory weights. Such a
+    # model needs a llama-server built from the memt-native-memory
+    # branch of llama.cpp: upstream does not know the tensor type and
+    # refuses the file. Set from the GGUF itself when the model is
+    # registered, so the launcher can say which models have a memory.
+    memt: bool = False
     # Reasoning effort levels this model's chat template understands
     # ("none", "low", "medium", "high", ...). Empty (default) means the
     # model has the on/off switch only. Each level becomes a selectable
@@ -2762,6 +2768,76 @@ def remove_adapter(
     return new_spec, was_active
 
 
+def register_local_gguf(
+    gguf: Path | str,
+    *,
+    name: str | None = None,
+    label: str | None = None,
+    ctx_size: int | None = None,
+    kv: str = "f16",
+    binary: str | None = None,
+    reasoning: str = "auto",
+    registry: Path | None = None,
+) -> ModelSpec:
+    """Register a GGUF that is already on this machine.
+
+    Some models do not arrive as a file to download: the MemT models
+    are converted and quantized here (the memory weights must stay at
+    Q8_0, which a published GGUF would not), so the file comes by
+    another road and still has to be registered like any other model.
+    """
+    path = Path(gguf)
+    if not path.exists():
+        raise FileNotFoundError(f"model file not found: {path}")
+    specs = load_registry(registry)
+    name = _slugify_name(name or path.stem)
+    if any(s.name == name for s in specs):
+        raise ValueError(f"model '{name}' already exists in the registry")
+    llama_port, daemon_port = next_free_ports(specs)
+    if binary is None:
+        binary, _env = pull_defaults(specs)
+    if ctx_size is None:
+        try:
+            ctx_size = _auto_ctx_size(path, parallel=2, kv=kv)
+        except Exception:
+            ctx_size = 100000
+    from ..memt import has_memt_weights
+
+    memt_weights = has_memt_weights(path)
+    raw = {
+        "name": name,
+        "label": label or path.stem,
+        "gguf": str(path),
+        "llama_port": llama_port,
+        "daemon_port": daemon_port,
+        "ctx_size": ctx_size,
+        "parallel": 2,
+        "kv": kv,
+        "max_tokens": max(1, ctx_size // 2),
+        "model_id": _slugify_name(path.stem),
+        "always_on": False,
+        "boot": False,
+        "binary": binary,
+        "env": {},
+        "reasoning": reasoning,
+        "source": "pulled",
+        "repo": "",
+        "mmproj": "",
+        # A model with MemT weights needs the branch's llama-server; the
+        # flag says so before anyone tries to start it on another build.
+        "memt": memt_weights,
+        # The memory's save and restore read and write the slot-save
+        # directory, so the server needs to be told where that is.
+        "extra_args": (
+            ["--slot-save-path", str(STATE_ROOT / "slot-save")]
+            if memt_weights else []
+        ),
+    }
+    spec = ModelSpec(raw=raw, **raw)
+    save_registry([*specs, spec], registry)
+    return spec
+
+
 def pull_model(
     repo_id: str,
     name: str | None = None,
@@ -4508,6 +4584,41 @@ def _check_arch(spec: ModelSpec) -> None:
     )
 
 
+def _check_memt(spec: ModelSpec) -> None:
+    """Refuse to start MemT weights on a build that cannot load them.
+
+    A MemT model carries memory weights - tensors named ``blk.*.memt_*``
+    - that upstream llama.cpp does not know, so the server dies inside
+    the load with a message about an unknown tensor type. That reads
+    like a corrupt download; it is an out-of-date binary.
+
+    The MemT memory lives in the ``memt-native-memory`` branch of
+    Brishen/llama.cpp (upstream plus one commit), and that branch is
+    what has to be built.
+    """
+    from ..memt import build_hint, has_memt_weights
+
+    if not spec.gguf or not Path(spec.gguf).exists():
+        return
+    try:
+        if not has_memt_weights(spec.gguf):
+            return
+    except Exception:
+        return
+    from ..arch import binary_supports_memt
+
+    binary = _resolve_binary(spec)
+    if binary_supports_memt(binary) is not False:
+        return
+    raise RuntimeError(
+        f"{spec.name}: this model has MemT memory weights, and the "
+        f"llama-server at\n  {binary}\n"
+        "  cannot load them. Upstream llama.cpp has never supported the "
+        "MemT\n  tensor type; the memory lives in a branch of llama.cpp.\n"
+        f"  fix: {build_hint()}"
+    )
+
+
 def start_model(spec: ModelSpec, wait: bool = True) -> None:
     """Bring up the model's llama-server + daemon (idempotent)."""
     state = spec.state_dir()
@@ -4561,6 +4672,7 @@ def start_model(spec: ModelSpec, wait: bool = True) -> None:
         _check_ram(spec)
         _check_draft(spec)
         _check_arch(spec)
+        _check_memt(spec)
         ctx, kv, parallel = _fit_plan(spec)
         if ctx < spec.ctx_size or kv != spec.kv or parallel != spec.parallel:
             logger.warning(

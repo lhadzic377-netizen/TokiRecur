@@ -65,6 +65,31 @@
   + wrappers). `--offline 3.12` adds a win_amd64 wheelhouse; the installer
   refuses a wheelhouse built for a different Python.
 
+## MemT native memory
+
+- MemT models carry memory weights (`blk.*.memt_*` tensors) that
+  **upstream llama.cpp refuses to load**. The memory lives in the
+  `memt-native-memory` branch of Brishen/llama.cpp (upstream + one
+  commit; the memory is CPU and CUDA). Build it with
+  `toki model build-memt` (into `~/.local/state/tokirecur/bin-memt`) and
+  convert a checkpoint with `toki model convert-memt` (the branch's own
+  converter, then `llama-quantize --tensor-type memt_=q8_0` - the memory
+  weights stay at Q8_0).
+- The branch's server takes three extra request fields on
+  `/v1/chat/completions` and `/completion`: `memory_id` (the memory
+  state to read), `memory_commit` (write this turn's messages into it
+  when the reply ends normally), `memory_documents` (documents to write
+  into it before generating). The daemon carries them through the
+  OpenAI, Anthropic and Gemini routes, and **only when the client used
+  them** - a build without the branch rejects an unknown field. The
+  memory states are in RAM by id: `GET /memory`,
+  `POST /memory/{id}?action=save|restore|erase` (save and restore need
+  `--slot-save-path`).
+- `src/tokirecur/memt.py` holds the knowledge (which weights are MemT
+  weights, the build steps, the conversion steps);
+  `arch.binary_supports_memt` tells a branch build from an upstream one
+  by the `memt_q8_0` type name in the binary and its libraries.
+
 ## GPU / diagnosis
 
 - `toki doctor` (module `src/tokirecur/diagnose.py`): GPU hardware detection
