@@ -128,3 +128,42 @@ async def test_escape_closes_and_stops_the_tunnel():
                 break
         assert server.stopped
         assert not isinstance(app.screen, PublicServerScreen)
+
+
+async def test_u_copies_the_paste_ready_link_and_the_others_have_their_own():
+    """The link that goes in a custom-endpoint form is the base URL
+    with /v1 - not the bare origin, and not a labelled block."""
+    from tokirecur.tui import launcher as launcher_mod
+
+    copied: list[str] = []
+    app = LauncherApp()
+    async with app.run_test(size=(120, 40)) as pilot:
+        # Start from a live screen without dialing Cloudflare.
+        seen: dict = {}
+        screen = PublicServerScreen("m", _spec(), starter=_fake_starter(seen))
+        await app.push_screen(screen)
+        await pilot.press("enter")
+        for _ in range(40):
+            await pilot.pause(0.05)
+            if screen._server is not None:
+                break
+        assert screen._server is not None
+
+        original = launcher_mod.copy_to_desktop
+        launcher_mod.copy_to_desktop = lambda text: (copied.append(text), "test")[1]
+        try:
+            await pilot.press("u")
+            await pilot.pause()
+            await pilot.press("a")
+            await pilot.pause()
+            await pilot.press("g")
+            await pilot.pause()
+            await pilot.press("c")
+            await pilot.pause()
+        finally:
+            launcher_mod.copy_to_desktop = original
+
+    assert copied[0] == f"{URL}/v1"
+    assert copied[1] == URL
+    assert copied[2] == f"{URL}/v1beta"
+    assert "API key" in copied[3]

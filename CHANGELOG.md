@@ -6,6 +6,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- **Copying a public-server link now puts a usable link on the desktop
+  clipboard.** Textual's own copy writes OSC 52, which GNOME Terminal
+  ignores, so the "copied" toast was a lie; the helper now uses the
+  desktop clipboard (wl-copy / xclip / pbcopy / PowerShell, or a detached
+  tkinter selection owner) and falls back to OSC 52 only when there is
+  no desktop clipboard. `u` copies the OpenAI base URL *with* `/v1`
+  (what a custom-endpoint form wants) instead of the bare origin, with
+  `a` and `g` for the Anthropic and Google bases and `c` for the whole
+  block.
+
 ## [0.3.25] - 2026-11-24
 
 ### Added

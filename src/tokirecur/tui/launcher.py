@@ -36,6 +36,7 @@ from ..adapters import (
 from ..adapters import (
     active_mode as active_adapter_mode,
 )
+from ..clipboard import copy as copy_to_desktop
 from ..ctl import (
     DAEMON_ONLY_CLIENTS,
     load_registry,
@@ -1764,8 +1765,10 @@ class PublicServerScreen(ModalScreen[None]):
     BINDINGS = [
         Binding("escape", "close", "Close", show=False, priority=True),
         Binding("enter", "start", "Start", show=False),
-        Binding("c", "copy_credentials", "Copy", show=False),
-        Binding("u", "copy_url", "Copy URL", show=False),
+        Binding("c", "copy_credentials", "Copy all", show=False),
+        Binding("u", "copy_openai_link", "Copy OpenAI link", show=False),
+        Binding("a", "copy_anthropic_link", "Copy Anthropic link", show=False),
+        Binding("g", "copy_google_link", "Copy Google link", show=False),
     ]
 
     DEFAULT_CSS = """
@@ -1868,7 +1871,8 @@ class PublicServerScreen(ModalScreen[None]):
         row("Anthropic messages", f"POST {srv.anthropic_base}/v1/messages")
         row("Google generate", f"POST {srv.google_base}/models/{srv.model}:generateContent")
         row("Google stream", f"POST {srv.google_base}/models/{srv.model}:streamGenerateContent")
-        out.append("\n  c copy credentials · u copy URL · esc close (stops tunnel)\n",
+        out.append("\n  u OpenAI link · a Anthropic link · g Google link · "
+                   "c all credentials · esc close (stops tunnel)\n",
                    style="dim")
         out.append("  anyone with the key can use this machine while it is open\n",
                    style="dim")
@@ -1917,11 +1921,7 @@ class PublicServerScreen(ModalScreen[None]):
         self._server = server
         self._state = "live"
         self._repaint()
-        self.app.copy_to_clipboard(server.credentials_text())
-        self.app.notify(
-            f"public server live: {server.url} — credentials copied",
-            timeout=6,
-        )
+        self._copy(server.openai_base, "OpenAI base URL")
 
     def _fail(self, message: str) -> None:
         if not self.is_attached:
@@ -1930,17 +1930,40 @@ class PublicServerScreen(ModalScreen[None]):
         self._error = message
         self._repaint()
 
+    def _copy(self, text: str, what: str) -> None:
+        """Copy a link to the desktop clipboard and say what was copied.
+
+        Textual's own copy writes OSC 52, which GNOME Terminal and many
+        others ignore - the old "copied" toast was a lie. The real
+        clipboard is tried first; OSC 52 is only the last resort.
+        """
+        taken = copy_to_desktop(text)
+        if taken == "none":
+            self.app.copy_to_clipboard(text)
+            taken = "terminal"
+        self.app.notify(f"{what} copied: {text}", timeout=6)
+
     def action_copy_credentials(self) -> None:
         if self._server is None:
             return
-        self.app.copy_to_clipboard(self._server.credentials_text())
-        self.app.notify("credentials copied", timeout=3)
+        self._copy(self._server.credentials_text(), "Credentials")
 
-    def action_copy_url(self) -> None:
+    def action_copy_openai_link(self) -> None:
         if self._server is None:
             return
-        self.app.copy_to_clipboard(self._server.url)
-        self.app.notify("public URL copied", timeout=3)
+        # The base URL needs /v1: that is what an OpenAI-compatible
+        # custom-endpoint form wants, not the bare origin.
+        self._copy(self._server.openai_base, "OpenAI base URL")
+
+    def action_copy_anthropic_link(self) -> None:
+        if self._server is None:
+            return
+        self._copy(self._server.anthropic_base, "Anthropic base URL")
+
+    def action_copy_google_link(self) -> None:
+        if self._server is None:
+            return
+        self._copy(self._server.google_base, "Google base URL")
 
     def action_close(self) -> None:
         self._stop_tunnel()
