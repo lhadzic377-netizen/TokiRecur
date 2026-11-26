@@ -24,7 +24,13 @@ INSTALL="${LLAMA_CPP_INSTALL:-0}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PATCH="$ROOT/patches/llama-server-kv-endpoints.diff"
 STATE_BIN="${TOKI_STATE_BIN:-$HOME/.local/state/tokirecur/bin}"
-JOBS="${JOBS:-$(nproc)}"
+# nproc is the LOGICAL CPU count (32 on this box). A HIP build with that
+# many jobs just fights the GPU compiler and everyone else on the machine.
+# Keep the quiet default low; JOBS=... when the box is yours alone.
+JOBS="${JOBS:-8}"
+if [[ "$JOBS" -gt "$(nproc)" ]]; then
+    JOBS="$(nproc)"
+fi
 
 if [[ ! -d "$LLAMA_CPP_SRC" ]]; then
     echo "error: $LLAMA_CPP_SRC does not exist" >&2

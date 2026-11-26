@@ -3147,6 +3147,17 @@ def convert_memt(checkpoint: str, name: str | None, out_file: str | None,
     click.echo(f"  start it with: toki model use {spec.name}")
 
 
+def _version_banner(stdout: str, stderr: str) -> str:
+    """The version banner a binary printed.
+
+    llama-server prints its banner on stderr; a check that reads only
+    stdout reports a bare "ok" for every build, which is a check that
+    checks nothing.
+    """
+    text = (stderr or "").strip() or (stdout or "").strip()
+    return text.splitlines()[0] if text else "ok"
+
+
 @model.command("install-llama")
 @click.option("--tag", default=None,
               help="llama.cpp release tag to install, e.g. b6400 "
@@ -3941,12 +3952,7 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
             capture_output=True, text=True, timeout=30,
         )
         if probe.returncode == 0:
-            # llama-server prints its version banner on stderr; reading
-            # only stdout reported a bare "ok" for every build.
-            banner = (probe.stderr or "").strip() or (probe.stdout or "").strip()
-            click.echo(
-                "self-check: " + (banner.splitlines()[0] if banner else "ok")
-            )
+            click.echo("self-check: " + _version_banner(probe.stdout, probe.stderr))
         else:
             click.echo(
                 f"warning: {dst} --version failed (rc={probe.returncode}): "
