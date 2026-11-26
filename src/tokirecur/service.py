@@ -38,7 +38,7 @@ def _resolve_token() -> str | None:
     ):
         try:
             if path.is_file():
-                content = path.read_text().strip()
+                content = path.read_text(encoding="utf-8").strip()
                 if content:
                     return content
         except OSError:
@@ -159,7 +159,15 @@ def install() -> int:
     UNIT_DIR.mkdir(parents=True, exist_ok=True)
     unit_path = UNIT_DIR / UNIT_NAME
     tmp = unit_path.with_name(unit_path.name + ".tmp")
-    tmp.write_text(unit_text())
+    tmp.write_text(unit_text(), encoding="utf-8")
+    try:
+        # The unit carries the daemon's bearer token as
+        # TOKI_AUTH_TOKEN. The auth file is 0600; this one was written
+        # with the default umask, so any other user on the machine
+        # could read the token and use the daemon.
+        os.chmod(tmp, 0o600)
+    except OSError:
+        pass
     os.replace(tmp, unit_path)
     print(f"wrote {unit_path}")
 
@@ -171,8 +179,7 @@ def install() -> int:
             ordering = d / "ordering.conf"
             tmp = ordering.with_name(ordering.name + ".tmp")
             tmp.write_text(
-                f"[Unit]\nAfter=toki-model@{prev}.service\n"
-            )
+                f"[Unit]\nAfter=toki-model@{prev}.service\n", encoding="utf-8")
             os.replace(tmp, ordering)
             print(f"wrote {ordering}")
         prev = spec.name

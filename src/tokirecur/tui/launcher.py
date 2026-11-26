@@ -1805,6 +1805,10 @@ class PublicServerScreen(ModalScreen[None]):
         self._server: Any | None = None
         self._error: str | None = None
         self._warned = False
+        # Set when the tunnel came up but nothing answered through it:
+        # the hostname is real and the credentials are right, but the
+        # origin is not serving, so every request would 502.
+        self._warning: str | None = None
 
     # -- compose / state --------------------------------------------------
 
@@ -1855,6 +1859,8 @@ class PublicServerScreen(ModalScreen[None]):
         out.append("● live\n", style=f"bold {art.GREEN}")
         out.append(self._target_line() + "\n\n", style="dim")
         out.append(f"  {srv.url}\n\n", style=f"bold {art.YELLOW}")
+        if self._warning:
+            out.append(f"  {self._warning}\n\n", style=f"bold {art.RED}")
 
         def row(label: str, value: str) -> None:
             out.append(f"  {label:<20}", style="dim")
@@ -1920,6 +1926,17 @@ class PublicServerScreen(ModalScreen[None]):
             return
         self._server = server
         self._state = "live"
+        if getattr(server, "verified", None) is False:
+            # The tunnel exists, but nothing answered through it. Copying
+            # the link now would hand out a URL that answers 502.
+            self._warning = (
+                "nothing answered through the tunnel yet — the stack is "
+                "not serving, so this URL will fail until it is."
+            )
+            self._repaint()
+            self.app.notify(self._warning, timeout=8)
+            return
+        self._warning = None
         self._repaint()
         self._copy(server.openai_base, "OpenAI base URL")
 

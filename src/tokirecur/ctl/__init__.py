@@ -96,7 +96,7 @@ def _writable_dir(parent: Path, name: str) -> Path:
             # Probe write access — mkdir(exist_ok=True) is a no-op when
             # the dir already exists, which silently masks perm errors.
             probe = p / ".toki-write-probe"
-            probe.write_text("")
+            probe.write_text("", encoding="utf-8")
             probe.unlink()
             return p
         except OSError:
@@ -190,7 +190,7 @@ def _new_auth_token(path: Path) -> str:
     token = secrets.token_urlsafe(32)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(token + "\n")
+        path.write_text(token + "\n", encoding="utf-8")
         os.chmod(path, 0o600)
     except OSError:
         pass
@@ -215,7 +215,7 @@ def configured_auth_token() -> str | None:
         try:
             if not path.is_file():
                 continue
-            content = path.read_text().strip()
+            content = path.read_text(encoding="utf-8").strip()
             if not content:
                 continue
             if _is_placeholder(content):
@@ -248,7 +248,7 @@ def configured_auth_tokens() -> list[str]:
         try:
             if not path.is_file():
                 continue
-            content = path.read_text().strip()
+            content = path.read_text(encoding="utf-8").strip()
             if not content:
                 continue
             if _is_placeholder(content):
@@ -678,7 +678,7 @@ def _available_gb() -> float:
     cannot measure.
     """
     try:
-        with open("/proc/meminfo") as fh:
+        with open("/proc/meminfo", encoding="utf-8", errors="replace") as fh:
             for line in fh:
                 if line.startswith("MemAvailable:"):
                     return int(line.split()[1]) / 1048576.0
@@ -1130,7 +1130,7 @@ def _effective_ctx(spec: ModelSpec) -> int:
             # mtime predates the registry's — discard and recompute
             # via _fit_plan so clients don't overfill a 131k file
             # when the registry now asks for 200k.
-            val = int(p.read_text().strip())
+            val = int(p.read_text(encoding="utf-8").strip())
             try:
                 reg_mtime = DEFAULT_REGISTRY.stat().st_mtime
                 if p.stat().st_mtime < reg_mtime:
@@ -1243,7 +1243,7 @@ def _load_registry_yaml(reg: Path) -> dict[str, Any]:
     if not reg.exists():
         reg = _ensure_registry()
     try:
-        return yaml.safe_load(reg.read_text()) or {}
+        return yaml.safe_load(reg.read_text(encoding="utf-8")) or {}
     except (yaml.YAMLError, UnicodeDecodeError, OSError) as e:
         try:
             bak = reg.with_name(f"{reg.name}.bak-corrupt.{int(time.time())}")
@@ -1257,7 +1257,7 @@ def _load_registry_yaml(reg: Path) -> dict[str, Any]:
             pass
         reg = _ensure_registry()
         try:
-            return yaml.safe_load(reg.read_text()) or {}
+            return yaml.safe_load(reg.read_text(encoding="utf-8")) or {}
         except (yaml.YAMLError, UnicodeDecodeError, OSError):
             return {}
 
@@ -1426,7 +1426,7 @@ def _theme_path() -> Path:
 def read_theme() -> str | None:
     """The theme this installation uses, or None for the house style."""
     try:
-        value = _theme_path().read_text().strip().lower()
+        value = _theme_path().read_text(encoding="utf-8").strip().lower()
     except OSError:
         return None
     return value or None
@@ -1452,7 +1452,7 @@ def write_theme(name: str | None) -> Path:
             f"expected one of {', '.join(sorted(THEMES))}"
         )
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(value + "\n")
+    path.write_text(value + "\n", encoding="utf-8")
     return path
 
 
@@ -1470,7 +1470,7 @@ def _active_effort_path() -> Path:
 def read_active_effort() -> str | None:
     """The reasoning effort the active model is being served at."""
     try:
-        value = _active_effort_path().read_text().strip().lower()
+        value = _active_effort_path().read_text(encoding="utf-8").strip().lower()
     except OSError:
         return None
     return value if value in EFFORT_LEVELS else None
@@ -1498,7 +1498,7 @@ def write_active_effort(effort: str | None) -> Path:
 
 def read_active(registry: Path | None = None) -> str | None:
     if ACTIVE_MARKER.exists():
-        name = ACTIVE_MARKER.read_text().strip()
+        name = ACTIVE_MARKER.read_text(encoding="utf-8").strip()
         try:
             get_model(name, registry)
             return name
@@ -1513,7 +1513,7 @@ def read_active(registry: Path | None = None) -> str | None:
 def set_active(name: str, registry: Path | None = None) -> None:
     get_model(name, registry)  # raises KeyError on bad name
     ACTIVE_MARKER.parent.mkdir(parents=True, exist_ok=True)
-    ACTIVE_MARKER.write_text(name + "\n")
+    ACTIVE_MARKER.write_text(name + "\n", encoding="utf-8")
 
 # ── Registry save / pull ──────────────────────────────────────────────
 
@@ -1529,7 +1529,7 @@ def _atomic_write_text(path: Path, text: str, *, mode: int | None = None) -> Non
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(text)
+    tmp.write_text(text, encoding="utf-8")
     if mode is not None:
         tmp.chmod(mode)
     os.replace(tmp, path)
@@ -2081,6 +2081,39 @@ def _pick_mmproj(files: list[str]) -> str | None:
         return (len(_MMPROJ_PREFERENCE), name.lower())
 
     return sorted(candidates, key=rank)[0] if candidates else None
+
+
+def _snapshot_download_kwargs() -> dict[str, Any]:
+    """The extra kwargs this huggingface_hub understands.
+
+    ``resume_download`` is gone in huggingface_hub 1.x and later -
+    resuming is the only behaviour now, the argument is deprecated and
+    ignored, and passing it raises TypeError on the versions that
+    dropped it. That broke ``toki model pull`` outright on a fresh
+    install. The 0.x hubs need it (they default to restarting an
+    interrupted pull from zero), so it is passed only there.
+    """
+    import inspect
+
+    try:
+        import huggingface_hub
+        from huggingface_hub import snapshot_download
+    except ImportError:
+        return {}
+
+    version = str(getattr(huggingface_hub, "__version__", "0"))
+    try:
+        major = int(version.split(".")[0])
+    except ValueError:
+        major = 0
+    if major >= 1:
+        return {}
+
+    try:
+        params = inspect.signature(snapshot_download).parameters
+    except (TypeError, ValueError):
+        return {}
+    return {"resume_download": True} if "resume_download" in params else {}
 
 
 def _expand_gguf_patterns(filename: str, mmproj: str | None = None) -> list[str]:
@@ -2994,7 +3027,7 @@ def pull_model(
             repo_id,
             allow_patterns=_expand_gguf_patterns(filename, mmproj_file),
             local_dir=str(local_dir),
-            resume_download=True,
+            **_snapshot_download_kwargs(),
         )
         # A split part published under a different name is still a part:
         # its own header says so. Find it and link it under the name
@@ -3488,7 +3521,7 @@ def _read_pid(path: Path) -> int | None:
     if cached and cached[0] == mtime:
         return cached[1]
     try:
-        pid = int(path.read_text().strip())
+        pid = int(path.read_text(encoding="utf-8").strip())
     except (ValueError, OSError):
         pid = None
     _PID_FILE_CACHE[path] = (mtime, pid)
@@ -3620,7 +3653,8 @@ def _gpu_backend_of_process(pid: int) -> str | None:
     if ngl <= 0:
         return None
     try:
-        maps = Path(f"/proc/{pid}/maps").read_text(errors="replace").lower()
+        maps = Path(f"/proc/{pid}/maps").read_text(
+            encoding="utf-8", errors="replace").lower()
     except OSError:
         return None
     if "libggml-vulkan" in maps:
@@ -3686,7 +3720,7 @@ def gpu_state(spec: ModelSpec) -> dict[str, str | None]:
     if not log.exists():
         return empty
     try:
-        text = log.read_text(errors="replace")
+        text = log.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return empty
     result = dict(empty)
@@ -4000,7 +4034,7 @@ def _linux_vulkan_works() -> bool:
         return False
     for icd_json in icd_dir.glob("*.json"):
         try:
-            data = json.loads(icd_json.read_text())
+            data = json.loads(icd_json.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
         lib_path = (data.get("ICD") or {}).get("library_path") or ""
@@ -4042,7 +4076,9 @@ def _intel_igpu_only_linux() -> bool:
         if not (card / "device").is_dir():
             continue
         try:
-            vendors.add((card / "device" / "vendor").read_text().strip())
+            vendors.add(
+                (card / "device" / "vendor").read_text(
+                    encoding="utf-8").strip())
         except OSError:
             continue
     if "0x8086" not in vendors:
@@ -4334,7 +4370,7 @@ def _detach_kwargs() -> dict[str, Any]:
 def _log_tail(path: Path, n: int = 40) -> str:
     """Last ``n`` lines of a log file, for surfacing start failures."""
     try:
-        lines = path.read_text(errors="replace").splitlines()
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
         return "\n".join(lines[-n:])
     except OSError:
         return "(log unavailable)"
@@ -4642,7 +4678,7 @@ def start_model(spec: ModelSpec, wait: bool = True) -> None:
             stdin=subprocess.DEVNULL,
             **_detach_kwargs(),
         )
-        (state / "llama.pid").write_text(str(proc.pid))
+        (state / "llama.pid").write_text(str(proc.pid), encoding="utf-8")
         logger.info("%s: sd-server started (pid=%d)", spec.name, proc.pid)
         if wait:
             _wait_healthy(
@@ -4702,7 +4738,7 @@ def start_model(spec: ModelSpec, wait: bool = True) -> None:
             **_detach_kwargs(),
             env=_llama_spawn_env(spec),
         )
-        (state / "llama.pid").write_text(str(proc.pid))
+        (state / "llama.pid").write_text(str(proc.pid), encoding="utf-8")
         logger.info("%s: llama-server started (pid=%d)", spec.name, proc.pid)
         if wait:
             _wait_healthy(
@@ -4713,7 +4749,8 @@ def start_model(spec: ModelSpec, wait: bool = True) -> None:
         # fit memory; the real slot size is the truth clients must use.
         real_ctx = _real_slot_ctx(spec.llama_url)
         effective = min(real_ctx, ctx) if real_ctx else ctx
-        (state / "effective_ctx.txt").write_text(str(max(_CTX_FLOOR, effective)))
+        (state / "effective_ctx.txt").write_text(
+            str(max(_CTX_FLOOR, effective)), encoding="utf-8")
 
     # A model whose template understands effort levels gets them as
     # variants, so the pickers and the harnesses can offer a depth. The
@@ -4765,7 +4802,7 @@ def start_model(spec: ModelSpec, wait: bool = True) -> None:
             env=env,
             **_detach_kwargs(),
         )
-        (state / "daemon.pid").write_text(str(proc.pid))
+        (state / "daemon.pid").write_text(str(proc.pid), encoding="utf-8")
         logger.info("%s: daemon started (pid=%d)", spec.name, proc.pid)
         if wait:
             _wait_healthy(
@@ -5803,7 +5840,7 @@ def _strip_jsonc_trailing_commas(text: str) -> str:
 
 
 def _load_jsonc(path: Path) -> dict[str, Any]:
-    text = path.read_text() if path.exists() else "{}"
+    text = path.read_text(encoding="utf-8") if path.exists() else "{}"
     try:
         value = json.loads(text)
         return value if isinstance(value, dict) else {}
@@ -5874,7 +5911,7 @@ def write_qwen_config(
     # model understands that effort.
     cfg_path = path or _qwen_config_path()
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
-    cfg = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8")) if cfg_path.exists() else {}
     if not isinstance(cfg, dict):
         cfg = {}
     endpoint = _client_endpoint(spec, _resolve_mode("qwen", mode))
@@ -5959,7 +5996,7 @@ def write_droid_config(
     # model understands that effort.
     cfg_path = path or _factory_config_path()
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
-    cfg = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8")) if cfg_path.exists() else {}
     if not isinstance(cfg, dict):
         cfg = {}
     models = cfg.get("customModels")
@@ -6003,7 +6040,7 @@ def write_cline_config(
     # model understands that effort.
     cfg_path = path or _cline_config_path()
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
-    cfg = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8")) if cfg_path.exists() else {}
     if not isinstance(cfg, dict):
         cfg = {}
     cfg["version"] = cfg.get("version", 1)
@@ -6097,7 +6134,10 @@ def write_dsh_config(
     # model understands that effort.
     cfg_path = path or _dsh_config_path()
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
-    cfg = yaml.safe_load(cfg_path.read_text()) if cfg_path.exists() else {}
+    cfg = (
+        yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+        if cfg_path.exists() else {}
+    )
     if not isinstance(cfg, dict):
         cfg = {}
     llm = cfg.get("llm-pi-ai")
@@ -6209,7 +6249,7 @@ def write_minimax_config(
     cfg: dict[str, Any] = {}
     if cfg_path.exists():
         try:
-            loaded = yaml.safe_load(cfg_path.read_text())
+            loaded = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
         except (OSError, yaml.YAMLError):
             loaded = None
         if isinstance(loaded, dict):
@@ -6319,7 +6359,7 @@ def write_pi_config(
     agent_dir = path.parent if path is not None else _pi_config_dir()
     cfg_path = path or agent_dir / "models.json"
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
-    cfg = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8")) if cfg_path.exists() else {}
     if not isinstance(cfg, dict):
         cfg = {}
     providers = cfg.get("providers")
@@ -6340,7 +6380,10 @@ def write_pi_config(
         }],
     }
     settings_path = agent_dir / "settings.json"
-    settings = json.loads(settings_path.read_text()) if settings_path.exists() else {}
+    settings = (
+        json.loads(settings_path.read_text(encoding="utf-8"))
+        if settings_path.exists() else {}
+    )
     if not isinstance(settings, dict):
         settings = {}
     settings["defaultProvider"] = "tokirecur"
@@ -6405,9 +6448,15 @@ def write_omp_config(
     cfg_path = path or _omp_config_path()
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     if cfg_path.suffix.lower() == ".json":
-        cfg = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
+        cfg = (
+            json.loads(cfg_path.read_text(encoding="utf-8"))
+            if cfg_path.exists() else {}
+        )
     else:
-        cfg = yaml.safe_load(cfg_path.read_text()) if cfg_path.exists() else {}
+        cfg = (
+        yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+        if cfg_path.exists() else {}
+    )
     if not isinstance(cfg, dict):
         cfg = {}
     providers = cfg.get("providers")
@@ -6488,7 +6537,7 @@ def write_goose_config(
     cfg: dict[str, Any] = {}
     if cfg_path.exists():
         try:
-            loaded = yaml.safe_load(cfg_path.read_text())
+            loaded = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
         except (OSError, yaml.YAMLError):
             loaded = None
         if isinstance(loaded, dict):
@@ -6545,7 +6594,7 @@ def write_pool_config(
     cfg: dict[str, Any] = {}
     if cfg_path.exists():
         try:
-            loaded = yaml.safe_load(cfg_path.read_text())
+            loaded = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
         except (OSError, yaml.YAMLError):
             loaded = None
         if isinstance(loaded, dict):
@@ -6595,7 +6644,7 @@ def write_antigravity_config(
     cfg: dict[str, Any] = {}
     if cfg_path.exists():
         try:
-            loaded = json.loads(cfg_path.read_text())
+            loaded = json.loads(cfg_path.read_text(encoding="utf-8"))
         except (OSError, TypeError, ValueError):
             loaded = None
         if isinstance(loaded, dict):
@@ -6645,7 +6694,7 @@ def _write_omp_roles(models_path: Path, spec: ModelSpec) -> None:
         if not path.exists():
             continue
         try:
-            cfg = yaml.safe_load(path.read_text())
+            cfg = yaml.safe_load(path.read_text(encoding="utf-8"))
         except (OSError, yaml.YAMLError):
             continue
         if not isinstance(cfg, dict):
@@ -6681,7 +6730,7 @@ def read_client_modes(root: Path | None = None) -> dict[str, str]:
     to ``managed`` — the mode where the daemon owns context truth."""
     try:
         path = _client_modes_path(root)
-        data = json.loads(path.read_text()) if path.exists() else {}
+        data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
         modes = {k: v for k, v in data.items() if v in ("raw", "managed")}
         return modes
     except (OSError, ValueError):
@@ -6770,12 +6819,13 @@ def _inject_anti_loop_md_file(
     the caller skips wiring rather than overwriting a user's file.
     """
     md = cfg_dir / "tokirecur-anti-loop.md"
-    owned = md.exists() and bool(_ANTI_LOOP_BLOCK_RE.search(md.read_text()))
+    owned = md.exists() and bool(
+        _ANTI_LOOP_BLOCK_RE.search(md.read_text(encoding="utf-8"))
+    )
     if md.exists() and not owned:
         return None
     md.write_text(
-        f"{_ANTI_LOOP_MARKER}\n\n{ANTI_LOOP_SYSTEM_PROMPT}\n"
-    )
+        f"{_ANTI_LOOP_MARKER}\n\n{ANTI_LOOP_SYSTEM_PROMPT}\n", encoding="utf-8")
     return str(md)
 
 
@@ -6790,12 +6840,12 @@ def _inject_anti_loop_bootstrap(
     Returns True when the file now carries the block.
     """
     if md_path.exists():
-        text = md_path.read_text()
+        text = md_path.read_text(encoding="utf-8")
         block = f"{marker}\n\n{ANTI_LOOP_SYSTEM_PROMPT}\n"
         body = _ANTI_LOOP_BLOCK_RE.sub("", text).strip("\n")
         if body:
             body += "\n\n"
-        md_path.write_text(body + block)
+        md_path.write_text(body + block, encoding="utf-8")
         return True
     md_path.parent.mkdir(parents=True, exist_ok=True)
     with md_path.open("a") as fh:
@@ -7050,7 +7100,10 @@ def write_opencode_config(
     cfg_path = path or Path(os.environ.get(
         "OPENCODE_CONFIG", str(Path.home() / ".config/opencode/opencode.json")))
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
-    cfg: dict[str, Any] = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
+    cfg: dict[str, Any] = (
+        json.loads(cfg_path.read_text(encoding="utf-8"))
+        if cfg_path.exists() else {}
+    )
 
     # A vanilla opencode config carries `"provider": "<name>"` (a string).
     # Replace it with the provider dict we manage — never crash the sync
@@ -7177,7 +7230,10 @@ def write_openclaw_config(
     cfg_path = path or Path(os.environ.get(
         "OPENCLAW_CONFIG", str(Path.home() / ".openclaw/openclaw.json")))
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
-    cfg: dict[str, Any] = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
+    cfg: dict[str, Any] = (
+        json.loads(cfg_path.read_text(encoding="utf-8"))
+        if cfg_path.exists() else {}
+    )
 
     # The roster shape is the client's business, not the user's: an
     # installed OpenClaw refuses to start on the legacy list, or on a
@@ -7273,7 +7329,10 @@ def write_hermes_config(
     # model understands that effort.
     cfg_path = path or _hermes_config_path()
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
-    cfg: dict[str, Any] = yaml.safe_load(cfg_path.read_text()) if cfg_path.exists() else {}
+    cfg: dict[str, Any] = (
+        yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+        if cfg_path.exists() else {}
+    )
     if not isinstance(cfg, dict):
         cfg = {}
 
@@ -7382,7 +7441,7 @@ def _purge_stale_hermes_context_cache(specs: list[ModelSpec]) -> None:
         path = _hermes_config_path().parent / "context_length_cache.yaml"
         if not path.exists():
             return
-        data = yaml.safe_load(path.read_text()) or {}
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         cache = data.get("context_lengths") or {}
         if not isinstance(cache, dict):
             return

@@ -129,7 +129,8 @@ def set_enabled(on: bool) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
             "on\n"
-            "# `toki tap off` removes this file. The daemon checks it per turn.\n"
+            "# `toki tap off` removes this file. The daemon checks it per turn.\n",
+            encoding="utf-8",
         )
         try:
             os.chmod(path, 0o600)

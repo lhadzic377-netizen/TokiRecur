@@ -462,7 +462,7 @@ async def stream_message(
         yield error_event("local engine returned no result")
         return
 
-    if thinking_index is None and getattr(result, "reasoning", ""):
+    if thinking_index is None and (getattr(result, "reasoning", None) or ""):
         thinking_index = next_index
         next_index += 1
         open_indices.append(thinking_index)

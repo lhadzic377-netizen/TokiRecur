@@ -1988,7 +1988,7 @@ def detect_hardware() -> dict[str, str]:
 
     # CPU: /proc/cpuinfo on Linux; platform fallback elsewhere.
     try:
-        with open("/proc/cpuinfo") as f:
+        with open("/proc/cpuinfo", encoding="utf-8", errors="replace") as f:
             for line in f:
                 if "model name" in line:
                     info["cpu"] = line.split(":", 1)[1].strip()
@@ -1998,7 +1998,7 @@ def detect_hardware() -> dict[str, str]:
 
     # Memory.
     try:
-        with open("/proc/meminfo") as f:
+        with open("/proc/meminfo", encoding="utf-8", errors="replace") as f:
             for line in f:
                 if line.startswith("MemTotal"):
                     kb = int(line.split()[1])
@@ -2140,7 +2140,7 @@ def write_json_report(
         "score": asdict(score),
         "precision": precision or {},
     }
-    path.write_text(json.dumps(report, indent=2))
+    path.write_text(json.dumps(report, indent=2), encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -2474,7 +2474,7 @@ def load_workload(path: Path) -> Workload:
     Custom workloads can be passed via ``toki bench --workload-file path/to/workload.json``.
     """
     import json as _json
-    data = _json.loads(Path(path).read_text())
+    data = _json.loads(Path(path).read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise ValueError(f"workload {path}: top-level JSON must be an object")
     name = data.get("name") or path.stem

@@ -86,3 +86,12 @@ def test_os52_is_a_terminal_fallback(monkeypatch):
     monkeypatch.setattr(clipboard, "_run_commands", lambda text: None)
     monkeypatch.setattr(clipboard, "_tk_owner", lambda text: None)
     assert clipboard.copy("text") == "none"
+
+
+def test_tkinter_is_not_claimed_when_python_lacks_it(monkeypatch):
+    """A Python without tkinter cannot own the selection."""
+    monkeypatch.setattr(clipboard.shutil, "which", lambda name: None)
+    monkeypatch.setattr(clipboard.importlib.util, "find_spec", lambda name: None)
+    monkeypatch.setenv("DISPLAY", ":0")
+
+    assert clipboard.copy("text") == "none"

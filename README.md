@@ -109,6 +109,15 @@ toki model install-llama --backend rocm --gfx 11.5.1   # HSA_OVERRIDE_GFX_VERSIO
 toki model install-llama --tag b6400 --name 35b        # pin a release
 ```
 
+The release asset is the easy path; a build from source is the one that can
+follow the newest upstream (the daily `bNNNNN` builds lag the `master`
+branch by hours, and a model that needs a brand-new architecture needs the
+newest). `scripts/build_llama_cpp.sh` builds llama.cpp for this machine (ROCm
+on gfx1151 with unified memory), and takes `LLAMA_CPP_UPDATE=1` to fetch and
+reset the checkout to `origin/master` first and `LLAMA_CPP_INSTALL=1` to
+install the result into the toki state bin - the place the registry's
+`binary:` entries point at.
+
 Or point `binary:` at any `llama-server` on PATH in `~/.config/tokirecur/models.yaml`. `TOKI_MODEL_REGISTRY` and `TOKI_STATE_DIR` move the registry and logs/pid/bin.
 
 ## Interfaces

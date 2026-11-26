@@ -231,7 +231,7 @@ def configured_provider_model(client: str) -> str | None:
             return value
     try:
         settings = json.loads(
-            (Path.home() / ".claude" / "settings.json").read_text()
+            (Path.home() / ".claude" / "settings.json").read_text(encoding="utf-8")
         )
     except (OSError, TypeError, ValueError):
         return None

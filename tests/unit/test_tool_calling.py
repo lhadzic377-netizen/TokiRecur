@@ -126,6 +126,22 @@ class TestRequestModels:
         assert req.tools[0]["function"]["name"] == "bash"
         assert req.tool_choice == "auto"
 
+    def test_max_completion_tokens_is_the_same_field(self):
+        """OpenAI's newer name was dropped on the floor before."""
+        req = ChatCompletionRequest(
+            messages=[ChatMessage(role="user", content="hi")],
+            max_completion_tokens=4096,
+        )
+        assert req.max_tokens == 4096
+
+    def test_an_explicit_max_tokens_wins(self):
+        req = ChatCompletionRequest(
+            messages=[ChatMessage(role="user", content="hi")],
+            max_tokens=99,
+            max_completion_tokens=4096,
+        )
+        assert req.max_tokens == 99
+
     def test_request_accepts_kimi_context_sized_output_budget(self):
         req = ChatCompletionRequest(
             messages=[ChatMessage(role="user", content="hi")],

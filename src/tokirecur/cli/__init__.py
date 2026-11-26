@@ -206,7 +206,11 @@ def public_server(port: int | None, model: str | None) -> None:
     import time as _time
 
     from ..ctl import auth_token, daemon_reachable, load_registry, read_active
-    from ..public_server import PublicServerError, start_public_server
+    from ..public_server import (
+        PublicServerError,
+        port_open,
+        start_public_server,
+    )
 
     specs = {s.name: s for s in load_registry()}
     active = read_active()
@@ -231,10 +235,43 @@ def public_server(port: int | None, model: str | None) -> None:
     click.echo(server.endpoints_text())
     click.echo("")
     click.echo(f"live at {server.url}")
+    if server.verified is False:
+        click.echo(
+            f"warning: nothing answered through {server.url} yet — the "
+            f"stack on 127.0.0.1:{daemon_port} is not serving. Requests "
+            "will fail until it is back.",
+            err=True,
+        )
     click.echo("ctrl-c stops the tunnel.")
+    # A quick tunnel outlives the stack it points at, and a dead origin
+    # answers 502 on every request while the hostname still looks fine.
+    # The tunnel stays up — the hostname is what gets pasted into an
+    # approval form — but the person is told when it points at nothing.
+    origin_up = port_open(daemon_port)
+    next_probe = _time.monotonic() + 5.0
     try:
         while True:
             _time.sleep(1)
+            if _time.monotonic() < next_probe:
+                continue
+            next_probe = _time.monotonic() + 5.0
+            now_up = port_open(daemon_port)
+            if now_up == origin_up:
+                continue
+            origin_up = now_up
+            if now_up:
+                click.echo(
+                    f"the stack is answering on 127.0.0.1:{daemon_port} "
+                    "again.",
+                    err=True,
+                )
+            else:
+                click.echo(
+                    f"warning: nothing is listening on 127.0.0.1:"
+                    f"{daemon_port} any more — requests through this URL "
+                    "will fail until it is back.",
+                    err=True,
+                )
     except KeyboardInterrupt:
         click.echo("")
         click.echo("stopping the tunnel ...")
@@ -491,7 +528,7 @@ def hardware(as_json: bool) -> None:
         total_gb, avail_gb = mem.total / 1e9, mem.available / 1e9
     except Exception:
         try:
-            with open("/proc/meminfo") as fh:
+            with open("/proc/meminfo", encoding="utf-8", errors="replace") as fh:
                 for line in fh:
                     if line.startswith("MemTotal:"):
                         total_gb = int(line.split()[1]) / 1048576.0
@@ -705,7 +742,10 @@ def doctor(fix: bool) -> None:
 @click.option("--repo", default=None,
               help="Path to the tokirecur git checkout (default: walk "
                    "parents of the installed package until .git is found).")
-def self_upgrade(repo: str | None) -> None:
+@click.option("--force", is_flag=True, default=False,
+              help="Discard uncommitted changes in the checkout instead of "
+                   "refusing to run.")
+def self_upgrade(repo: str | None, force: bool) -> None:
     """Upgrade toki to the latest git HEAD: git pull + pip install.
 
     Run from the repo directory on a Windows install that was created
@@ -745,6 +785,20 @@ def self_upgrade(repo: str | None) -> None:
         r = subprocess.run(cmd, cwd=repo_path, capture_output=True,
                            text=True, timeout=120)
         return r.returncode, (r.stdout + r.stderr).strip()
+
+    # `git reset --hard` throws away uncommitted work. A person who
+    # edited the checkout (a patch, a new model entry) found that out
+    # the hard way; say so before the reset, not after.
+    rc, dirty = _run(["git", "status", "--porcelain"])
+    if rc == 0 and dirty.strip() and not force:
+        click.echo(
+            "error: the checkout has uncommitted changes:\n"
+            + dirty.strip()
+            + "\ncommit or stash them first, or pass --force to discard "
+            "them.",
+            err=True,
+        )
+        raise SystemExit(1) from None
 
     click.echo(f"repo: {repo_path}")
     rc, out = _run(["git", "fetch", "origin"])
@@ -786,7 +840,8 @@ def _find_repo_dir() -> Path | None:
     for parent in [here, *here.parents]:
         if (parent / ".git").is_dir() and (parent / "pyproject.toml").is_file():
             try:
-                text = (parent / "pyproject.toml").read_text()
+                text = (parent / "pyproject.toml").read_text(
+                    encoding="utf-8", errors="replace")
             except OSError:
                 continue
             if "name = \"tokirecur\"" in text or "name = 'tokirecur'" in text:
@@ -1354,7 +1409,12 @@ def model_status() -> None:
         s = model_status(spec)
         llama = s["llama"]
         daemon = s["daemon"]
-        ctx = f"slot_ctx={llama['slot_ctx']}" if llama["slot_ctx"] else ""
+        # The slot context is only known while the backend answers; an
+        # empty pair of brackets ("llama=down ()") read like a value
+        # that failed to print.
+        ctx = (
+            f" (slot_ctx={llama['slot_ctx']})" if llama["slot_ctx"] else ""
+        )
         llama_state = "up" if llama["reachable"] else "down"
         daemon_state = "up" if daemon["reachable"] else "down"
         mark = "*" if spec.name == active else " "
@@ -1368,7 +1428,7 @@ def model_status() -> None:
             gpu_bits.append("CPU")
         gpu_col = f"  gpu={'/'.join(gpu_bits)}" if gpu_bits else ""
         click.echo(
-            f"  {mark} {spec.name.ljust(8)} llama={llama_state} ({ctx})  "
+            f"  {mark} {spec.name.ljust(8)} llama={llama_state}{ctx}  "
             f"daemon={daemon_state}  pids={llama['pid']}/{daemon['pid']}"
             f"{gpu_col}"
         )
@@ -2375,7 +2435,7 @@ def _curl_download(
         # file (mkstemp) that is removed immediately after the run.
         import tempfile
         fd, cfg_path = tempfile.mkstemp(prefix="toki-curl-", suffix=".cfg")
-        with os.fdopen(fd, "w") as cfg:
+        with os.fdopen(fd, "w", encoding="utf-8") as cfg:
             cfg.write(f'header = "Authorization: Bearer {token}"\n')
         cmd.insert(-1, "--config")
         cmd.insert(-1, cfg_path)
@@ -3401,7 +3461,8 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
         shim = bin_dir / "mlx_lm.server"
         shim.write_text(
             "#!/usr/bin/env sh\n"
-            f"exec {sys.executable} -m mlx_lm.server \"$@\"\n"
+            f"exec {sys.executable} -m mlx_lm.server \"$@\"\n",
+            encoding="utf-8",
         )
         if os.name != "nt":
             shim.chmod(0o755)
@@ -3880,7 +3941,12 @@ def install_llama(tag: str | None, dest: str | None, name: str | None,
             capture_output=True, text=True, timeout=30,
         )
         if probe.returncode == 0:
-            click.echo(f"self-check: {probe.stdout.strip().splitlines()[0] if probe.stdout.strip() else 'ok'}")
+            # llama-server prints its version banner on stderr; reading
+            # only stdout reported a bare "ok" for every build.
+            banner = (probe.stderr or "").strip() or (probe.stdout or "").strip()
+            click.echo(
+                "self-check: " + (banner.splitlines()[0] if banner else "ok")
+            )
         else:
             click.echo(
                 f"warning: {dst} --version failed (rc={probe.returncode}): "
@@ -4163,7 +4229,11 @@ def main() -> int:
     if sys.argv[1] not in cli.commands and sys.argv[1].startswith("-"):
         return run_default_benchmark()
     if sys.argv[1] not in cli.commands:
-        # Truly unknown subcommand — show help.
+        # Truly unknown subcommand — say so, then show what there is.
+        # Printing the help alone read as "the command worked".
+        click.echo(
+            f"error: no such command '{sys.argv[1]}'", err=True,
+        )
         click.echo(cli.get_help(click.Context(cli, info_name="toki")))
         return 0 if sys.argv[1] in ("--help", "-h") else 2
     return cli(obj={})

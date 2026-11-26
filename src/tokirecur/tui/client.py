@@ -52,7 +52,7 @@ def _resolve_auth_token(explicit: str | None) -> str | None:
     ):
         try:
             if path.is_file():
-                content = path.read_text().strip()
+                content = path.read_text(encoding="utf-8").strip()
                 if content:
                     return content
         except OSError:

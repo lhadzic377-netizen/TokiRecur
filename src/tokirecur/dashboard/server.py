@@ -112,7 +112,7 @@ def create_dashboard_app(*, reports_dir: Path) -> FastAPI:
         reports = []
         for path in sorted(reports_dir.glob("*.json"), reverse=True):
             try:
-                data = json.loads(path.read_text())
+                data = json.loads(path.read_text(encoding="utf-8"))
                 score = data.get("score", {})
                 meta = data.get("metadata", {})
                 workload = data.get("workload", {})
@@ -147,7 +147,7 @@ def create_dashboard_app(*, reports_dir: Path) -> FastAPI:
         if root not in path.parents or not path.is_file():
             raise HTTPException(status_code=404, detail="not found")
         try:
-            return JSONResponse(json.loads(path.read_text()))
+            return JSONResponse(json.loads(path.read_text(encoding="utf-8")))
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e)) from e
 

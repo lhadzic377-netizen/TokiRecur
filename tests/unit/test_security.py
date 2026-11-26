@@ -171,6 +171,59 @@ class TestConstantTimeAuth:
             assert resp.status_code == 200
 
 
+class TestAuthErrorEnvelope:
+    """Each API surface reads its own error shape."""
+
+    def _app(self, monkeypatch):
+        monkeypatch.setenv("TOKI_AUTH_TOKEN", "s3cret-token-here")
+        return create_app(
+            backend=_FakeBackend(),
+            index=_FakeIndex(),
+            cache_dir="/tmp/toki-security",
+            enable_auth=True,
+            enable_rate_limit=False,
+        )
+
+    def test_openai_surface_reads_error_message(self, monkeypatch):
+        with TestClient(self._app(monkeypatch)) as client:
+            resp = client.post(
+                "/v1/chat/completions",
+                json={"model": "m", "messages": [{"role": "user", "content": "hi"}]},
+                headers={"Authorization": "Bearer wrong"},
+            )
+            assert resp.status_code == 401
+            body = resp.json()
+            assert body["error"]["message"]
+            assert body["error"]["code"] == "invalid_api_key"
+            assert body["detail"]
+
+    def test_anthropic_surface_reads_its_own_type(self, monkeypatch):
+        with TestClient(self._app(monkeypatch)) as client:
+            resp = client.post(
+                "/v1/messages",
+                json={"model": "m", "max_tokens": 16,
+                      "messages": [{"role": "user", "content": "hi"}]},
+                headers={"x-api-key": "wrong"},
+            )
+            assert resp.status_code == 401
+            body = resp.json()
+            assert body["type"] == "error"
+            assert body["error"]["type"] == "authentication_error"
+            assert body["error"]["message"]
+
+    def test_gemini_surface_reads_its_status(self, monkeypatch):
+        with TestClient(self._app(monkeypatch)) as client:
+            resp = client.post(
+                "/v1beta/models/m:generateContent",
+                json={"contents": [{"role": "user", "parts": [{"text": "hi"}]}]},
+                headers={"x-goog-api-key": "wrong"},
+            )
+            assert resp.status_code == 401
+            body = resp.json()
+            assert body["error"]["status"] == "UNAUTHENTICATED"
+            assert body["error"]["message"]
+
+
 # ── Default token is never well-known ─────────────────────────────────
 
 

@@ -29,7 +29,7 @@ import threading
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 logger = logging.getLogger(__name__)
 
@@ -246,6 +246,10 @@ def _memory_kwargs(
     return out
 
 
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from ..index import Index
+
+
 class RecyclingEngine:
     """The 5-step algorithm in object form.
 
@@ -268,7 +272,7 @@ class RecyclingEngine:
     def __init__(
         self,
         backend: LlamaBackend,
-        index: Index,  # noqa: F821 - forward-declared
+        index: Index,
         *,
         similarity_threshold: float = 0.85,
         tree_cache: Any | None = None,

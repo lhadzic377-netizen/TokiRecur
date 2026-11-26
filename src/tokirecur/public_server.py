@@ -63,6 +63,11 @@ class PublicServer:
     port: int
     process: Any | None = None
     log: list[str] = field(default_factory=list)
+    # Did a request through the tunnel actually reach the daemon?
+    # None means "not checked" (the caller did not ask for a check),
+    # False means "checked and it did not answer" - the credentials are
+    # then real but the origin is not serving yet.
+    verified: bool | None = None
 
     # -- the three API surfaces -------------------------------------------
 
@@ -134,6 +139,20 @@ def find_cloudflared() -> str | None:
     return None
 
 
+def port_open(port: int, host: str = "127.0.0.1", timeout: float = 1.0) -> bool:
+    """Is anything listening on ``host:port`` right now?
+
+    A quick tunnel forwards to a local port. If nothing is listening
+    there, the tunnel is up and every request through it answers 502 -
+    which is exactly what a stale tunnel looks like from the outside.
+    """
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
 def tunnel_argv(binary: str, port: int) -> list[str]:
     return [
         binary, "tunnel",
@@ -168,6 +187,17 @@ def start_public_server(
             "cloudflared is not installed — install it with "
             "`sudo apt install cloudflared` (or the official binary from "
             "https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/)"
+        )
+
+    # Nothing listening on the local port means every request through
+    # the tunnel answers 502. Say so before spending a hostname on it:
+    # a quick tunnel's name is what people paste into an approval form,
+    # and it is not worth burning on a dead origin.
+    if verify and not port_open(port):
+        raise PublicServerError(
+            f"nothing is listening on 127.0.0.1:{port} — the public URL "
+            "would answer 502. Start the model first "
+            "(`toki model use <model>`), then open the tunnel again."
         )
 
     factory = popen or subprocess.Popen
@@ -252,15 +282,17 @@ def start_public_server(
     # production wants both, so the caller says which it is.
     if warm:
         _warm_dns(url)
+    verified: bool | None = None
     if verify:
         # A hostname that resolves is not yet a route: the edge needs a
         # moment to learn which connector owns the name, and a request in
         # that window hangs rather than fails. One GET through the tunnel
         # proves the credentials are usable before they are shown.
-        _wait_until_live(f"{url}/v1/models", api_key)
+        verified = _wait_until_live(f"{url}/v1/models", api_key)
 
     return PublicServer(
         url=url, api_key=api_key, model=model, port=port, process=proc, log=log,
+        verified=verified,
     )
 
 
@@ -307,14 +339,15 @@ def _warm_dns(url: str, timeout: float = 15.0) -> None:
             time.sleep(1.0)
 
 
-def _wait_until_live(endpoint: str, api_key: str, timeout: float = 12.0) -> None:
-    """Poll ``endpoint`` until the public route answers, or give up quietly.
+def _wait_until_live(endpoint: str, api_key: str, timeout: float = 12.0) -> bool:
+    """Poll ``endpoint`` until the public route answers.
 
-    Best effort by design: the tunnel process is up and the hostname is
-    real, so a probe that times out is worth a slower first request, not
-    an error that hides working credentials. A 401/403 is a success for
-    this purpose - the edge reached the daemon, which only objected to
-    the key.
+    Returns True when the route answered (a 401/403 counts: the edge
+    reached the daemon, which only objected to the key), False when it
+    never did. Best effort by design: the tunnel process is up and the
+    hostname is real, so a probe that times out is worth a slower first
+    request, not an error that hides working credentials - but the caller
+    has to be able to say "this did not answer" out loud.
     """
     import urllib.error
     import urllib.request
@@ -327,13 +360,14 @@ def _wait_until_live(endpoint: str, api_key: str, timeout: float = 12.0) -> None
         try:
             with urllib.request.urlopen(request, timeout=4) as response:
                 if response.status < 500:
-                    return
+                    return True
         except urllib.error.HTTPError as e:
             if e.code in (401, 403):
-                return
+                return True
         except OSError:
             pass
         time.sleep(1.0)
+    return False
 
 
 def _terminate(proc: Any, wait: float = 3.0) -> None:

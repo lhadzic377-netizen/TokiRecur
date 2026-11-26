@@ -151,7 +151,7 @@ def _configured_token() -> str | None:
     ):
         try:
             if path.is_file():
-                content = path.read_text().strip()
+                content = path.read_text(encoding="utf-8").strip()
                 if content:
                     return content
         except OSError:
@@ -243,6 +243,13 @@ def web_variables() -> dict[str, str]:
     }
 
 
+def _package_version() -> str:
+    """The installed package version, for the OpenAPI document."""
+    from .. import __version__
+
+    return __version__
+
+
 def create_web_app(
     *,
     raw_url: str = DEFAULT_RAW_URL,
@@ -258,7 +265,7 @@ def create_web_app(
     default, which is fine on loopback but turns the server into an
     open, token-lending proxy for anyone who can reach it.
     """
-    app = FastAPI(title="Toki Recur", version="0.1.0")
+    app = FastAPI(title="Toki Recur", version=_package_version())
     app.state.raw_url = raw_url
     app.state.daemon_url = daemon_url
     web_token = _configured_token()

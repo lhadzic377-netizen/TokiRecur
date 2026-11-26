@@ -6,7 +6,15 @@
 .venv/bin/pytest -q --ignore=tests/integration   # unit tests (fast, no llama needed)
 .venv/bin/pytest -q tests/unit/test_clichat.py   # Windows CLI chat tests
 .venv/bin/ruff check src tests                   # lint (run --fix when fixing)
+.venv/bin/mypy --ignore-missing-imports src/tokirecur   # type pass; it finds real bugs
 ```
+
+`mypy` is not in the dev extra (`pip install mypy` to get it) and is not
+configured for this repo (no plugin, no strictness) - treat its output as a
+bug list to triage, not as a gate. It found the two argument mismatches
+that were swallowing whole features: `diagnose.hint(hw, spec)` on a
+one-argument function, and `snapshot_download(resume_download=...)` on a
+huggingface_hub that had removed the argument.
 
 ## Dev-machine gotchas
 
@@ -14,10 +22,25 @@
   and may point at a dead llama port (`--backend-url http://127.0.0.1:8088`).
   The live llama-server is on **8094** (`/home/lukehadzic/llama.cpp/build/bin/llama-server`).
 - The registry's `binary:` entries point at the toki state bin
-  (`~/.local/state/tokirecur/bin/llama-server`), which was rebuilt from
-  llama.cpp master (commit b94041a98) for this box. llama.cpp ships Linux
-  ROCm assets again as of ROCm 10.0 (b12024); rebuild with
-  `./scripts/build_llama_cpp.sh` (LLAMA_CPP_SRC + LLAMA_CPP_BLD overridable).
+  (`~/.local/state/tokirecur/bin/llama-server`), which is built from
+  llama.cpp master for this box (gfx1151 + UMA). **Update it with**
+  `LLAMA_CPP_SRC=~/llama.cpp-upstream LLAMA_CPP_UPDATE=1 LLAMA_CPP_INSTALL=1
+  ./scripts/build_llama_cpp.sh` - `LLAMA_CPP_UPDATE=1` fetches and resets the
+  checkout to `origin/master` (it refuses a dirty tree), `LLAMA_CPP_INSTALL=1`
+  copies the result into the state bin and removes the libraries the new ABI
+  version replaced. The build must run with `-DLLAMA_USE_PREBUILT_UI=OFF` (the
+  script sets it): the prebuilt web UI is validated against the checkout it
+  was built from and a source build has no matching assets, so the build
+  fails on the asset check. The API server does not need the UI, and the
+  checkout stays pristine - no local patch. Upstream ships Linux ROCm assets
+  again as of ROCm 10.0, but those need a ROCm 10 runtime; this box has
+  ROCm 7.x, so the release asset would not load.
+- **`huggingface_hub` 1.x removed `resume_download`** from
+  `snapshot_download` (resuming is the only behaviour now). Passing it
+  raised TypeError and broke `toki model pull` outright. The kwarg is
+  passed only when the installed hub still has it
+  (`ctl._snapshot_download_kwargs`), because the old versions need it to
+  resume an interrupted pull.
 - **Do not put `GGML_CUDA_ENABLE_UNIFIED_MEMORY=1` on a ROCm model.** The
   HIP backend reads that CUDA name too; with it on, this box answered with
   repeated garbage tokens and an empty message, silently. It is a CUDA knob
@@ -28,7 +51,8 @@
   `~/.local/state/tokirecur/bin-inkling/llama-server` (upstream master
   29b52d3, gfx1151 + UMA); the registry entry pins it. `toki` refuses to
   start a model whose architecture the installed build does not know, and
-  says which architecture the GGUF asks for.
+  says which architecture the GGUF asks for. The state bin (upstream master,
+  1.1.0-dev) also knows it, so a model that needs the loop can point there.
 - **Inkling on this iGPU is slow by nature, not by misconfiguration:** it is
   a looped transformer (24 physical layers, the 12-layer core runs 3x per
   token = 48 layer evaluations per token, 128 experts with 8 active).

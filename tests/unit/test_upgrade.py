@@ -283,3 +283,65 @@ def test_doctor_fix_no_op_when_everything_healthy(tmp_path, monkeypatch):
     res = runner.invoke(cli, ["doctor", "--fix"], catch_exceptions=False)
     assert res.exit_code == 0, res.output
     assert "nothing to do" in res.output
+
+
+def test_self_upgrade_refuses_to_discard_uncommitted_work(tmp_path, monkeypatch):
+    """`git reset --hard` would throw the person's edits away."""
+    import subprocess
+
+    repo = _make_fake_repo(tmp_path)
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+
+        class R:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        out = R()
+        if cmd[:2] == ["git", "status"]:
+            out.stdout = " M src/tokirecur/api/app.py\n"
+        return out
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    res = CliRunner().invoke(cli, ["self-upgrade", "--repo", str(repo)])
+
+    assert res.exit_code == 1
+    assert "uncommitted changes" in res.output
+    flat = [" ".join(c) for c in calls]
+    assert not any("git reset" in f for f in flat), flat
+
+
+def test_self_upgrade_force_discards_uncommitted_work(tmp_path, monkeypatch):
+    """--force is the way through when the person means it."""
+    import subprocess
+
+    repo = _make_fake_repo(tmp_path)
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+
+        class R:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        out = R()
+        if cmd[:2] == ["git", "status"]:
+            out.stdout = " M src/tokirecur/api/app.py\n"
+        return out
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    res = CliRunner().invoke(
+        cli, ["self-upgrade", "--repo", str(repo), "--force"],
+        catch_exceptions=False,
+    )
+
+    assert res.exit_code == 0, res.output
+    flat = [" ".join(c) for c in calls]
+    assert any("git reset --hard origin/main" in f for f in flat), flat

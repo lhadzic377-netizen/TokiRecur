@@ -25,6 +25,7 @@ back to OSC 52.
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -78,6 +79,14 @@ def _run_commands(text: str) -> str | None:
 def _tk_owner(text: str) -> str | None:
     """A detached tkinter process that owns the selection briefly."""
     if sys.platform.startswith("win") or not os.environ.get("DISPLAY"):
+        return None
+    # The helper runs in this interpreter, so a Python without tkinter
+    # cannot own the selection: claiming "copied" and spawning a child
+    # that dies on import is worse than saying "none".
+    try:
+        if importlib.util.find_spec("tkinter") is None:
+            return None
+    except (ImportError, ValueError):
         return None
     try:
         subprocess.Popen(

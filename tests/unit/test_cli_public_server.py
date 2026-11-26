@@ -89,3 +89,21 @@ def test_the_command_is_registered():
     result = CliRunner().invoke(cli, ["public-server", "--help"])
     assert result.exit_code == 0
     assert "public HTTPS" in result.output
+
+
+def test_it_says_so_when_the_tunnel_did_not_answer(monkeypatch):
+    """A tunnel that never reached the daemon is not "live"."""
+    from tokirecur import public_server
+
+    def starter(port, api_key, model, **kwargs):
+        return PublicServer(url=URL, api_key=api_key, model=model,
+                            port=port, verified=False)
+
+    monkeypatch.setattr(public_server, "start_public_server", starter)
+    monkeypatch.setattr(time, "sleep", lambda _s: (_ for _ in ()).throw(KeyboardInterrupt))
+
+    result = CliRunner().invoke(cli, ["public-server"])
+
+    assert result.exit_code == 0, result.output
+    assert "warning" in result.output
+    assert "9101" in result.output

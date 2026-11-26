@@ -95,10 +95,14 @@ def to_openai_messages(request: GeminiGenerateContentRequest) -> list[dict[str, 
             for part in parts:
                 if not isinstance(part, dict):
                     continue
-                if isinstance(part.get("text"), str):
-                    text_parts.append(part["text"])
-                elif part.get("thought") is True and isinstance(part.get("text"), str):
+                # The thought flag has to be checked FIRST: a part with
+                # both a thought flag and text is the model's reasoning,
+                # and reading it as plain text put the thinking back
+                # into the assistant's visible content.
+                if part.get("thought") is True and isinstance(part.get("text"), str):
                     thinking_parts.append(part["text"])
+                elif isinstance(part.get("text"), str):
+                    text_parts.append(part["text"])
                 call = part.get("functionCall")
                 if isinstance(call, dict) and call.get("name"):
                     tool_calls.append({
@@ -121,13 +125,13 @@ def to_openai_messages(request: GeminiGenerateContentRequest) -> list[dict[str, 
                 messages.append(assistant)
             continue
 
-        text_parts: list[str] = []
+        user_text_parts: list[str] = []
         tool_results: list[dict[str, Any]] = []
         for part in parts:
             if not isinstance(part, dict):
                 continue
             if isinstance(part.get("text"), str):
-                text_parts.append(part["text"])
+                user_text_parts.append(part["text"])
             response = part.get("functionResponse")
             if isinstance(response, dict):
                 name = str(response.get("name") or "")
@@ -140,8 +144,10 @@ def to_openai_messages(request: GeminiGenerateContentRequest) -> list[dict[str, 
         # The tool answers come first: they are the answer to the tool
         # calls the previous turn made.
         messages.extend(tool_results)
-        if text_parts:
-            messages.append({"role": "user", "content": "\n".join(text_parts)})
+        if user_text_parts:
+            messages.append({
+                "role": "user", "content": "\n".join(user_text_parts),
+            })
     return messages
 
 

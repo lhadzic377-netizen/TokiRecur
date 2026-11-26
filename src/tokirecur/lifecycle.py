@@ -47,7 +47,7 @@ def _read_pid(path: Path) -> int | None:
     if not path.exists():
         return None
     try:
-        return int(path.read_text().strip())
+        return int(path.read_text(encoding="utf-8").strip())
     except (ValueError, OSError):
         return None
 
@@ -208,7 +208,7 @@ def start_llama_server(
         stdin=subprocess.DEVNULL,
         **winproc.detach_kwargs(start_new_session=_DETACH),
     )
-    LLAMA_PID.write_text(str(proc.pid))
+    LLAMA_PID.write_text(str(proc.pid), encoding="utf-8")
     logger.info("llama-server pid=%d log=%s", proc.pid, LLAMA_LOG)
 
     if wait:
@@ -264,7 +264,7 @@ def start_daemon(
         env=daemon_env,
         **winproc.detach_kwargs(start_new_session=_DETACH),
     )
-    DAEMON_PID.write_text(str(proc.pid))
+    DAEMON_PID.write_text(str(proc.pid), encoding="utf-8")
     logger.info("toki daemon pid=%d log=%s", proc.pid, DAEMON_LOG)
 
     if wait:

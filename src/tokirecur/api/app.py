@@ -34,7 +34,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from .. import tap
 from ..backend import MEMORY_ACTIONS, _normalize_messages
@@ -417,6 +417,91 @@ def _context_overflow_status(e: Exception) -> int | None:
     return None
 
 
+def _error_response(
+    path: str,
+    status_code: int,
+    detail: str,
+    headers: dict[str, str] | None = None,
+) -> JSONResponse:
+    """An error body in the shape the calling client actually reads.
+
+    The daemon serves three API surfaces, and each has its own error
+    envelope: OpenAI clients read ``error.message``, Anthropic clients
+    read ``type: "error"`` with ``error.type``, and the Gemini SDKs
+    read ``error.status``. A bare ``{"detail": ...}`` arrives at all
+    three as an empty body - the client retries a 401 it could have
+    understood, or reports "no body" to the person. ``detail`` stays in
+    every body for the dashboard and for the tests.
+    """
+    if path.startswith("/v1beta"):
+        status_name = {
+            400: "INVALID_ARGUMENT",
+            401: "UNAUTHENTICATED",
+            403: "PERMISSION_DENIED",
+            404: "NOT_FOUND",
+            429: "RESOURCE_EXHAUSTED",
+        }.get(status_code, "INTERNAL" if status_code >= 500 else "FAILED_PRECONDITION")
+        return JSONResponse(
+            status_code=status_code,
+            content={
+                "detail": detail,
+                "error": {
+                    "code": status_code,
+                    "message": detail,
+                    "status": status_name,
+                },
+            },
+            headers=headers or {},
+        )
+    if path.startswith("/v1/messages") or path.startswith("/anthropic"):
+        # Anthropic's own error types, so a client can branch on them.
+        error_type = {
+            400: "invalid_request_error",
+            401: "authentication_error",
+            403: "permission_error",
+            404: "not_found_error",
+            413: "request_too_large",
+            429: "rate_limit_error",
+        }.get(status_code, "api_error" if status_code >= 500
+              else "invalid_request_error")
+        return JSONResponse(
+            status_code=status_code,
+            content={
+                "detail": detail,
+                "type": "error",
+                "error": {
+                    "type": error_type,
+                    "message": detail,
+                },
+            },
+            headers=headers or {},
+        )
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "detail": detail,
+            "error": {
+                "message": detail,
+                "type": (
+                    "invalid_request_error" if status_code < 500
+                    else "server_error"
+                ),
+                "code": (
+                    "invalid_api_key" if status_code == 401 else None
+                ),
+            },
+        },
+        headers=headers or {},
+    )
+
+
+def _package_version() -> str:
+    """The installed package version, for the OpenAPI document."""
+    from .. import __version__
+
+    return __version__
+
+
 def _openai_error(
     status: int, message: str, code: str | None = None,
 ) -> JSONResponse:
@@ -783,6 +868,13 @@ class ChatCompletionRequest(BaseModel):
     # Hard bounds instead of trusting the client: llama.cpp truncates
     # out-of-range values silently, which made overrides look broken.
     max_tokens: int = Field(256, ge=1, le=MAX_REQUEST_TOKENS)
+    # OpenAI's newer name for the same thing. Clients that send it (the
+    # Responses-era SDKs, several agent harnesses) had it dropped on the
+    # floor, and the request then answered with the 256-token default -
+    # a truncated answer that looked like the model's fault.
+    max_completion_tokens: int | None = Field(
+        None, ge=1, le=MAX_REQUEST_TOKENS,
+    )
     # None = the active model's sampling defaults (temperature 0.4,
     # repeat_penalty 1.15, top_k 40, min_p 0.05). A client value always
     # wins. Greedy decode with no repetition penalty is the loop engine
@@ -821,6 +913,20 @@ class ChatCompletionRequest(BaseModel):
     memory_id: str | None = None
     memory_commit: bool | None = None
     memory_documents: list[str] | None = None
+
+    @model_validator(mode="after")
+    def _apply_max_completion_tokens(self) -> ChatCompletionRequest:
+        """``max_completion_tokens`` is the same field under a new name.
+
+        An explicit ``max_tokens`` still wins: a client that sends both
+        means the older one.
+        """
+        if (
+            self.max_completion_tokens is not None
+            and "max_tokens" not in self.model_fields_set
+        ):
+            self.max_tokens = self.max_completion_tokens
+        return self
 
 
 class ResponsesItem(BaseModel):
@@ -1125,7 +1231,9 @@ def create_app(
                     pass
         logger.info("Toki Recur daemon shutting down")
 
-    app = FastAPI(title="Toki Recur", version="0.2.0", lifespan=lifespan)
+    # The OpenAPI document is read by clients and by `toki doctor`; a
+    # hardcoded version there reported 0.2.0 for a 0.3.x daemon.
+    app = FastAPI(title="Toki Recur", version=_package_version(), lifespan=lifespan)
     engine = RecyclingEngine(backend, index, similarity_threshold=similarity_threshold)
     # The window this daemon really serves: what the stack gave
     # llama-server, not what a client believes. The overflow check
@@ -1175,11 +1283,8 @@ def create_app(
                 _check_auth(request)
             except HTTPException as e:
                 METRICS.observe_request(path, e.status_code, 0.0)
-                from fastapi.responses import JSONResponse
-                return JSONResponse(
-                    status_code=e.status_code,
-                    content={"detail": e.detail},
-                    headers=e.headers or {},
+                return _error_response(
+                    path, e.status_code, str(e.detail), e.headers or {},
                 )
         # Rate limit (also skip for public). Cheap admin/read endpoints
         # that UIs poll frequently (cache state, cache reset, precision)

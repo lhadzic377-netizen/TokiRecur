@@ -112,3 +112,34 @@ def test_tunnel_argv_targets_the_local_daemon_port():
     assert argv[1] == "tunnel"
     assert argv[argv.index("--url") + 1] == "http://127.0.0.1:8844"
     assert "--no-autoupdate" in argv
+
+
+def test_it_refuses_to_dial_when_nothing_listens_locally():
+    """A tunnel to a dead port answers 502 on every request."""
+    def popen(argv, **kwargs):
+        pytest.fail("cloudflared must not be started for a dead origin")
+
+    with pytest.raises(ps.PublicServerError) as exc:
+        ps.start_public_server(
+            9, "k", "m", cloudflared="/usr/bin/cloudflared", popen=popen,
+            timeout=1, registered_grace=1, warm=False, verify=True,
+        )
+    assert "nothing is listening on 127.0.0.1:9" in str(exc.value)
+
+
+def test_port_open_tells_the_truth():
+    """The probe the CLI uses to notice a stack that went away."""
+    assert ps.port_open(9) is False
+
+
+def test_wait_until_live_reports_failure(monkeypatch):
+    """A route that never answers must be reported as unverified."""
+    import urllib.error
+    import urllib.request
+
+    def boom(*args, **kwargs):
+        raise urllib.error.URLError("no route")
+
+    monkeypatch.setattr(urllib.request, "urlopen", boom)
+    assert ps._wait_until_live("https://example.invalid/v1/models", "k",
+                               timeout=0.2) is False

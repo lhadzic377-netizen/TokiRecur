@@ -6,7 +6,80 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.26] - 2026-11-26
+
+### Added
+- **The backend can be updated to the latest llama.cpp from source.**
+  `scripts/build_llama_cpp.sh` takes `LLAMA_CPP_UPDATE=1` (fetch and reset
+  the checkout to `origin/master`, refusing a dirty tree) and
+  `LLAMA_CPP_INSTALL=1` (install into the toki state bin and drop the
+  libraries the new ABI version replaced). The build runs with
+  `-DLLAMA_USE_PREBUILT_UI=OFF`: the prebuilt web UI is validated against
+  the checkout it was built from, a source build has no matching assets,
+  and the API server does not need the UI - so the checkout stays pristine
+  and the build stops failing on the asset check.
+- **`max_completion_tokens` is honoured** on `/v1/chat/completions`. It is
+  OpenAI's newer name for `max_tokens`; it used to be dropped on the floor,
+  and the request then answered with the 256-token default - a truncated
+  answer that read like the model's fault. An explicit `max_tokens` still
+  wins.
+
+### Changed
+- **The backend was updated to the latest llama.cpp** (upstream master,
+  `1.1.0-dev`, commit 0e4e925, built for this box with ROCm + unified
+  memory). The new build keeps the `--slot-save-path` endpoints the KV
+  reuse depends on, and the reuse was verified end to end against it: a
+  second identical turn hit the cache and skipped 11 prompt tokens.
+
 ### Fixed
+- **`toki model pull` works again with `huggingface_hub` 1.x.** That
+  release removed `resume_download` from `snapshot_download` (resuming is
+  the only behaviour now), so every pull raised TypeError. The kwarg is
+  now passed only where the installed hub still has it.
+- **A Gemini "thought" part is the model's reasoning, not its answer.** The
+  thought flag was checked after the text, so a thinking summary was read
+  as plain text and handed back as visible content.
+- **The GPU advice after a failed start now reaches the person.**
+  `diagnose.hint()` was called with a second argument it does not take, so
+  the TypeError was swallowed and the hint was never shown.
+- **The doctor no longer accuses a model that never ran.** With no
+  `llama.log` there is no evidence of a GPU problem, only of a model that
+  has not started yet; it says so instead of pointing at the build.
+- **A public tunnel to a dead origin says so.** `toki public-server` (and
+  the launcher's public-server screen) checked the hostname and called it
+  live while every request through it answered 502. The tunnel now refuses
+  to start when nothing is listening on the local port, reports a tunnel
+  that did not answer, and warns when the stack disappears under a live
+  tunnel - the tunnel stays up, because the hostname is what gets pasted
+  into an approval form.
+- **Auth failures now have a body the calling client can read.** The
+  daemon serves three API surfaces and each has its own error envelope
+  (OpenAI `error.message`, Anthropic `type: "error"`, Gemini
+  `error.status`); a bare `{"detail": ...}` arrived at all three as an
+  empty body.
+- **`toki self-upgrade` refuses to throw away uncommitted work.** It ran
+  `git reset --hard` without looking; it now stops on a dirty checkout
+  unless `--force` is given.
+- **The OpenAPI documents report the real version.** The daemon said
+  `0.2.0` and the web UI `0.1.0` while the package was 0.3.x.
+- **`install-llama`'s self-check reads the version banner.** llama-server
+  prints it on stderr, so the check reported a bare "ok" for every build.
+- **Text files are read and written as UTF-8 everywhere.** The default
+  encoding is the locale's, so a non-UTF-8 locale (or Windows) broke the
+  registry, the theme, the auth file and the reports.
+- **`toki model status` no longer prints an empty `()`.** The parenthesised
+  slot context only exists while the backend answers.
+- **An unknown subcommand says so** instead of printing the help as if it
+  had worked.
+- **The clipboard helper does not claim a copy it could not make.** A
+  Python without tkinter cannot own the selection; it says "none" and
+  lets the caller fall back.
+- **`/slots` is treated as what it is** - a list of slots. An error body
+  (an object) is no longer iterated as if it were one.
+- **The systemd boot unit is no longer world-readable.** It carries the
+  daemon's bearer token as `TOKI_AUTH_TOKEN` and was written with the
+  default umask, so any other user on the machine could read the token
+  and use the daemon. It is now 0600, like the auth file.
 - **Copying a public-server link now puts a usable link on the desktop
   clipboard.** Textual's own copy writes OSC 52, which GNOME Terminal
   ignores, so the "copied" toast was a lie; the helper now uses the

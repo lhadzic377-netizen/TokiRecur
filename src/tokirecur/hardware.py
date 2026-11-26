@@ -113,7 +113,7 @@ def _read_proc_cpuinfo() -> dict[str, str]:
     """Parse /proc/cpuinfo into a flat dict keyed by field name."""
     out: dict[str, str] = {}
     try:
-        text = Path("/proc/cpuinfo").read_text()
+        text = Path("/proc/cpuinfo").read_text(encoding="utf-8")
     except OSError:
         return out
     for line in text.splitlines():
@@ -133,7 +133,7 @@ def _count_logical_cpus() -> int:
     """
     if sys.platform.startswith("linux"):
         try:
-            text = Path("/proc/cpuinfo").read_text()
+            text = Path("/proc/cpuinfo").read_text(encoding="utf-8")
             return len(re.findall(r"^processor\s*:\s*\d+", text, re.M))
         except OSError:
             pass
@@ -154,7 +154,7 @@ def _total_ram_gb() -> float:
     """
     if sys.platform.startswith("linux"):
         try:
-            text = Path("/proc/meminfo").read_text()
+            text = Path("/proc/meminfo").read_text(encoding="utf-8")
         except OSError:
             return 0.0
         for line in text.splitlines():
@@ -292,15 +292,15 @@ def _cpu_topology_linux() -> CPUProfile:
             if f is None:
                 continue
             try:
-                khz = int(f.read_text().strip())
+                khz = int(f.read_text(encoding="utf-8").strip())
                 max_freqs.append(khz / 1000.0)
             except (OSError, ValueError):
                 continue
         if max_freqs:
             # Group CPUs by max freq; the highest-freq cluster is P.
             threshold = max(max_freqs) * 0.85
-            for i, f in enumerate(max_freqs):
-                if f >= threshold:
+            for i, freq in enumerate(max_freqs):
+                if freq >= threshold:
                     p_ids.append(i)
                 else:
                     e_ids.append(i)
@@ -595,11 +595,11 @@ def _scan_pci_gpus(drm_root: Path, already: list[GPUProfile]) -> list[GPUProfile
         if not dev.is_dir():
             continue
         try:
-            vendor_id = (dev / "vendor").read_text().strip()
+            vendor_id = (dev / "vendor").read_text(encoding="utf-8").strip()
         except OSError:
             continue
         try:
-            device_id = (dev / "device").read_text().strip()
+            device_id = (dev / "device").read_text(encoding="utf-8").strip()
         except OSError:
             device_id = ""
         name = _pci_device_name(vendor_id, device_id) or f"{vendor_id}/{device_id}"
@@ -907,7 +907,7 @@ def _pci_device_name(vendor: str, device: str) -> str | None:
         return None
     vendor_l = vendor.lstrip("0").lower()
     device_l = device.lstrip("0").lower()
-    text = hw.read_text(errors="replace")
+    text = hw.read_text(encoding="utf-8", errors="replace")
     lines = text.splitlines()
     in_vendor = False
     for line in lines:
@@ -991,7 +991,7 @@ def _pci_vram_gb(card_dev_path: Path) -> float:
     if not f.exists():
         return 0.0
     try:
-        return int(f.read_text().strip()) / 1024**3
+        return int(f.read_text(encoding="utf-8").strip()) / 1024**3
     except (OSError, ValueError):
         return 0.0
 
@@ -1219,7 +1219,7 @@ def load_profile() -> HardwareProfile | None:
     if not p.exists():
         return None
     try:
-        data = json.loads(p.read_text())
+        data = json.loads(p.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
     if not isinstance(data, dict):
@@ -1230,7 +1230,7 @@ def load_profile() -> HardwareProfile | None:
 def save_profile(profile: HardwareProfile) -> None:
     p = profile_path()
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(_to_dict(profile), indent=2))
+    p.write_text(json.dumps(_to_dict(profile), indent=2), encoding="utf-8")
 
 
 def _to_dict(profile: HardwareProfile) -> dict:
@@ -1349,7 +1349,7 @@ def _available_gb() -> float:
             pass
     if sys.platform.startswith("linux"):
         try:
-            with open("/proc/meminfo") as f:
+            with open("/proc/meminfo", encoding="utf-8", errors="replace") as f:
                 return _ram_from_meminfo(f.read())
         except (OSError, ValueError, IndexError):
             pass

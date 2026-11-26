@@ -248,7 +248,7 @@ def model_load_failure(spec: Any) -> str | None:
         log = spec.state_dir() / "llama.log"
         if not log.is_file():
             return None
-        lines = log.read_text(errors="replace").splitlines()[-400:]
+        lines = log.read_text(encoding="utf-8", errors="replace").splitlines()[-400:]
     except (AttributeError, OSError, TypeError):
         return None
     # Only the LAST attempt counts: a model that loaded and then died
@@ -799,6 +799,11 @@ def describe_gpu(spec=None) -> str:
     spec = spec or _active_spec()
     if spec is None:
         return "no model selected"
+    log = spec.state_dir() / "llama.log"
+    if not log.exists():
+        # No log at all means the model has never run here. Calling that
+        # "CPU only" reads as a verdict on a build that was never used.
+        return "not started yet (no llama.log)"
     st = ctl.gpu_state(spec)
     if not st["backend"]:
         return "CPU only (no GPU backend in llama.log)"
@@ -929,12 +934,21 @@ def _cpu_mode_requested(spec) -> bool:
     return False
 
 
-def hint(hw: dict[str, str | None] | None = None) -> list[str]:
-    """Actionable fix lines when the GPU is unused, else []."""
+def hint(
+    hw: dict[str, str | None] | None = None,
+    spec: Any | None = None,
+) -> list[str]:
+    """Actionable fix lines when the GPU is unused, else [].
+
+    ``spec`` names the model to look at. It defaults to the active one;
+    the caller that already knows which model failed (the start-failure
+    healer) passes it, because the active model is not necessarily the
+    one that just failed.
+    """
     hw = hw or gpu_hardware()
     if not hw["backend"]:
         return []
-    spec = _active_spec()
+    spec = spec if spec is not None else _active_spec()
     if spec is None:
         return []
     if _cpu_mode_requested(spec):
@@ -944,10 +958,20 @@ def hint(hw: dict[str, str | None] | None = None) -> list[str]:
         return []
     build = ctl._resolve_binary(spec)
     build_kind = binary_backend(build)
-    lines = [
-        f"note: a GPU ({hw['backend']}) is present but '{spec.name}' shows no "
-        "GPU offload in llama.log.",
-    ]
+    # Has this model ever run here? Without a log there is no run to
+    # judge - only the build to describe.
+    ran = (spec.state_dir() / "llama.log").exists()
+    if ran:
+        lines = [
+            f"note: a GPU ({hw['backend']}) is present but '{spec.name}' "
+            "shows no GPU offload in its last llama.log.",
+        ]
+    else:
+        lines = [
+            f"note: '{spec.name}' has not run on this machine yet (no "
+            "llama.log), so there is no GPU evidence either way.",
+            f"  start it with: toki model use {spec.name}",
+        ]
     reason = gpu_fallback_reason(spec)
     win = winproc.IS_WINDOWS
     if build_kind == "CUDA" and not cuda_runtime_ready(build):
@@ -1040,6 +1064,10 @@ def hint(hw: dict[str, str | None] | None = None) -> list[str]:
         )
         lines.append(f"  then: toki model use {spec.name}")
     else:
+        if not ran:
+            # Nothing has run, so there is no offload to explain: the
+            # build advice above is all there is to say.
+            return lines
         if reason:
             # The log knows why. A person reading "the build is ROCm but no
             # offload is visible" would go looking for a wrong build; the
@@ -1072,7 +1100,7 @@ def gpu_fallback_reason(spec) -> str | None:
     """
     log = spec.state_dir() / "llama.log"
     try:
-        text = log.read_text(errors="replace")
+        text = log.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
     for line in reversed(text.splitlines()):

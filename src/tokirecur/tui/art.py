@@ -27,7 +27,7 @@ settings pane repaints the launcher without a restart.
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from textual.theme import Theme
@@ -322,7 +322,7 @@ def _active_theme_name() -> str:
     try:
         from pathlib import Path
 
-        name = Path(_theme_file()).read_text().strip().lower()
+        name = Path(_theme_file()).read_text(encoding="utf-8").strip().lower()
     except OSError:
         return DEFAULT_THEME
     return name if name in THEMES else DEFAULT_THEME
@@ -333,7 +333,7 @@ def palette() -> dict[str, str]:
     return THEMES[_active_theme_name()]
 
 
-def __getattr__(name: str) -> str:
+def __getattr__(name: str) -> Any:
     """The palette's colours, read at the moment they are used.
 
     A module-level constant would freeze the palette at import, and a

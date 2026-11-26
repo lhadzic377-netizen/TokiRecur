@@ -133,6 +133,10 @@ def test_the_gemini_turn_becomes_the_engine_s_messages():
     # The model's turn keeps its tool call.
     assert messages[2]["role"] == "assistant"
     assert messages[2]["tool_calls"][0]["function"]["name"] == "read"
+    # A "thought" part is the model's reasoning, not its visible answer:
+    # it used to be read as plain text and handed back as content.
+    assert messages[2].get("reasoning_content") == "thinking"
+    assert not (messages[2].get("content") or "").strip()
     # The tool's answer comes back as a tool message.
     assert messages[3]["role"] == "tool"
     assert messages[4]["content"] == "and then?"

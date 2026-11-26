@@ -81,7 +81,7 @@ def _auth_token() -> str | None:
     ):
         try:
             if path.is_file():
-                content = path.read_text().strip()
+                content = path.read_text(encoding="utf-8").strip()
                 if content:
                     return content
         except OSError:

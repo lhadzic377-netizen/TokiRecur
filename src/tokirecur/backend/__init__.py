@@ -356,7 +356,12 @@ class LlamaServerBackend(LlamaBackend):
         r.raise_for_status()
         return r.json()
 
-    def _get(self, path: str) -> dict[str, Any]:
+    def _get(self, path: str) -> Any:
+        """GET a llama-server route and decode its JSON.
+
+        The answer is not always an object: ``/slots`` returns a list,
+        and an error body is an object. Callers check the shape.
+        """
         r = self._client.get(f"{self.base_url}{path}")
         r.raise_for_status()
         return r.json()
@@ -606,7 +611,11 @@ class LlamaServerBackend(LlamaBackend):
         """Return n_past, model_id, vocab_size for the slot."""
         try:
             slots = self._get("/slots")
+            if not isinstance(slots, list):
+                slots = []
             for s in slots:
+                if not isinstance(s, dict):
+                    continue
                 if int(s.get("id", s.get("id_slot", -1))) == slot_id:
                     return {
                         "n_past": int(s.get("n_prompt_tokens_processed", 0)),
@@ -618,8 +627,12 @@ class LlamaServerBackend(LlamaBackend):
         # Fallback: ask /v1/models for the model id.
         try:
             models = self._get("/v1/models")
+            data = models.get("data") if isinstance(models, dict) else None
             model_id = (
-                models["data"][0]["id"] if models.get("data") else "unknown"
+                data[0]["id"]
+                if isinstance(data, list) and data
+                and isinstance(data[0], dict)
+                else "unknown"
             )
         except Exception:
             model_id = "unknown"
@@ -678,10 +691,17 @@ class LlamaServerBackend(LlamaBackend):
     def list_slots(self) -> list[dict[str, Any]]:
         """Return the list of slots and their current state."""
         try:
-            return self._get("/slots")
+            slots = self._get("/slots")
         except Exception as e:
             logger.warning("list_slots failed: %s", e)
             return []
+        if not isinstance(slots, list):
+            # An error body is an object, not a list of slots. Handing
+            # that to the caller turned one bad answer into a crash
+            # somewhere else entirely.
+            logger.warning("list_slots: /slots did not return a list")
+            return []
+        return [s for s in slots if isinstance(s, dict)]
 
     def complete(
         self,

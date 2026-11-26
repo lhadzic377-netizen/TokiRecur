@@ -59,7 +59,7 @@ def _auth_headers() -> dict[str, str]:
         ):
             try:
                 if path.is_file():
-                    content = path.read_text().strip()
+                    content = path.read_text(encoding="utf-8").strip()
                     if content:
                         token = content
                         break
@@ -140,7 +140,7 @@ def completion_once(
     if system:
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
-    payload: dict[str, Any] = {
+    payload = {
         "model": "default",
         "messages": messages,
         "max_tokens": max_tokens,

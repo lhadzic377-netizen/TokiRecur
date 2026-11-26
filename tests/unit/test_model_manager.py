@@ -4425,3 +4425,61 @@ def test_openclaw_repair_leaves_a_valid_config_alone(
     cfg = json.loads(path.read_text())
     assert cfg["gateway"]["reload"]["mode"] == "hybrid"
     assert cfg["agents"]["ownership"] == "explicit"
+
+
+def test_snapshot_download_kwargs_follow_the_installed_huggingface(monkeypatch):
+    """huggingface_hub 1.x removed ``resume_download``.
+
+    Passing it there raises TypeError, which broke `toki model pull` on
+    every fresh install.
+    """
+    import huggingface_hub
+
+    def new_style(repo_id, *, allow_patterns=None, local_dir=None,
+                  endpoint=None):
+        return local_dir
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", new_style)
+    monkeypatch.setattr(huggingface_hub, "__version__", "1.24.0")
+    assert ctl._snapshot_download_kwargs() == {}
+
+    def old_style(repo_id, *, allow_patterns=None, local_dir=None,
+                  resume_download=True):
+        return local_dir
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", old_style)
+    monkeypatch.setattr(huggingface_hub, "__version__", "0.24.0")
+    assert ctl._snapshot_download_kwargs() == {"resume_download": True}
+
+    # 2.x still accepts the argument but ignores it (and warns).
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", old_style)
+    monkeypatch.setattr(huggingface_hub, "__version__", "2.4.0")
+    assert ctl._snapshot_download_kwargs() == {}
+
+
+def test_pull_model_works_with_a_huggingface_that_dropped_resume(env, monkeypatch):
+    """The pull must not send a kwarg the installed hub does not take."""
+    import huggingface_hub
+
+    seen: dict = {}
+
+    def fake_download(repo_id, *, allow_patterns=None, local_dir=None,
+                      endpoint=None):
+        seen.update(repo_id=repo_id, allow_patterns=allow_patterns,
+                    local_dir=local_dir)
+        return local_dir
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", fake_download)
+    monkeypatch.setattr(
+        huggingface_hub.HfApi, "list_repo_files",
+        lambda self, repo_id, **kw: ["README.md", "model-Q4_K_M.gguf"],
+    )
+    monkeypatch.setattr(
+        huggingface_hub.HfApi, "get_paths_info",
+        lambda self, repo_id, *, paths=None, **kw: [],
+    )
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: env))
+
+    spec = ctl.pull_model("acme/My-Model-GGUF", "mymodel")
+    assert spec.name == "mymodel"
+    assert seen["repo_id"] == "acme/My-Model-GGUF"

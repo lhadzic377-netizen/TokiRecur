@@ -65,7 +65,7 @@ def _auth_headers() -> dict[str, str]:
         ):
             try:
                 if path.is_file():
-                    token = path.read_text().strip()
+                    token = path.read_text(encoding="utf-8").strip()
                     if token:
                         break
             except OSError:
@@ -534,8 +534,8 @@ def cmd_compare(args: list[str], cfg: ReplConfig) -> None:
     if not a.exists() or not b.exists():
         console.print(f"[red]missing file: {a} or {b}[/red]")
         return
-    ja = json.loads(a.read_text())
-    jb = json.loads(b.read_text())
+    ja = json.loads(a.read_text(encoding="utf-8"))
+    jb = json.loads(b.read_text(encoding="utf-8"))
     sa, sb = ja.get("score", {}), jb.get("score", {})
 
     t = Table(title="score diff", show_header=True)

@@ -181,3 +181,25 @@ def test_unit_template_contains_execstart_and_token(monkeypatch):
     assert "WantedBy=default.target" in text
     assert "TOKI_AUTH_TOKEN=" in text
     assert "TimeoutStartSec=1800" in text
+
+
+def test_the_boot_unit_with_the_token_is_not_world_readable(tmp_path, monkeypatch):
+    """The unit carries the daemon token - it must not be readable by
+    every user on the machine."""
+    import tokirecur.service as service_mod
+
+    spec = type("S", (), {"name": "m", "boot": True})()
+    monkeypatch.setenv("TOKI_AUTH_TOKEN", "ci-test-token")
+    monkeypatch.setattr(service_mod, "UNIT_DIR", tmp_path)
+    monkeypatch.setattr(service_mod, "boot_models", lambda: [spec])
+    monkeypatch.setattr(service_mod, "_systemd_available", lambda: True)
+    monkeypatch.setattr(service_mod, "_systemctl", lambda *a: None)
+    monkeypatch.setattr(service_mod, "_drop_stale_enablement", lambda keep: [])
+
+    service_mod.install()
+
+    unit_path = tmp_path / service_mod.UNIT_NAME
+    assert unit_path.exists()
+    assert "TOKI_AUTH_TOKEN=ci-test-token" in unit_path.read_text()
+    mode = unit_path.stat().st_mode & 0o777
+    assert mode == 0o600, oct(mode)

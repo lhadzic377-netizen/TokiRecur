@@ -206,6 +206,23 @@ def test_hint_gpu_but_cpu_log(monkeypatch, iso_env):
     assert any(f"--name {spec.name}" in line for line in lines)
 
 
+def test_hint_for_a_model_that_never_ran_says_so(monkeypatch, iso_env):
+    """No llama.log at all means no evidence - not a GPU problem."""
+    spec = _spec(iso_env)
+    monkeypatch.setattr(diagnose, "_active_spec", lambda: spec)
+    monkeypatch.setattr(diagnose, "gpu_hardware", lambda: {
+        "backend": "ROCm", "name": "8060S", "vram": None, "driver": None,
+    })
+    lines = diagnose.hint()
+    assert any("has not run on this machine" in line for line in lines)
+    assert not any("no offload is visible" in line for line in lines)
+
+
+def test_describe_gpu_says_not_started_for_a_model_without_a_log(iso_env):
+    spec = _spec(iso_env)
+    assert diagnose.describe_gpu(spec) == "not started yet (no llama.log)"
+
+
 def test_hint_gpu_used_returns_empty(monkeypatch, iso_env):
     spec = _spec(iso_env)
     d = _log_dir(spec, iso_env)
@@ -429,6 +446,12 @@ def test_hint_cpu_build_advises_reinstall(monkeypatch, iso_env):
 
 def test_hint_gpu_build_advises_ngl_check(monkeypatch, iso_env):
     spec = _spec(iso_env)
+    # The model ran, and its log shows no GPU device: that is the case
+    # the -ngl advice is for.
+    d = _log_dir(spec, iso_env)
+    (d / "llama.log").write_text(
+        "0.00.001.000 I   - load_tensors: offloaded 0/28 layers to GPU\n"
+    )
     monkeypatch.setattr(diagnose, "_active_spec", lambda: spec)
     monkeypatch.setattr(diagnose, "gpu_hardware", lambda: {
         "backend": "CUDA", "name": "GTX 1650", "vram": None, "driver": None,
@@ -799,3 +822,20 @@ def test_hint_explicit_cpu_registry_returns_empty(monkeypatch, iso_env):
     })
     monkeypatch.delenv("TOKI_NGL", raising=False)
     assert diagnose.hint() == []
+
+
+def test_hint_accepts_the_spec_it_is_asked_about(monkeypatch, iso_env):
+    """The start-failure healer passes the model that failed.
+
+    It used to call hint(hardware, spec) on a one-argument function,
+    so the TypeError was swallowed and the GPU advice never reached
+    the person staring at a failed start.
+    """
+    spec = _spec(iso_env)
+    monkeypatch.setattr(diagnose, "gpu_hardware", lambda: {
+        "backend": "CUDA", "name": "GTX 1650", "vram": None, "driver": None,
+    })
+    monkeypatch.setattr(ctl, "_resolve_binary", lambda spec: "/tmp/llama-server")
+    monkeypatch.setattr(diagnose, "binary_backend", lambda b: "CPU")
+    lines = diagnose.hint({"backend": "CUDA"}, spec)
+    assert any("install-llama --backend cuda" in line for line in lines)
