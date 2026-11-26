@@ -153,6 +153,8 @@ def test_start_model_refuses_a_model_the_build_cannot_load(tmp_path, monkeypatch
     Without this the server dies with "unknown model architecture"
     inside llama.log, which reads like a broken download.
     """
+    # The architecture check, not the RAM gate, is what this test is for.
+    monkeypatch.setattr(ctl, "_available_gb", lambda: 1000.0)
     gguf = _write_gguf(tmp_path / "m.gguf", "inkling2_loop")
     binary = _fake_build(tmp_path / "bin", ["qwen4exp", "inkling2"])
     spec = ctl.ModelSpec(

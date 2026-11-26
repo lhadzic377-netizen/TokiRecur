@@ -80,6 +80,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   daemon's bearer token as `TOKI_AUTH_TOKEN` and was written with the
   default umask, so any other user on the machine could read the token
   and use the daemon. It is now 0600, like the auth file.
+- **Hermes no longer gets stuck on a dead, numbered `llamacpp` alias.**
+  A stale `providers.llamacpp-0` with `name: llamacpp` pointed at a dead
+  daemon port; hermes resolves by name in config order, so it won over
+  the toki entry and every turn died with connection-refused (and never
+  reached the GPU-backed daemon). The writer now purges every provider
+  that claims the `llamacpp` identity, by key or name, in both config
+  formats, while leaving the user's own providers alone.
 - **Copying a public-server link now puts a usable link on the desktop
   clipboard.** Textual's own copy writes OSC 52, which GNOME Terminal
   ignores, so the "copied" toast was a lie; the helper now uses the

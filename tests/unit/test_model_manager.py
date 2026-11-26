@@ -2967,6 +2967,60 @@ def test_write_hermes_config_takes_over_stale_providers_llamacpp(env, tmp_path):
     assert out["model"]["provider"] == "llamacpp"
 
 
+def test_write_hermes_config_purges_numbered_llamacpp_aliases(env, tmp_path):
+    """A stale ``llamacpp-0`` with ``name: llamacpp`` shadows our entry.
+
+    hermes matches the configured provider against each entry's key OR
+    its name, in config order. The numbered alias was written by an
+    older toki/hermes and points at a dead daemon port, so every turn
+    got connection-refused instead of reaching the GPU-backed daemon.
+    """
+    from types import SimpleNamespace
+
+    import yaml
+
+    from tokirecur.ctl import write_hermes_config
+
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(yaml.safe_dump({
+        "providers": {
+            "ollama-launch": {"name": "Ollama", "api": "http://127.0.0.1:11434/v1"},
+            "llamacpp-0": {
+                "name": "llamacpp",
+                "api": "http://127.0.0.1:8845/v1",  # dead
+                "default_model": "gemma-4-31b-it-ara-heretic.q4_k_m",
+            },
+        },
+        "custom_providers": [
+            {"name": "llamacpp", "base_url": "http://127.0.0.1:8845/v1"},
+        ],
+        "model": {"provider": "llamacpp"},
+    }))
+
+    spec = SimpleNamespace(
+        name="inkling", model_id="inkling-2-mini",
+        daemon_url="http://127.0.0.1:8855", llama_url="http://127.0.0.1:8156",
+        ctx_size=16384,
+    )
+
+    write_hermes_config(spec, specs=[spec], path=cfg)
+    out = yaml.safe_load(cfg.read_text())
+
+    prov = out["providers"]
+    assert "llamacpp-0" not in prov
+    assert prov["llamacpp"]["api"] == "http://127.0.0.1:8855/v1"
+    # A user's own provider is untouched.
+    assert prov["ollama-launch"]["api"] == "http://127.0.0.1:11434/v1"
+    # No stale legacy entry can shadow the new one either.
+    assert all(
+        "8845" not in str(c.get("base_url") or "")
+        for c in out["custom_providers"]
+    )
+    custom = [c for c in out["custom_providers"] if c.get("name") == "llamacpp"]
+    assert len(custom) == 1
+    assert custom[0]["base_url"] == "http://127.0.0.1:8855/v1"
+
+
 def test_write_hermes_config_preserves_user_custom_providers(env, tmp_path):
     """Switching models must NOT clobber the user's own custom_providers
     entries (e.g. an ollama-launch entry)."""

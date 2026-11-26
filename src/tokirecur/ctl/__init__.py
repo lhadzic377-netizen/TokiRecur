@@ -7299,6 +7299,18 @@ def write_openclaw_config(
     return cfg_path
 
 
+def _is_llamacpp_alias(value: Any) -> bool:
+    """Does this provider key or name claim the ``llamacpp`` identity?
+
+    hermes resolves a configured provider by scanning ``providers:`` and
+    matching each entry's key OR its ``name``. An alias like
+    ``llamacpp-0`` with ``name: llamacpp`` therefore wins over the key
+    we write, even though it is older and points at a dead daemon port.
+    """
+    normalized = str(value or "").strip().lower().replace(" ", "-")
+    return normalized == "llamacpp" or normalized.startswith("llamacpp-")
+
+
 def write_hermes_config(
     spec: ModelSpec, specs: list[ModelSpec] | None = None,
     path: Path | None = None, mode: str | None = None,
@@ -7343,8 +7355,14 @@ def write_hermes_config(
     if not isinstance(providers, dict):
         providers = {}
         cfg["providers"] = providers
-    for stale in [k for k in providers
-                  if k.startswith("tokirecur-") or k == "llamacpp"]:
+    for stale in [
+        k for k in list(providers)
+        if k.startswith("tokirecur-") or _is_llamacpp_alias(k)
+        or (
+            isinstance(providers[k], dict)
+            and _is_llamacpp_alias(providers[k].get("name"))
+        )
+    ]:
         providers.pop(stale, None)
 
     all_specs = specs if specs is not None else load_registry()
@@ -7358,6 +7376,18 @@ def write_hermes_config(
     if not isinstance(custom, list):
         custom = []
         cfg["custom_providers"] = custom
+    # The same stale alias can live in the legacy list, where hermes
+    # falls back to it after ``providers:``. Only toki-owned entries get
+    # replaced below; a foreign one has to go or it can still win.
+    kept = [
+        c for c in custom
+        if not (
+            isinstance(c, dict)
+            and _is_llamacpp_alias(c.get("name"))
+            and not c.get("_toki")
+        )
+    ]
+    custom[:] = kept
     # Per-model `context_length` in dict form is hermes's authoritative
     # context source (get_custom_provider_context_length — resolution
     # step 0, before any probe). Without it hermes's probe of the daemon

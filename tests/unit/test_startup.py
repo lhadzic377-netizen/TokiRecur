@@ -328,6 +328,9 @@ def test_takeover_stale_daemon_stops_foreign_stale_daemon(env, monkeypatch):
 
 
 def test_start_model_fails_fast_with_log_tail(env, monkeypatch):
+    # These tests check the log and the effective ctx, not the RAM gate:
+    # this box may be under pressure from the user's own stacks.
+    monkeypatch.setattr(ctl, "_available_gb", lambda: 1000.0)
     spec = _spec(env)
     spec.state_dir().mkdir(parents=True)
     (spec.state_dir() / "llama.log").write_text(
@@ -352,6 +355,7 @@ def test_start_model_fails_fast_with_log_tail(env, monkeypatch):
 
 
 def test_start_model_writes_effective_ctx(env, monkeypatch):
+    monkeypatch.setattr(ctl, "_available_gb", lambda: 1000.0)
     spec = _spec(env)
     monkeypatch.setattr(ctl, "llama_reachable", lambda s: False)
     monkeypatch.setattr(ctl, "daemon_reachable", lambda s: True)
