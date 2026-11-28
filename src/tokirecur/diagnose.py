@@ -267,6 +267,29 @@ def model_load_failure(spec: Any) -> str | None:
                     f"supports it (often a fork); point the model at that "
                     f"build in the settings (binary -> custom...)"
                 )
+            elif "unknown projector type" in line:
+                kind = line.split("unknown projector type:")[-1].strip()
+                last_error = (
+                    f"this llama-server does not know the {kind} vision "
+                    "projector - it was built before that projector type "
+                    "existed. The model runs text-only on this build; point "
+                    "it at a newer llama-server for vision."
+                )
+            elif "has wrong shape" in line:
+                # The file's tensor layout is not the one the build
+                # expects: the GGUF was made for another llama.cpp
+                # (often a vendor fork). The tensor name is the clue.
+                tensor = ""
+                if "'" in line:
+                    tensor = line.split("'")[1] if "'" in line else ""
+                last_error = (
+                    "the model file's tensor layout does not match this "
+                    "build"
+                    + (f" ({tensor})" if tensor else "")
+                    + " - it was made for another llama.cpp (often a "
+                    "vendor fork). Point the model at a build that knows "
+                    "it (settings -> binary -> custom)."
+                )
             elif "error loading model" in line:
                 last_error = "llama-server could not load the model file"
     return last_error

@@ -4178,6 +4178,81 @@ def _llama_spawn_env(spec: ModelSpec) -> dict[str, str] | None:
     return base
 
 
+def _unsupported_projector_reason(binary: str, mmproj: str) -> str | None:
+    """Why this build cannot load the projector, or None.
+
+    A vision model whose projector kind the build does not know is a
+    model that never starts: llama-server exits with "unknown projector
+    type" and the whole stack is down. The kind is a string in the
+    build's mtmd library, so the build can be asked.
+    """
+    from ..arch import binary_supports_projector
+    from ..ggufmeta import read_gguf_meta
+
+    try:
+        meta = read_gguf_meta(mmproj)
+    except Exception:
+        return None
+    kind = getattr(meta, "projector_type", None)
+    if not kind:
+        return None
+    if binary_supports_projector(binary, kind) is False:
+        return (
+            f"the installed llama-server does not know the '{kind}' "
+            f"projector - this model runs text-only on this build"
+        )
+    return None
+
+
+def _note_text_only(spec: ModelSpec, reason: str) -> None:
+    """Record that the model is running without its projector."""
+    try:
+        state = spec.state_dir()
+        state.mkdir(parents=True, exist_ok=True)
+        (state / "no_vision.txt").write_text(reason, encoding="utf-8")
+    except OSError:
+        pass
+
+
+def vision_status(spec: ModelSpec) -> tuple[str, str | None]:
+    """What this model can see on this build: state and reason.
+
+    The states are ``vision`` (the projector loads), ``text-only`` (the
+    build does not know this projector's kind, so the model runs without
+    it) and ``no-projector`` (there is no projector at all). The reason
+    says why, in words the person can act on.
+    """
+    mmproj = getattr(spec, "mmproj", "") or ""
+    if not mmproj:
+        return ("no-projector", None)
+    if not Path(mmproj).exists():
+        return ("no-projector", "the projector file is missing")
+    try:
+        binary = _resolve_binary(spec)
+    except Exception:
+        binary = ""
+    if not binary:
+        # No build to ask (a spec without one): the projector is there,
+        # so the model is a vision model as far as anyone can tell.
+        return ("vision", None)
+    reason = _unsupported_projector_reason(binary, mmproj)
+    if reason:
+        return ("text-only", reason)
+    return ("vision", None)
+
+
+def text_only_reason(spec: ModelSpec) -> str | None:
+    """Why the model runs text-only, if it does."""
+    try:
+        p = spec.state_dir() / "no_vision.txt"
+        if not p.is_file():
+            return None
+        text = p.read_text(encoding="utf-8").strip()
+        return text or None
+    except (AttributeError, OSError):
+        return None
+
+
 def _llama_args(spec: ModelSpec, ctx_override: int | None = None,
                 kv_override: str | None = None,
                 parallel_override: int | None = None) -> list[str]:
@@ -4293,7 +4368,15 @@ def _llama_args(spec: ModelSpec, ctx_override: int | None = None,
                 f"missing: {mmproj} — re-pull it, or drop the mmproj "
                 f"field to run it text-only"
             )
-        args += ["--mmproj", mmproj]
+        blind = _unsupported_projector_reason(binary, mmproj)
+        if blind:
+            # The build does not know this projector kind. Passing it
+            # anyway makes the server exit with "unknown projector type",
+            # and the model never starts at all - so it runs text-only
+            # and the reason is recorded for the launcher to show.
+            _note_text_only(spec, blind)
+        else:
+            args += ["--mmproj", mmproj]
     # Register every model name the stack can emit as an alias so a
     # validating (router-mode) llama-server can never 404 a client that
     # talks to it directly with a stale/legacy name. One comma-separated

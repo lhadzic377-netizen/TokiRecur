@@ -43,6 +43,7 @@ from ..ctl import (
     model_file_missing,
     model_status,
     read_client_modes,
+    vision_status,
     write_client_mode,
 )
 from ..launch_catalog import LAUNCH_APPS, configured_provider_model, unavailable_reason
@@ -1178,8 +1179,14 @@ class LauncherApp(art.ThemedApp, App[dict | None]):
             # whose projector is missing answers every image as though it were
             # blank. Say which is which, and shout when the projector is gone.
             mmproj = getattr(spec, "mmproj", "") or ""
-            vision_ok = bool(mmproj) and Path(mmproj).exists()
-            vision_bad = bool(mmproj) and not vision_ok
+            # A projector the installed build cannot load is not vision:
+            # the model would refuse to start at all, so toki runs it
+            # text-only. Say which it is, rather than promising images
+            # the model cannot read.
+            vision_state, vision_reason = vision_status(spec)
+            vision_ok = vision_state == "vision"
+            vision_bad = vision_state == "no-projector" and bool(mmproj)
+            vision_text_only = vision_state == "text-only"
             # The active adapter mode is how this model actually runs.
             # A mode whose file is gone is a stack that will not start;
             # a stale id is a catalog edit nobody finished.
@@ -1205,6 +1212,8 @@ class LauncherApp(art.ThemedApp, App[dict | None]):
                     row.append(" [file missing]", style=f"bold {art.RED}")
                 elif vision_bad:
                     row.append(" [no projector]", style=f"bold {art.RED}")
+                elif vision_text_only:
+                    row.append(" [text-only]", style=f"bold {art.AMBER}")
                 elif vision_ok:
                     row.append(" [vision]", style=f"dim {art.AMBER}")
                 if getattr(spec, "memt", False):
@@ -1233,6 +1242,8 @@ class LauncherApp(art.ThemedApp, App[dict | None]):
                     row.append(" [file missing]", style=f"bold {art.RED}")
                 elif vision_bad:
                     row.append(" [no projector]", style=f"bold {art.RED}")
+                elif vision_text_only:
+                    row.append(" [text-only]", style=f"bold {art.AMBER}")
                 elif vision_ok:
                     row.append(" [vision]", style=f"dim {art.AMBER}")
                 if getattr(spec, "memt", False):
@@ -1277,6 +1288,8 @@ class LauncherApp(art.ThemedApp, App[dict | None]):
                 elif vision_bad:
                     # The one warning worth spelling out rather than tagging.
                     detail += f"  — projector missing: {mmproj}"
+                elif vision_text_only:
+                    detail += f"  — {vision_reason}"
                 out.append(Text(detail, style="dim"))
         if end < len(variants):
             out.append(Text(self._GUT + "↓ more", style="dim"))

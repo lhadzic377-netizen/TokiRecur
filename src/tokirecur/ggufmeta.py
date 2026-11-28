@@ -91,6 +91,12 @@ class GgufMeta:
     #: predates the architecture's upstream merge refuses the file with
     #: "unknown model architecture", so the name is worth carrying.
     architecture: str | None = None
+    #: ``clip.projector_type`` — the multimodal projector's kind
+    #: ("glm5next", "bailing_qwen3_vit", "qwen2vl", ...). The projector
+    #: lives in llama.cpp's mtmd, not in llama, so a build that predates
+    #: the type dies with "unknown projector type" and takes the whole
+    #: model down with it.
+    projector_type: str | None = None
 
     @property
     def complete(self) -> bool:
@@ -199,6 +205,9 @@ _META_SUFFIXES = (
     ".attention.head_count_kv",
     ".context_length",
     ".max_position_embeddings",
+    # The vision projector's kind. A build that does not know it refuses
+    # to load the projector, and the model never starts.
+    ".projector_type",
     # The position encoding the model ships with. A model trained with
     # YaRN carries the factor and the window it was trained at, and
     # llama.cpp applies them without being told to — so reading them
@@ -240,6 +249,7 @@ def _read_gguf_meta(path: Path | str) -> GgufMeta:
             _read_bytes(fh, tensor_fmt)  # tensor_count
             kv_count = _read_bytes(fh, tensor_fmt)
             arch: str | None = None
+            projector_type: str | None = None
             meta: dict[str, object] = {}
             size = os.fstat(fh.fileno()).st_size
             for _ in range(kv_count):
@@ -248,6 +258,11 @@ def _read_gguf_meta(path: Path | str) -> GgufMeta:
                 if key == "general.architecture":
                     value = _read_value(fh, vtype)
                     arch = str(value) if isinstance(value, str) else None
+                elif key == "clip.projector_type":
+                    value = _read_value(fh, vtype)
+                    projector_type = (
+                        str(value) if isinstance(value, str) else None
+                    )
                 elif key.endswith(_META_SUFFIXES):
                     value = _read_value(fh, vtype)
                     meta[key] = value
@@ -321,6 +336,7 @@ def _read_gguf_meta(path: Path | str) -> GgufMeta:
                     ),
                 ),
                 architecture=arch,
+                projector_type=projector_type,
             )
     except (OSError, struct.error, UnicodeDecodeError, ValueError,
             MemoryError, OverflowError):

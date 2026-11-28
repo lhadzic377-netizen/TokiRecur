@@ -80,6 +80,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   daemon's bearer token as `TOKI_AUTH_TOKEN` and was written with the
   default umask, so any other user on the machine could read the token
   and use the daemon. It is now 0600, like the auth file.
+- **A vision model whose projector the build cannot load now runs
+  text-only instead of not running at all.** llama.cpp keeps the
+  projector's kind in its mtmd library; a build that predates it (the
+  `glm5next` projector of GLM-5.3-Flash-Maya, say) exits with
+  "unknown projector type" and takes the whole stack down. toki now
+  reads the projector's kind from the mmproj, asks the build whether it
+  knows it, starts the model without the projector when it does not,
+  and the launcher row says `[text-only]` instead of promising vision.
+  Verified: GLM-5.3-Flash-Maya-XS loads and answers on this build.
+- **The doctor explains a tensor-layout mismatch.** A model file made
+  for another llama.cpp (a vendor fork) dies with "tensor 'blk.0.ssm_a'
+  has wrong shape"; the doctor now says that, names the tensor, and
+  points at the fix instead of "llama-server could not load the model
+  file".
 - **Hermes no longer gets stuck on a dead, numbered `llamacpp` alias.**
   A stale `providers.llamacpp-0` with `name: llamacpp` pointed at a dead
   daemon port; hermes resolves by name in config order, so it won over

@@ -19,6 +19,7 @@ library or it is not. The same trick the draft path uses for
 
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
 
 #: Architectures that need a named upstream merge, for the error message.
@@ -39,7 +40,18 @@ def _libraries_for(binary: Path) -> list[Path]:
     """
     out = [binary]
     folder = binary.parent
-    patterns = ("libllama*", "llama*.dll", "llama*.so*", "llama*.dylib")
+    patterns = (
+        "libllama*",
+        "llama*.dll",
+        "llama*.so*",
+        "llama*.dylib",
+        # The multimodal projector lives in mtmd, not llama: a build can
+        # know the model and still refuse the projector.
+        "libmtmd*",
+        "mtmd*.dll",
+        "mtmd*.so*",
+        "mtmd*.dylib",
+    )
     try:
         for pattern in patterns:
             for entry in sorted(folder.glob(pattern)):
@@ -138,6 +150,39 @@ def binary_supports_arch(binary: str | None, arch: str | None) -> bool | None:
             return True
     # The libraries were there and none of them knows the architecture:
     # the build predates it.
+    return False
+
+
+@lru_cache(maxsize=64)
+def binary_supports_projector(
+    binary: str | None, projector_type: str | None,
+) -> bool | None:
+    """Whether the build can load this kind of vision projector.
+
+    The projector's kind ("glm5next", "bailing_qwen3_vit", "qwen2vl",
+    ...) is a string in llama.cpp's mtmd library. A build that predates
+    the kind answers "unknown projector type" and the server exits - the
+    model never starts, and the reason in the log is a long way from the
+    cause.
+
+    ``None`` means "cannot tell": no binary, or no mtmd library beside
+    it to read. The caller then lets the server try.
+    """
+    if not binary or not projector_type:
+        return None
+    path = Path(binary)
+    if not path.exists():
+        return None
+    candidates = _libraries_for(path)
+    if not any(c.name.startswith("libmtmd") or c.name.startswith("mtmd")
+               for c in candidates[1:]):
+        # No mtmd library to read: no opinion. (A build without mtmd
+        # cannot load a projector at all, but the server says so itself.)
+        return None
+    needle = projector_type.encode("utf-8")
+    for candidate in candidates:
+        if _contains_bytes(candidate, needle):
+            return True
     return False
 
 
